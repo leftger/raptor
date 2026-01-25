@@ -15,4 +15,6 @@ pub enum Command {
     ToggleHidden,
     Select(usize),
     ClearSelection,
+    #[cfg(target_os = "macos")]
+    OpenInFinder,
 }
