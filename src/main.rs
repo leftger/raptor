@@ -18,6 +18,8 @@ fn window_conf() -> Conf {
         window_width: config::WINDOW_WIDTH,
         window_height: config::WINDOW_HEIGHT,
         fullscreen: false,
+        high_dpi: true,
+        sample_count: 4,
         ..Default::default()
     }
 }
