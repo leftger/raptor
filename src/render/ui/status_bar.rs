@@ -41,7 +41,7 @@ pub fn draw_status_bar(labels_enabled: bool, show_hidden: bool) {
     );
 
     if config::STATUS_FPS {
-        let fps = format!("FPS: {} | ", get_fps());
+        let fps = format!("FPS: {:>3} | ", get_fps());
         status.insert_str(0, &fps);
     }
 
