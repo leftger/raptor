@@ -12,8 +12,14 @@ pub fn draw_status_bar(labels_enabled: bool, show_hidden: bool) {
         config::UI_PANEL_COLOR,
     );
 
+    #[cfg(target_os = "macos")]
+    let keyboard_help = "NAV: h j k l  |  o/ENTER: Open  |  f: Finder  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels";
+    
+    #[cfg(not(target_os = "macos"))]
+    let keyboard_help = "NAV: h j k l  |  o/ENTER: Open  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels";
+
     draw_text(
-        "NAV: h j k l  |  o/ENTER: Open  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels",
+        keyboard_help,
         20.0,
         panel_y + 20.0,
         config::LABEL_FONT_SIZE,

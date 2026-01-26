@@ -116,6 +116,21 @@ impl AppState {
                 self.show_labels = !self.show_labels;
             }
 
+            #[cfg(target_os = "macos")]
+            Command::OpenInFinder => {
+                if let Some(idx) = self.selected {
+                    if let Some(entry) = self.navigator.entries.get(idx) {
+                        let path = self.navigator.current_path.join(&entry.name);
+                        // Use 'open -R' to reveal the file/folder in Finder
+                        std::process::Command::new("open")
+                            .arg("-R")
+                            .arg(&path)
+                            .spawn()
+                            .ok();
+                    }
+                }
+            }
+
             Command::Select(idx) => {
                 if idx < self.navigator.entries.len() {
                     self.selected = Some(idx);

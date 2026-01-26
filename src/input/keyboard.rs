@@ -68,6 +68,12 @@ impl KeyboardHandler {
             commands.push(Command::ToggleLabels);
         }
 
+        // macOS: Reveal in Finder (F key)
+        #[cfg(target_os = "macos")]
+        if is_key_pressed(KeyCode::F) {
+            commands.push(Command::OpenInFinder);
+        }
+
         commands
     }
 }
