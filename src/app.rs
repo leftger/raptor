@@ -159,9 +159,63 @@ impl AppState {
         let current_node = &self.navigator.entries[current_idx];
         let (cx, cz) = current_node.grid_pos;
 
-        let target_pos = (cx + dx, cz + dz);
-
-        if let Some(new_idx) = self.navigator.find_node_at_grid_pos(target_pos) {
+        // Calculate camera-relative direction vector
+        let camera_yaw = self.camera.yaw;
+        let dx_f = dx as f32;
+        let dz_f = dz as f32;
+        let sin_yaw = camera_yaw.sin();
+        let cos_yaw = camera_yaw.cos();
+        
+        // Transform to world space
+        let world_dx = dx_f * sin_yaw + dz_f * cos_yaw;
+        let world_dz = -dx_f * cos_yaw + dz_f * sin_yaw;
+        
+        // Normalize direction
+        let dir_len = (world_dx * world_dx + world_dz * world_dz).sqrt();
+        if dir_len < 0.001 {
+            return;
+        }
+        let norm_dx = world_dx / dir_len;
+        let norm_dz = world_dz / dir_len;
+        
+        // Find the best candidate block in this direction
+        let mut best_idx: Option<usize> = None;
+        let mut best_score = f32::MAX;
+        
+        for (i, node) in self.navigator.entries.iter().enumerate() {
+            if i == current_idx {
+                continue;
+            }
+            
+            let (nx, nz) = node.grid_pos;
+            let delta_x = (nx - cx) as f32;
+            let delta_z = (nz - cz) as f32;
+            
+            // Calculate dot product to see if block is in the right direction
+            let dot = delta_x * norm_dx + delta_z * norm_dz;
+            
+            // Only consider blocks that are in front of us (even slightly)
+            if dot <= 0.0 {
+                continue;
+            }
+            
+            // Calculate distance to the block
+            let dist = (delta_x * delta_x + delta_z * delta_z).sqrt();
+            
+            // Calculate perpendicular distance from the intended direction
+            let perp_dist = ((delta_x * norm_dz - delta_z * norm_dx).abs()).max(0.01);
+            
+            // Score: prioritize blocks that are closer and more aligned
+            // Use both forward progress (dot) and perpendicular offset (perp_dist)
+            let score = dist + perp_dist * 2.0 - dot * 0.5;
+            
+            if score < best_score {
+                best_score = score;
+                best_idx = Some(i);
+            }
+        }
+        
+        if let Some(new_idx) = best_idx {
             self.selected = Some(new_idx);
             self.focus_camera_on_selection();
         }
