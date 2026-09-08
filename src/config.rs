@@ -49,7 +49,6 @@ pub const INFO_FONT_SIZE: f32 = 14.0;
 pub const INFO_LINE_SPACING: f32 = 1.14;
 pub const LABEL_FONT_SIZE: f32 = 12.0;
 pub const LABEL_FOCUSED_FONT_SIZE: f32 = 16.0;
-pub const STATUS_FPS: bool = true;
 
 pub const HEADER_HEIGHT: f32 = 50.0;
 pub const BREADCRUMB_HEIGHT: f32 = 25.0;

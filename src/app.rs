@@ -2,9 +2,11 @@ use macroquad::prelude::*;
 use std::path::PathBuf;
 
 use crate::camera::CameraController;
+use crate::cli::Options;
 use crate::config;
 use crate::filesystem::Navigator;
 use crate::input::{Command, MouseState};
+use crate::platform;
 use crate::render::ScanEffect;
 
 pub struct AppState {
@@ -14,20 +16,26 @@ pub struct AppState {
     pub scan_effect: ScanEffect,
     pub selected: Option<usize>,
     pub show_labels: bool,
-    pub show_hidden: bool,
+    pub show_fps: bool,
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    pub fn new(options: Options) -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        let start_path = options
+            .initial_path
+            .clone()
+            .filter(|path| path.is_dir())
+            .unwrap_or(home);
+
         Self {
-            navigator: Navigator::new(home),
+            navigator: Navigator::with_hidden(start_path, options.show_hidden),
             camera: CameraController::new(),
             mouse: MouseState::new(),
             scan_effect: ScanEffect::new(),
             selected: None,
-            show_labels: true,
-            show_hidden: false,
+            show_labels: options.show_labels,
+            show_fps: options.show_fps,
         }
     }
 
@@ -46,9 +54,25 @@ impl AppState {
             self.camera.zoom(self.mouse.scroll_delta);
         }
 
+        // A click on the breadcrumb navigates instead of selecting a 3D block.
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let (mouse_x, mouse_y) = mouse_position();
+            if let Some(path) = crate::render::ui::breadcrumb::hit_test_breadcrumb(
+                &self.navigator.get_path_components(),
+                self.navigator.has_parent(),
+                (mouse_x, mouse_y),
+            ) {
+                if path != self.navigator.current_path {
+                    self.navigator.navigate_to(&path);
+                    self.on_directory_changed();
+                }
+                self.mouse.clicked_index = None;
+            }
+        }
+
         if let Some(clicked_idx) = self.mouse.clicked_index {
             if self.selected == Some(clicked_idx) {
-                self.execute_command(Command::EnterDirectory);
+                self.execute_command(Command::OpenSelected);
             } else {
                 self.selected = Some(clicked_idx);
             }
@@ -76,11 +100,15 @@ impl AppState {
                 }
             }
 
-            Command::EnterDirectory => {
-                if let Some(idx) = self.selected
-                    && self.navigator.enter_directory(idx)
-                {
-                    self.on_directory_changed();
+            Command::OpenSelected => {
+                if let Some(idx) = self.selected {
+                    if self.navigator.enter_directory(idx) {
+                        self.on_directory_changed();
+                    } else if let Some(node) = self.navigator.entries.get(idx)
+                        && !node.is_dir
+                    {
+                        platform::open_path(&node.path);
+                    }
                 }
             }
 
@@ -106,9 +134,14 @@ impl AppState {
                 self.on_directory_changed();
             }
 
+            Command::ReloadDirectory => {
+                self.navigator.reload();
+                self.on_directory_changed();
+            }
+
             Command::ToggleHidden => {
                 self.navigator.show_hidden = !self.navigator.show_hidden;
-                self.navigator.load(&self.navigator.current_path.clone());
+                self.navigator.reload();
                 self.on_directory_changed();
             }
 
@@ -116,30 +149,15 @@ impl AppState {
                 self.show_labels = !self.show_labels;
             }
 
-            #[cfg(target_os = "macos")]
-            Command::OpenInFinder => {
-                if let Some(idx) = self.selected {
-                    if let Some(entry) = self.navigator.entries.get(idx) {
-                        let path = self.navigator.current_path.join(&entry.name);
-                        // Use 'open -R' to reveal the file/folder in Finder
-                        std::process::Command::new("open")
-                            .arg("-R")
-                            .arg(&path)
-                            .spawn()
-                            .ok();
-                    }
-                }
-            }
-
-            Command::Select(idx) => {
-                if idx < self.navigator.entries.len() {
-                    self.selected = Some(idx);
-                    self.focus_camera_on_selection();
-                }
-            }
-
-            Command::ClearSelection => {
-                self.selected = None;
+            Command::RevealInFileManager => {
+                let path = match self
+                    .selected
+                    .and_then(|idx| self.navigator.entries.get(idx))
+                {
+                    Some(node) => node.path.clone(),
+                    None => self.navigator.current_path.clone(),
+                };
+                platform::reveal_path(&path);
             }
         }
     }
@@ -165,11 +183,11 @@ impl AppState {
         let dz_f = dz as f32;
         let sin_yaw = camera_yaw.sin();
         let cos_yaw = camera_yaw.cos();
-        
+
         // Transform to world space
         let world_dx = dx_f * sin_yaw + dz_f * cos_yaw;
         let world_dz = -dx_f * cos_yaw + dz_f * sin_yaw;
-        
+
         // Normalize direction
         let dir_len = (world_dx * world_dx + world_dz * world_dz).sqrt();
         if dir_len < 0.001 {
@@ -177,44 +195,44 @@ impl AppState {
         }
         let norm_dx = world_dx / dir_len;
         let norm_dz = world_dz / dir_len;
-        
+
         // Find the best candidate block in this direction
         let mut best_idx: Option<usize> = None;
         let mut best_score = f32::MAX;
-        
+
         for (i, node) in self.navigator.entries.iter().enumerate() {
             if i == current_idx {
                 continue;
             }
-            
+
             let (nx, nz) = node.grid_pos;
             let delta_x = (nx - cx) as f32;
             let delta_z = (nz - cz) as f32;
-            
+
             // Calculate dot product to see if block is in the right direction
             let dot = delta_x * norm_dx + delta_z * norm_dz;
-            
+
             // Only consider blocks that are in front of us (even slightly)
             if dot <= 0.0 {
                 continue;
             }
-            
+
             // Calculate distance to the block
             let dist = (delta_x * delta_x + delta_z * delta_z).sqrt();
-            
+
             // Calculate perpendicular distance from the intended direction
             let perp_dist = ((delta_x * norm_dz - delta_z * norm_dx).abs()).max(0.01);
-            
+
             // Score: prioritize blocks that are closer and more aligned
             // Use both forward progress (dot) and perpendicular offset (perp_dist)
             let score = dist + perp_dist * 2.0 - dot * 0.5;
-            
+
             if score < best_score {
                 best_score = score;
                 best_idx = Some(i);
             }
         }
-        
+
         if let Some(new_idx) = best_idx {
             self.selected = Some(new_idx);
             self.focus_camera_on_selection();
@@ -242,6 +260,6 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::new()
+        Self::new(Options::default())
     }
 }

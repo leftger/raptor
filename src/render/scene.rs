@@ -51,7 +51,11 @@ fn render_ui(state: &AppState) {
         file_count,
     );
 
-    ui::draw_status_bar(state.show_labels, state.show_hidden);
+    ui::draw_status_bar(
+        state.show_labels,
+        state.navigator.show_hidden,
+        state.show_fps,
+    );
 
     if let Some(idx) = state.selected
         && let Some(node) = state.navigator.entries.get(idx)

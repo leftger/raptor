@@ -35,8 +35,9 @@ impl KeyboardHandler {
             commands.push(Command::MoveDown);
         }
 
+        // Open/enter selected item
         if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::O) {
-            commands.push(Command::EnterDirectory);
+            commands.push(Command::OpenSelected);
         }
         if is_key_pressed(KeyCode::Backspace) || is_key_pressed(KeyCode::Escape) {
             commands.push(Command::GoBack);
@@ -49,6 +50,10 @@ impl KeyboardHandler {
         }
         if is_key_pressed(KeyCode::Home) {
             commands.push(Command::GoHome);
+        }
+
+        if is_key_pressed(KeyCode::R) {
+            commands.push(Command::ReloadDirectory);
         }
 
         if is_key_pressed(KeyCode::Key0) {
@@ -68,10 +73,9 @@ impl KeyboardHandler {
             commands.push(Command::ToggleLabels);
         }
 
-        // macOS: Reveal in Finder (F key)
-        #[cfg(target_os = "macos")]
+        // Reveal the selected item in the OS file manager
         if is_key_pressed(KeyCode::F) {
-            commands.push(Command::OpenInFinder);
+            commands.push(Command::RevealInFileManager);
         }
 
         commands

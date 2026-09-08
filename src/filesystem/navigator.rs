@@ -1,5 +1,5 @@
 use super::{loader, node::FileNode};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Navigator {
     pub current_path: PathBuf,
@@ -10,20 +10,20 @@ pub struct Navigator {
 }
 
 impl Navigator {
-    pub fn new(initial_path: PathBuf) -> Self {
+    pub fn with_hidden(initial_path: PathBuf, show_hidden: bool) -> Self {
         let mut nav = Self {
             current_path: initial_path.clone(),
             entries: vec![],
             grid_width: 1,
             history: vec![],
-            show_hidden: false,
+            show_hidden,
         };
         nav.load(&initial_path);
         nav
     }
 
-    pub fn load(&mut self, path: &PathBuf) {
-        self.current_path = path.clone();
+    pub fn load(&mut self, path: &Path) {
+        self.current_path = path.to_path_buf();
         self.entries.clear();
 
         if let Ok(contents) = loader::load_directory(path, self.show_hidden) {
@@ -32,7 +32,12 @@ impl Navigator {
         }
     }
 
-    pub fn navigate_to(&mut self, path: &PathBuf) {
+    pub fn reload(&mut self) {
+        let path = self.current_path.clone();
+        self.load(&path);
+    }
+
+    pub fn navigate_to(&mut self, path: &Path) {
         self.history.push(self.current_path.clone());
         self.load(path);
     }
@@ -41,8 +46,8 @@ impl Navigator {
         if let Some(prev_path) = self.history.pop() {
             self.load(&prev_path);
             true
-        } else if let Some(parent) = self.current_path.parent() {
-            self.load(&parent.to_path_buf());
+        } else if let Some(parent_path) = self.current_path.parent().map(Path::to_path_buf) {
+            self.load(&parent_path);
             true
         } else {
             false
@@ -50,8 +55,8 @@ impl Navigator {
     }
 
     pub fn go_to_parent(&mut self) -> bool {
-        if let Some(parent) = self.current_path.parent() {
-            self.navigate_to(&parent.to_path_buf());
+        if let Some(parent_path) = self.current_path.parent().map(Path::to_path_buf) {
+            self.navigate_to(&parent_path);
             true
         } else {
             false
@@ -89,10 +94,6 @@ impl Navigator {
 
     pub fn has_parent(&self) -> bool {
         self.current_path.parent().is_some()
-    }
-
-    pub fn find_node_at_grid_pos(&self, pos: (i32, i32)) -> Option<usize> {
-        self.entries.iter().position(|n| n.grid_pos == pos)
     }
 
     pub fn grid_height(&self) -> i32 {

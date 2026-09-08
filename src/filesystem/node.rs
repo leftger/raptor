@@ -49,11 +49,21 @@ impl FileNode {
     }
 
     pub fn display_name(&self, max_length: usize) -> String {
-        if self.name.len() > max_length {
-            format!("{}...", &self.name[..max_length.saturating_sub(3)])
-        } else {
-            self.name.clone()
+        if self.name.len() <= max_length {
+            return self.name.clone();
         }
+
+        let available = max_length.saturating_sub(3);
+        if available == 0 {
+            return self.name.chars().take(max_length).collect();
+        }
+
+        let mut end = available;
+        while end > 0 && !self.name.is_char_boundary(end) {
+            end -= 1;
+        }
+
+        format!("{}...", &self.name[..end])
     }
 
     pub fn size_display(&self) -> String {
@@ -66,5 +76,43 @@ impl FileNode {
 
     pub fn type_display(&self) -> &'static str {
         if self.is_dir { "DIR" } else { "FILE" }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileNode;
+    use std::path::PathBuf;
+
+    fn node_with_name(name: &str) -> FileNode {
+        FileNode::new(name.to_string(), PathBuf::from(name), false, 0, 0)
+    }
+
+    #[test]
+    fn short_names_are_returned_unchanged() {
+        let node = node_with_name("hello.rs");
+        assert_eq!(node.display_name(12), "hello.rs");
+    }
+
+    #[test]
+    fn long_ascii_names_get_an_ellipsis() {
+        let node = node_with_name("this-name-is-much-too-long.rs");
+        assert_eq!(node.display_name(12), "this-name...");
+    }
+
+    #[test]
+    fn multibyte_names_do_not_panic_or_split_characters() {
+        // Each "é" is 2 bytes, so a byte-only cutoff can land in the middle of a char.
+        let node = node_with_name("éééééééééé");
+        let display = node.display_name(12);
+        assert!(!display.contains('\u{FFFD}'));
+        assert!(display.ends_with("..."));
+        assert!(display.len() <= 12);
+    }
+
+    #[test]
+    fn zero_max_length_does_not_panic() {
+        let node = node_with_name("hello");
+        assert_eq!(node.display_name(0), "");
     }
 }

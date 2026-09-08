@@ -1,16 +1,13 @@
 use super::node::FileNode;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct DirectoryContents {
     pub nodes: Vec<FileNode>,
     pub grid_width: i32,
 }
 
-pub fn load_directory(
-    path: &PathBuf,
-    show_hidden: bool,
-) -> Result<DirectoryContents, std::io::Error> {
+pub fn load_directory(path: &Path, show_hidden: bool) -> Result<DirectoryContents, std::io::Error> {
     let read_dir = fs::read_dir(path)?;
 
     let mut nodes: Vec<FileNode> = read_dir
@@ -52,9 +49,9 @@ pub fn load_directory(
     Ok(DirectoryContents { nodes, grid_width })
 }
 
-pub fn get_path_components(path: &PathBuf) -> Vec<(String, PathBuf)> {
+pub fn get_path_components(path: &Path) -> Vec<(String, PathBuf)> {
     let mut components = vec![];
-    let mut current = path.clone();
+    let mut current = path.to_path_buf();
 
     loop {
         let name = current

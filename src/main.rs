@@ -2,10 +2,12 @@ use macroquad::prelude::*;
 
 mod app;
 mod camera;
+mod cli;
 mod config;
 mod filesystem;
 mod input;
 mod math;
+mod platform;
 mod render;
 
 use app::AppState;
@@ -26,7 +28,8 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let mut state = AppState::new();
+    let options = cli::Options::parse();
+    let mut state = AppState::new(options);
 
     loop {
         let commands = KeyboardHandler::poll_commands();

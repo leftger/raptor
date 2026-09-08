@@ -1,5 +1,5 @@
-use macroquad::prelude::*;
 use crate::config;
+use macroquad::prelude::*;
 
 pub struct CameraController {
     pub yaw: f32,
@@ -36,7 +36,9 @@ impl CameraController {
     }
 
     pub fn update(&mut self) {
-        self.target = self.target.lerp(self.target_destination, config::CAMERA_LERP_FACTOR);
+        self.target = self
+            .target
+            .lerp(self.target_destination, config::CAMERA_LERP_FACTOR);
     }
 
     pub fn reset_target(&mut self) {

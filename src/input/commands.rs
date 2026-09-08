@@ -6,15 +6,13 @@ pub enum Command {
     MoveDown,
     GoToFirst,
     GoToLast,
-    EnterDirectory,
+    OpenSelected,
     GoBack,
     GoToParent,
     GoToRoot,
     GoHome,
+    ReloadDirectory,
     ToggleLabels,
     ToggleHidden,
-    Select(usize),
-    ClearSelection,
-    #[cfg(target_os = "macos")]
-    OpenInFinder,
+    RevealInFileManager,
 }

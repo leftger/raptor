@@ -1,6 +1,6 @@
 use crate::config;
 use crate::filesystem::FileNode;
-use crate::math::world_to_screen;
+use crate::math::{Frustum, world_to_screen};
 use macroquad::prelude::*;
 
 pub fn draw_labels(
@@ -9,6 +9,8 @@ pub fn draw_labels(
     hover_index: Option<usize>,
     camera: &Camera3D,
 ) {
+    let frustum = Frustum::from_camera(camera, screen_width() / screen_height());
+
     for (i, node) in entries.iter().enumerate() {
         let height = node.calculate_height();
         let world_pos = Vec3::new(
@@ -16,6 +18,11 @@ pub fn draw_labels(
             height + 0.5,
             node.grid_pos.1 as f32 * config::GRID_SPACING,
         );
+
+        // Cheap cull before building matrices and transforming every label.
+        if !frustum.contains_point(world_pos) {
+            continue;
+        }
 
         if let Some(screen_pos) = world_to_screen(world_pos, camera)
             && screen_pos.x > 0.0

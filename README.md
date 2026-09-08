@@ -31,8 +31,12 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **3D Blocks** for every file and directory
 * **Orbiting Camera** (right-click drag + scroll zoom)
 * **Navigation**:
-  `h j k l` to move, `o/Enter` to open, `u/-` to go up
+  `h j k l` to move, `o/Enter` to open/enter, `u/-` to go up
+* **Open files** with your system's default application
+* **Reveal in file manager** (`F`, works on macOS, Windows, and Linux)
 * **Automatic Directory Grid Layout**
+* **Clickable breadcrumbs** for jumping back through parent folders
+* **Reload current directory** (`r`)
 *  **Selection, Hover, and Glow Effects**
 * **Raycast Block Picking**
 * **Dynamic Block Heights** (file size / children count)
@@ -56,7 +60,9 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * `j` → Down
 * `k` → Up
 * `l` → Right
-* `o` or `Enter` → Enter directory
+* `o` or `Enter` → Open directory / open file with default app
+* `r` → Reload current directory
+* `f` → Reveal selected item in file manager
 * `u` or `-` → Go to parent
 * `/` → Go to root
 * `Home` → Go to home directory
@@ -66,7 +72,8 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 
 * Hover → Highlight block
 * Click → Select
-* Double click → Enter directory
+* Double click → Enter directory / open file
+* Click breadcrumb path segment → Jump to that directory
 
 ### **UI**
 * `.`   → Toggle hidden files
@@ -96,6 +103,19 @@ cargo run --release
 ```
 
 RAPTOR will open in all its neon glory.
+
+### Command-line options
+
+```bash
+# Start in a specific directory
+cargo run --release -- /path/to/folder
+
+# Show hidden files, hide labels, and hide the FPS counter
+cargo run --release -- --hidden --no-labels --no-fps
+
+# See all options
+cargo run --release -- --help
+```
 
 ## Dependencies
 

@@ -1,7 +1,7 @@
 use crate::config;
 use macroquad::prelude::*;
 
-pub fn draw_status_bar(labels_enabled: bool, show_hidden: bool) {
+pub fn draw_status_bar(labels_enabled: bool, show_hidden: bool, show_fps: bool) {
     let panel_y = screen_height() - config::FOOTER_HEIGHT;
 
     draw_rectangle(
@@ -12,11 +12,7 @@ pub fn draw_status_bar(labels_enabled: bool, show_hidden: bool) {
         config::UI_PANEL_COLOR,
     );
 
-    #[cfg(target_os = "macos")]
-    let keyboard_help = "NAV: h j k l  |  o/ENTER: Open  |  f: Finder  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels";
-    
-    #[cfg(not(target_os = "macos"))]
-    let keyboard_help = "NAV: h j k l  |  o/ENTER: Open  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels";
+    let keyboard_help = "NAV: h j k l  |  o/ENTER: Open  |  r: Reload  |  f: Reveal  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels";
 
     draw_text(
         keyboard_help,
@@ -27,7 +23,7 @@ pub fn draw_status_bar(labels_enabled: bool, show_hidden: bool) {
     );
 
     draw_text(
-        "MOUSE: Right-drag rotate | Scroll zoom | Click select | Double-click enter",
+        "MOUSE: Right-drag rotate | Scroll zoom | Click select | Double-click enter | Breadcrumb: jump to folder",
         20.0,
         panel_y + 40.0,
         config::LABEL_FONT_SIZE,
@@ -40,7 +36,7 @@ pub fn draw_status_bar(labels_enabled: bool, show_hidden: bool) {
         if show_hidden { "ON" } else { "OFF" },
     );
 
-    if config::STATUS_FPS {
+    if show_fps {
         let fps = format!("FPS: {:>3} | ", get_fps());
         status.insert_str(0, &fps);
     }
