@@ -9,12 +9,27 @@ pub struct EffectsPlugin;
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (setup_scan_effect, setup_scanlines))
-            .add_systems(Update, (update_scan_effect, insert_vignette));
+            .add_systems(
+                Update,
+                (update_scan_effect, update_scanlines, insert_vignette),
+            );
     }
 }
 
 #[derive(Component)]
 struct ScanPlane;
+
+#[derive(Component)]
+struct ScanlineRoot;
+
+#[derive(Component)]
+struct ScanlineLine;
+
+#[derive(Resource)]
+struct ScanlineState {
+    root: Entity,
+    height: f32,
+}
 
 fn setup_scan_effect(
     mut commands: Commands,
@@ -36,9 +51,10 @@ fn setup_scan_effect(
 }
 
 fn setup_scanlines(mut commands: Commands, window: Single<&Window, With<PrimaryWindow>>) {
-    let height = window.height() as i32;
-    commands
+    let height = window.height();
+    let root = commands
         .spawn((
+            ScanlineRoot,
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0.0),
@@ -50,22 +66,48 @@ fn setup_scanlines(mut commands: Commands, window: Single<&Window, With<PrimaryW
             ZIndex(10),
             Pickable::IGNORE,
         ))
-        .with_children(|parent| {
-            for y in (0..height).step_by(config::SCANLINE_STEP) {
-                parent.spawn((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: px(y as f32),
-                        left: px(0.0),
-                        width: percent(100.0),
-                        height: px(config::SCANLINE_HEIGHT),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, config::SCANLINE_ALPHA)),
-                    Pickable::IGNORE,
-                ));
-            }
-        });
+        .id();
+
+    spawn_scanline_lines(&mut commands, root, height as i32);
+    commands.insert_resource(ScanlineState { root, height });
+}
+
+fn spawn_scanline_lines(commands: &mut Commands, root: Entity, height: i32) {
+    commands.entity(root).with_children(|parent| {
+        for y in (0..height).step_by(config::SCANLINE_STEP) {
+            parent.spawn((
+                ScanlineLine,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(y as f32),
+                    left: px(0.0),
+                    width: percent(100.0),
+                    height: px(config::SCANLINE_HEIGHT),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, config::SCANLINE_ALPHA)),
+                Pickable::IGNORE,
+            ));
+        }
+    });
+}
+
+fn update_scanlines(
+    mut commands: Commands,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut state: ResMut<ScanlineState>,
+    old_lines: Query<Entity, With<ScanlineLine>>,
+) {
+    let new_height = window.height();
+    if (state.height - new_height).abs() < 1.0 {
+        return;
+    }
+
+    for entity in &old_lines {
+        commands.entity(entity).despawn();
+    }
+    spawn_scanline_lines(&mut commands, state.root, new_height as i32);
+    state.height = new_height;
 }
 
 fn insert_vignette(

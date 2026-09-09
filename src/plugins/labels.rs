@@ -1,19 +1,23 @@
 use crate::config;
-use crate::state::{
-    BlockLabel, DirectoryLoaded, LabelsRoot, NavigatorResource, SelectionState, UiSettings,
-};
+use crate::state::{DirectoryLoaded, LabelsRoot, NavigatorResource, SelectionState, UiSettings};
 use bevy::prelude::*;
 use bevy::text::FontSize;
 use bevy::window::PrimaryWindow;
 
-const MAX_PROJECTED_LABELS: usize = 4_000;
+/// Fixed number of UI label entities. Each frame they are re-assigned to the closest
+/// visible blocks, so a 30k-entry directory can still label the blocks around the
+/// current view without spawning tens of thousands of UI nodes.
+const LABEL_BUDGET: usize = 2_000;
+
+#[derive(Component)]
+struct ProjectedLabel;
 
 pub struct LabelsPlugin;
 
 impl Plugin for LabelsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_label_root)
-            .add_systems(Update, (spawn_labels, update_labels));
+            .add_systems(Update, (spawn_label_pool, update_labels));
     }
 }
 
@@ -33,31 +37,27 @@ fn setup_label_root(mut commands: Commands) {
     ));
 }
 
-fn spawn_labels(
+fn spawn_label_pool(
     mut commands: Commands,
     mut loaded: MessageReader<DirectoryLoaded>,
     root: Single<Entity, With<LabelsRoot>>,
-    old_labels: Query<Entity, With<BlockLabel>>,
+    old_labels: Query<Entity, With<ProjectedLabel>>,
 ) {
-    for event in loaded.read() {
+    for _event in loaded.read() {
         for entity in &old_labels {
             commands.entity(entity).despawn();
         }
 
-        // Keep label spawning from turning a huge directory into an unusable UI tree.
-        let node_count = event.contents.nodes.len().min(MAX_PROJECTED_LABELS);
-        let nodes = &event.contents.nodes[..node_count];
-
         commands.entity(*root).with_children(|parent| {
-            for (index, node) in nodes.iter().enumerate() {
+            for _ in 0..LABEL_BUDGET {
                 parent.spawn((
-                    BlockLabel { index },
-                    Text::new(node.display_name(config::LABEL_MAX_LENGTH)),
+                    ProjectedLabel,
+                    Text::new(""),
                     TextFont {
                         font_size: FontSize::Px(config::LABEL_FONT_SIZE),
                         ..default()
                     },
-                    TextColor(text_color_for_node(node, false, false)),
+                    TextColor(config::TEXT_SECONDARY),
                     TextBackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
                     Node {
                         position_type: PositionType::Absolute,
@@ -72,72 +72,113 @@ fn spawn_labels(
     }
 }
 
+#[derive(Clone, Copy)]
+struct LabelCandidate {
+    index: usize,
+    screen: Vec2,
+    distance_sq: f32,
+    priority: u8,
+}
+
+#[allow(clippy::type_complexity)]
 fn update_labels(
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
     navigator: Res<NavigatorResource>,
     ui_settings: Res<UiSettings>,
     selection: Res<SelectionState>,
-    mut labels: Query<(
-        &BlockLabel,
-        &mut Node,
-        &mut Text,
-        &mut TextColor,
-        &mut TextBackgroundColor,
-        &mut TextFont,
-        &mut Visibility,
-    )>,
+    mut labels: Query<
+        (
+            &mut Node,
+            &mut Text,
+            &mut TextColor,
+            &mut TextBackgroundColor,
+            &mut TextFont,
+            &mut Visibility,
+        ),
+        With<ProjectedLabel>,
+    >,
 ) {
     let (camera, camera_transform) = *camera;
 
-    for (label, mut node, mut text, mut text_color, mut background, mut font, mut visibility) in
-        &mut labels
-    {
-        let Some(entry) = navigator.0.entries.get(label.index) else {
-            *visibility = Visibility::Hidden;
-            continue;
-        };
+    for (_, _, _, _, _, mut visibility) in &mut labels {
+        *visibility = Visibility::Hidden;
+    }
 
-        if !ui_settings.show_labels {
-            *visibility = Visibility::Hidden;
-            continue;
-        }
+    if !ui_settings.show_labels {
+        return;
+    }
 
-        let is_selected = selection.selected == Some(label.index);
-        let is_hovered = selection.hovered == Some(label.index);
+    let window_width = window.width();
+    let window_height = window.height();
+    let camera_pos = camera_transform.translation();
+
+    let mut candidates: Vec<LabelCandidate> = Vec::new();
+    for (index, entry) in navigator.0.entries.iter().enumerate() {
         let height = entry.calculate_height();
         let world_pos = config::block_top_position(entry.grid_pos.0, entry.grid_pos.1, height);
 
         let Ok(screen) = camera.world_to_viewport(camera_transform, world_pos) else {
-            *visibility = Visibility::Hidden;
             continue;
         };
 
-        if screen.x < 0.0
-            || screen.y < 0.0
-            || screen.x > window.width()
-            || screen.y > window.height()
-        {
-            *visibility = Visibility::Hidden;
+        if screen.x < 0.0 || screen.y < 0.0 || screen.x > window_width || screen.y > window_height {
             continue;
         }
 
         // Keep labels from drawing over the header/breadcrumb and footer bars.
         if screen.y < config::HEADER_HEIGHT + config::BREADCRUMB_HEIGHT
-            || screen.y > window.height() - config::FOOTER_HEIGHT
+            || screen.y > window_height - config::FOOTER_HEIGHT
         {
-            *visibility = Visibility::Hidden;
             continue;
         }
+
+        let dx = world_pos.x - camera_pos.x;
+        let dy = world_pos.y - camera_pos.y;
+        let dz = world_pos.z - camera_pos.z;
+        let priority = if selection.selected == Some(index) || selection.hovered == Some(index) {
+            0
+        } else {
+            1
+        };
+
+        candidates.push(LabelCandidate {
+            index,
+            screen,
+            distance_sq: dx * dx + dy * dy + dz * dz,
+            priority,
+        });
+    }
+
+    candidates.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then_with(|| a.distance_sq.total_cmp(&b.distance_sq))
+    });
+
+    let mut candidate_iter = candidates.iter();
+    for (mut node, mut text, mut text_color, mut background, mut font, mut visibility) in
+        &mut labels
+    {
+        let Some(candidate) = candidate_iter.next() else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+
+        let Some(entry) = navigator.0.entries.get(candidate.index) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+
+        let is_selected = selection.selected == Some(candidate.index);
+        let is_hovered = selection.hovered == Some(candidate.index);
 
         let display = entry.display_name(config::LABEL_MAX_LENGTH);
         if **text != display {
             **text = display;
         }
 
-        let color = text_color_for_node(entry, is_selected, is_hovered);
-        text_color.0 = color;
-
+        text_color.0 = text_color_for_node(entry, is_selected);
         background.0 = if is_selected {
             Color::srgba(1.0, 0.0, 1.0, 0.7)
         } else if is_hovered {
@@ -155,17 +196,13 @@ fn update_labels(
             font.font_size = FontSize::Px(font_size);
         }
 
-        node.left = px(screen.x - 40.0);
-        node.top = px(screen.y - 24.0);
+        node.left = px(candidate.screen.x - 40.0);
+        node.top = px(candidate.screen.y - 24.0);
         *visibility = Visibility::Visible;
     }
 }
 
-fn text_color_for_node(
-    node: &crate::filesystem::FileNode,
-    is_selected: bool,
-    _is_hovered: bool,
-) -> Color {
+fn text_color_for_node(node: &crate::filesystem::FileNode, is_selected: bool) -> Color {
     if is_selected {
         Color::WHITE
     } else if node.is_dir {

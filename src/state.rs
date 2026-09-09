@@ -203,18 +203,6 @@ pub struct FileBlock {
     pub index: usize,
 }
 
-/// A sibling transparent shell used to approximate the original hover/selection glow.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct BlockGlow {
-    pub index: usize,
-}
-
-/// A projected UI label for one block.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct BlockLabel {
-    pub index: usize,
-}
-
 /// Root node for projected labels (below the main UI chrome).
 #[derive(Component, Debug)]
 pub struct LabelsRoot;

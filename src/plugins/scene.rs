@@ -1,7 +1,7 @@
 use crate::config;
 use crate::filesystem::FileNode;
 use crate::state::{
-    BlockGlow, DirectoryLoaded, DirectorySceneRoot, FileBlock, NavigatorResource, SelectionState,
+    DirectoryLoaded, DirectorySceneRoot, FileBlock, NavigatorResource, SelectionState,
 };
 use bevy::prelude::*;
 
@@ -9,7 +9,7 @@ pub struct ScenePlugin;
 
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_assets)
+        app.add_systems(Startup, (setup_assets, spawn_highlight_shells).chain())
             .add_systems(Update, (spawn_scene, update_highlighting));
     }
 }
@@ -24,11 +24,16 @@ pub struct RaptorAssets {
     pub hover_dir_body: Handle<StandardMaterial>,
     pub hover_file_body: Handle<StandardMaterial>,
     pub selected_body: Handle<StandardMaterial>,
-    pub dir_glow: Handle<StandardMaterial>,
-    pub file_glow: Handle<StandardMaterial>,
     pub hover_glow: Handle<StandardMaterial>,
+    pub hover_file_glow: Handle<StandardMaterial>,
     pub selected_glow: Handle<StandardMaterial>,
 }
+
+#[derive(Component)]
+struct HoverShell;
+
+#[derive(Component)]
+struct SelectedShell;
 
 fn unlit_material(color: Color, alpha: Option<f32>) -> StandardMaterial {
     StandardMaterial {
@@ -53,22 +58,37 @@ fn setup_assets(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let unit_cube = meshes.add(Cuboid::default());
-    let grid_line = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
 
     commands.insert_resource(RaptorAssets {
-        unit_cube: unit_cube.clone(),
-        grid_line,
+        unit_cube,
+        grid_line: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         grid_material: materials.add(unlit_material(config::GRID_COLOR, Some(0.35))),
         dir_body: materials.add(unlit_material(config::DIR_COLOR, None)),
         file_body: materials.add(unlit_material(config::FILE_COLOR, None)),
         hover_dir_body: materials.add(unlit_material(config::HOVER_DIR_COLOR, None)),
         hover_file_body: materials.add(unlit_material(config::HOVER_FILE_COLOR, None)),
         selected_body: materials.add(unlit_material(config::SELECTED_COLOR, None)),
-        dir_glow: materials.add(unlit_material(config::DIR_COLOR, Some(0.25))),
-        file_glow: materials.add(unlit_material(config::FILE_COLOR, Some(0.25))),
         hover_glow: materials.add(unlit_material(config::HOVER_DIR_COLOR, Some(0.30))),
+        hover_file_glow: materials.add(unlit_material(config::HOVER_FILE_COLOR, Some(0.30))),
         selected_glow: materials.add(unlit_material(config::SELECTED_COLOR, Some(0.30))),
     });
+}
+
+fn spawn_highlight_shells(mut commands: Commands, assets: Res<RaptorAssets>) {
+    commands.spawn((
+        HoverShell,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.hover_glow.clone()),
+        Transform::IDENTITY,
+        Visibility::Hidden,
+    ));
+    commands.spawn((
+        SelectedShell,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.selected_glow.clone()),
+        Transform::IDENTITY,
+        Visibility::Hidden,
+    ));
 }
 
 fn spawn_scene(
@@ -121,65 +141,70 @@ fn spawn_grid(commands: &mut Commands, assets: &RaptorAssets) {
 }
 
 fn spawn_blocks(commands: &mut Commands, assets: &RaptorAssets, nodes: &[FileNode]) {
-    for (index, node) in nodes.iter().enumerate() {
-        let height = node.calculate_height();
-        let center = config::world_position(node.grid_pos.0, node.grid_pos.1, height);
+    let batch: Vec<_> = nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| {
+            let height = node.calculate_height();
+            let material = if node.is_dir {
+                assets.dir_body.clone()
+            } else {
+                assets.file_body.clone()
+            };
 
-        let body_material = if node.is_dir {
-            assets.dir_body.clone()
-        } else {
-            assets.file_body.clone()
-        };
-        commands.spawn((
-            DirectorySceneRoot,
-            FileBlock { index },
-            Mesh3d(assets.unit_cube.clone()),
-            MeshMaterial3d(body_material),
-            Transform::from_translation(center).with_scale(Vec3::new(
-                config::BLOCK_WIDTH,
-                height,
-                config::BLOCK_DEPTH,
-            )),
-        ));
+            (
+                DirectorySceneRoot,
+                FileBlock { index },
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(material),
+                Transform::from_translation(config::world_position(
+                    node.grid_pos.0,
+                    node.grid_pos.1,
+                    height,
+                ))
+                .with_scale(Vec3::new(
+                    config::BLOCK_WIDTH,
+                    height,
+                    config::BLOCK_DEPTH,
+                )),
+            )
+        })
+        .collect();
 
-        let glow_material = if node.is_dir {
-            assets.dir_glow.clone()
-        } else {
-            assets.file_glow.clone()
-        };
-        commands.spawn((
-            DirectorySceneRoot,
-            BlockGlow { index },
-            Mesh3d(assets.unit_cube.clone()),
-            MeshMaterial3d(glow_material),
-            Transform::from_translation(center).with_scale(Vec3::new(
-                config::BLOCK_WIDTH + 0.2,
-                height + 0.2,
-                config::BLOCK_DEPTH + 0.2,
-            )),
-            Visibility::Hidden,
-        ));
-    }
+    commands.spawn_batch(batch);
 }
 
+#[allow(clippy::type_complexity)]
 fn update_highlighting(
     navigator: Res<NavigatorResource>,
     selection: Res<SelectionState>,
     assets: Res<RaptorAssets>,
-    mut blocks: Query<(&FileBlock, &mut MeshMaterial3d<StandardMaterial>), Without<BlockGlow>>,
-    mut glows: Query<
+    mut blocks: Query<
+        (&FileBlock, &mut MeshMaterial3d<StandardMaterial>),
+        (Without<HoverShell>, Without<SelectedShell>),
+    >,
+    mut hover_shell: Query<
         (
-            &BlockGlow,
+            &mut Transform,
             &mut MeshMaterial3d<StandardMaterial>,
             &mut Visibility,
         ),
-        Without<FileBlock>,
+        (With<HoverShell>, Without<SelectedShell>, Without<FileBlock>),
+    >,
+    mut selected_shell: Query<
+        (
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+            &mut Visibility,
+        ),
+        (With<SelectedShell>, Without<HoverShell>, Without<FileBlock>),
     >,
 ) {
     for (block, mut material) in &mut blocks {
         let Some(node) = navigator.0.entries.get(block.index) else {
             continue;
         };
+
         let target = if selection.selected == Some(block.index) {
             assets.selected_body.clone()
         } else if selection.hovered == Some(block.index) {
@@ -199,22 +224,71 @@ fn update_highlighting(
         }
     }
 
-    for (glow, mut material, mut visibility) in &mut glows {
-        if selection.selected == Some(glow.index) {
-            if material.0 != assets.selected_glow {
-                material.0 = assets.selected_glow.clone();
-            }
-            *visibility = Visibility::Visible;
-        } else if selection.hovered == Some(glow.index) {
-            if material.0 != assets.hover_glow {
-                material.0 = assets.hover_glow.clone();
-            }
-            *visibility = Visibility::Visible;
-        } else {
-            if material.0 != assets.dir_glow && material.0 != assets.file_glow {
-                // Leave the inactive material alone; hide the shell instead.
-            }
-            *visibility = Visibility::Hidden;
-        }
+    let hover_index = selection
+        .hovered
+        .filter(|hovered| selection.selected != Some(*hovered));
+    if let Ok((mut transform, mut material, mut visibility)) = hover_shell.single_mut() {
+        set_shell_state(
+            &mut transform,
+            &mut material,
+            &mut visibility,
+            hover_index,
+            &navigator,
+            &assets.hover_glow,
+            &assets.hover_file_glow,
+        );
     }
+
+    if let Ok((mut transform, mut material, mut visibility)) = selected_shell.single_mut() {
+        set_shell_state(
+            &mut transform,
+            &mut material,
+            &mut visibility,
+            selection.selected,
+            &navigator,
+            &assets.selected_glow,
+            &assets.selected_glow,
+        );
+    }
+}
+
+fn set_shell_state(
+    transform: &mut Transform,
+    material: &mut MeshMaterial3d<StandardMaterial>,
+    visibility: &mut Visibility,
+    index: Option<usize>,
+    navigator: &NavigatorResource,
+    dir_material: &Handle<StandardMaterial>,
+    file_material: &Handle<StandardMaterial>,
+) {
+    let Some(index) = index else {
+        *visibility = Visibility::Hidden;
+        return;
+    };
+    let Some(node) = navigator.0.entries.get(index) else {
+        *visibility = Visibility::Hidden;
+        return;
+    };
+
+    let height = node.calculate_height();
+    *transform = Transform::from_translation(config::world_position(
+        node.grid_pos.0,
+        node.grid_pos.1,
+        height,
+    ))
+    .with_scale(Vec3::new(
+        config::BLOCK_WIDTH + 0.25,
+        height + 0.25,
+        config::BLOCK_DEPTH + 0.25,
+    ));
+
+    let target = if node.is_dir {
+        dir_material
+    } else {
+        file_material
+    };
+    if material.0 != *target {
+        material.0 = target.clone();
+    }
+    *visibility = Visibility::Visible;
 }
