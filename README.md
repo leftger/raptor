@@ -98,6 +98,11 @@ The cycle moves continuously between cell centers; turns are queued and execute
 at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
 while riding, and are restored when you toggle back.
 
+In Lightcycle mode the directory entries are re-laid out as widely spaced
+"downtown" towers with empty streets between them. Directory towers load the
+next arena; file towers are solid and crash the cycle. The cycle also leaves a
+continuous neon wall trail behind it, classic TRON style.
+
 ## Why Jurassic Park?
 
 Because *FNS* from Jurassic Park is legendary.

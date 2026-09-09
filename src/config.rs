@@ -69,11 +69,15 @@ pub const LIGHTCYCLE_MAX_SUBSTEPS: usize = 4;
 pub const LIGHTCYCLE_ARENA_PADDING: i32 = 1;
 pub const LIGHTCYCLE_EMPTY_ARENA_HALF: i32 = 2;
 pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;
+/// Tower lattice spacing in cells. Each original grid row/column is multiplied
+/// by this stride, leaving empty street cells between directory/file towers.
+pub const LIGHTCYCLE_TOWER_STRIDE: i32 = 3;
+pub const LIGHTCYCLE_TOWER_SIZE: f32 = 2.2;
 
 pub const LIGHTCYCLE_CYCLE_HEIGHT: f32 = 0.8;
 pub const LIGHTCYCLE_CYCLE_SIZE: f32 = 0.7;
-pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.2;
-pub const LIGHTCYCLE_TRAIL_SIZE: f32 = 2.0;
+pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.6;
+pub const LIGHTCYCLE_TRAIL_THICKNESS: f32 = 0.55;
 pub const LIGHTCYCLE_WALL_HEIGHT: f32 = 1.4;
 pub const LIGHTCYCLE_WALL_THICKNESS: f32 = 0.2;
 pub const LIGHTCYCLE_PORTAL_HEIGHT: f32 = 2.6;

@@ -6,7 +6,8 @@ use crate::lightcycle::logic::{
 use crate::lightcycle::{ActiveRun, LightcycleState};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
 use crate::state::{
-    InteractionMode, LightcycleSceneRoot, NavigatorResource, OrbitCameraResource, TrailSceneRoot,
+    DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
+    OrbitCameraResource, TrailSceneRoot,
 };
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -25,6 +26,7 @@ impl Plugin for LightcyclePlugin {
                     toggle_mode,
                     reset_on_directory_loaded,
                     apply_load_failure,
+                    sync_directory_scene_visibility,
                     read_lightcycle_input.run_if(in_lightcycle_mode),
                     step_lightcycle.run_if(in_lightcycle_mode),
                     rebuild_trail_mesh.run_if(in_lightcycle_mode),
@@ -44,6 +46,8 @@ struct LightcycleAssets {
     trail_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
     portal_material: Handle<StandardMaterial>,
+    dir_tower_material: Handle<StandardMaterial>,
+    file_tower_material: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -68,6 +72,8 @@ fn setup_lightcycle_assets(
         trail_material: materials.add(unlit_material(config::LIGHTCYCLE_TRAIL_COLOR)),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
         portal_material: materials.add(unlit_material(config::LIGHTCYCLE_PORTAL_COLOR)),
+        dir_tower_material: materials.add(unlit_material(config::DIR_COLOR)),
+        file_tower_material: materials.add(unlit_material(config::FILE_COLOR)),
     });
 }
 
@@ -75,9 +81,30 @@ fn in_lightcycle_mode(mode: Res<InteractionMode>) -> bool {
     *mode == InteractionMode::Lightcycle
 }
 
+fn sync_directory_scene_visibility(
+    mode: Res<InteractionMode>,
+    mut directory_scene: Query<&mut Visibility, With<DirectorySceneRoot>>,
+) {
+    let visible = *mode == InteractionMode::Explorer;
+    for mut visibility in &mut directory_scene {
+        *visibility = if visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+fn tower_position(grid_pos: (i32, i32)) -> (i32, i32) {
+    (
+        grid_pos.0 * config::LIGHTCYCLE_TOWER_STRIDE,
+        grid_pos.1 * config::LIGHTCYCLE_TOWER_STRIDE,
+    )
+}
+
 fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
     let arena = Arena::from_nodes(
-        nodes.iter().map(|node| node.grid_pos),
+        nodes.iter().map(|node| tower_position(node.grid_pos)),
         path.parent().is_some(),
         config::LIGHTCYCLE_ARENA_PADDING,
         config::LIGHTCYCLE_EMPTY_ARENA_HALF,
@@ -86,7 +113,7 @@ fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
     let cells: HashMap<_, _> = nodes
         .iter()
         .enumerate()
-        .map(|(index, node)| (node.grid_pos, index))
+        .map(|(index, node)| (tower_position(node.grid_pos), index))
         .collect();
 
     let sim = spawn_sim(&arena, &cells);
@@ -128,6 +155,7 @@ fn toggle_mode(
     navigator: Res<NavigatorResource>,
     mut orbit: ResMut<OrbitCameraResource>,
     assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
     old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
 ) {
@@ -146,7 +174,7 @@ fn toggle_mode(
     }
 
     let run = build_active_run(&navigator.0.current_path, navigator.0.entries.clone());
-    spawn_run_entities(&mut commands, &assets, &run);
+    spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
     state.run = Some(run);
     *mode = InteractionMode::Lightcycle;
 }
@@ -161,7 +189,12 @@ fn despawn_lightcycle_entities(
     }
 }
 
-fn spawn_run_entities(commands: &mut Commands, assets: &LightcycleAssets, run: &ActiveRun) {
+fn spawn_run_entities(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    run: &ActiveRun,
+) {
     let position = cycle_world_position(&run.sim);
     commands.spawn((
         LightcycleSceneRoot,
@@ -177,6 +210,62 @@ fn spawn_run_entities(commands: &mut Commands, assets: &LightcycleAssets, run: &
     ));
 
     spawn_arena_walls(commands, assets, &run.arena);
+    spawn_towers(commands, assets, meshes, run);
+}
+
+fn spawn_towers(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    run: &ActiveRun,
+) {
+    for is_dir in [true, false] {
+        let material = if is_dir {
+            assets.dir_tower_material.clone()
+        } else {
+            assets.file_tower_material.clone()
+        };
+        let matching: Vec<&FileNode> = run
+            .nodes
+            .iter()
+            .filter(|node| node.is_dir == is_dir)
+            .collect();
+
+        for chunk in matching.chunks(config::MESH_CHUNK_SIZE) {
+            let Some(mesh) = build_tower_chunk_mesh(chunk) else {
+                continue;
+            };
+            commands.spawn((
+                LightcycleSceneRoot,
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(material.clone()),
+                Pickable::IGNORE,
+            ));
+        }
+    }
+}
+
+fn build_tower_chunk_mesh(nodes: &[&FileNode]) -> Option<Mesh> {
+    let mut nodes = nodes.iter();
+    let first = tower_cube_mesh(nodes.next()?);
+    let mut mesh = first;
+    for node in nodes {
+        mesh.merge(&tower_cube_mesh(node))
+            .expect("tower cuboid meshes must be merge-compatible");
+    }
+    Some(mesh)
+}
+
+fn tower_cube_mesh(node: &FileNode) -> Mesh {
+    let (x, z) = tower_position(node.grid_pos);
+    let height = node.calculate_height();
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(config::world_position(x, z, height)).with_scale(Vec3::new(
+            config::LIGHTCYCLE_TOWER_SIZE,
+            height,
+            config::LIGHTCYCLE_TOWER_SIZE,
+        )),
+    )
 }
 
 fn spawn_arena_walls(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena) {
@@ -252,6 +341,7 @@ fn reset_on_directory_loaded(
     mode: Res<InteractionMode>,
     mut state: ResMut<LightcycleState>,
     assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
     old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
 ) {
@@ -263,7 +353,7 @@ fn reset_on_directory_loaded(
         despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
 
         let run = build_active_run(&event.path, event.contents.nodes.clone());
-        spawn_run_entities(&mut commands, &assets, &run);
+        spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
 
         state.clock = 0.0;
         state.run = Some(run);
@@ -443,7 +533,20 @@ fn rebuild_trail_mesh(
         commands.entity(entity).despawn();
     }
 
-    for chunk in run.sim.trail.chunks(config::MESH_CHUNK_SIZE) {
+    // Build a continuous wall ribbon through every cell the cycle has occupied,
+    // ending at the current head so the wall visibly trails behind the cycle.
+    let mut path = run.sim.trail.clone();
+    path.push(run.sim.cell);
+
+    let segments: Vec<((i32, i32), (i32, i32))> = path
+        .windows(2)
+        .filter_map(|pair| match pair {
+            [a, b] => Some((*a, *b)),
+            _ => None,
+        })
+        .collect();
+
+    for chunk in segments.chunks(config::MESH_CHUNK_SIZE) {
         let Some(mesh) = build_trail_chunk_mesh(chunk) else {
             continue;
         };
@@ -456,28 +559,41 @@ fn rebuild_trail_mesh(
     }
 }
 
-fn build_trail_chunk_mesh(cells: &[(i32, i32)]) -> Option<Mesh> {
-    let mut cells = cells.iter();
-    let first = trail_cube_mesh(cells.next()?);
-    let mut mesh = first;
-    for cell in cells {
-        mesh.merge(&trail_cube_mesh(cell))
-            .expect("trail cuboid meshes must be merge-compatible");
+#[allow(clippy::type_complexity)]
+fn build_trail_chunk_mesh(segments: &[((i32, i32), (i32, i32))]) -> Option<Mesh> {
+    let first = *segments.first()?;
+    let mut mesh = trail_segment_mesh(first.0, first.1);
+    for &(a, b) in &segments[1..] {
+        mesh.merge(&trail_segment_mesh(a, b))
+            .expect("trail ribbon meshes must be merge-compatible");
     }
     Some(mesh)
 }
 
-fn trail_cube_mesh(cell: &(i32, i32)) -> Mesh {
+fn trail_segment_mesh(a: (i32, i32), b: (i32, i32)) -> Mesh {
     let height = config::LIGHTCYCLE_TRAIL_HEIGHT;
-    Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(config::world_position(cell.0, cell.1, height)).with_scale(
-            Vec3::new(
-                config::LIGHTCYCLE_TRAIL_SIZE,
-                height,
-                config::LIGHTCYCLE_TRAIL_SIZE,
-            ),
-        ),
-    )
+    let thickness = config::LIGHTCYCLE_TRAIL_THICKNESS;
+    let a_world = config::ground_position(a.0, a.1);
+    let b_world = config::ground_position(b.0, b.1);
+
+    let horizontal_length = if a_world.x != b_world.x {
+        (b_world.x - a_world.x).abs()
+    } else {
+        (b_world.z - a_world.z).abs()
+    };
+    let center = Vec3::new(
+        (a_world.x + b_world.x) * 0.5,
+        height * 0.5,
+        (a_world.z + b_world.z) * 0.5,
+    );
+    let scale = if a_world.x != b_world.x {
+        Vec3::new(horizontal_length, height, thickness)
+    } else {
+        Vec3::new(thickness, height, horizontal_length)
+    };
+
+    Mesh::from(Cuboid::default())
+        .transformed_by(Transform::from_translation(center).with_scale(scale))
 }
 
 fn cycle_world_position(sim: &LightcycleSim) -> Vec3 {
@@ -512,8 +628,8 @@ fn update_cycle_transform(
 
 fn update_chase_camera(
     state: Res<LightcycleState>,
-    mut camera: Single<&mut Transform, With<Camera3d>>,
-    cycle: Query<&Transform, With<CycleEntity>>,
+    mut camera: Single<&mut Transform, (With<Camera3d>, Without<CycleEntity>)>,
+    cycle: Query<&Transform, (With<CycleEntity>, Without<Camera3d>)>,
 ) {
     let Ok(cycle) = cycle.single() else {
         return;

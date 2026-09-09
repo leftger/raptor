@@ -462,12 +462,16 @@ fn update_status_text(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn update_selection_info(
     mode: Res<InteractionMode>,
     navigator: Res<NavigatorResource>,
     selection: Res<SelectionState>,
-    mut panel: Single<&mut Visibility, With<SelectionInfoPanel>>,
-    mut query: Query<(&mut Text, &mut Visibility), With<SelectionInfoText>>,
+    mut panel: Single<&mut Visibility, (With<SelectionInfoPanel>, Without<SelectionInfoText>)>,
+    mut query: Query<
+        (&mut Text, &mut Visibility),
+        (With<SelectionInfoText>, Without<SelectionInfoPanel>),
+    >,
 ) {
     let Ok((mut text, mut visibility)) = query.single_mut() else {
         return;
