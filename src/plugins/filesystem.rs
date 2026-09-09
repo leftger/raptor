@@ -1,7 +1,5 @@
-use crate::state::{
-    DirectoryLoadFailed, DirectoryLoadState, DirectoryLoaded, DirectoryRequested,
-    NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState,
-};
+use crate::load::{DirectoryLoadFailed, DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
+use crate::state::{NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState};
 use bevy::prelude::*;
 
 pub struct FilesystemPlugin;
@@ -46,7 +44,7 @@ fn poll_loads(
     mut failed: MessageWriter<DirectoryLoadFailed>,
 ) {
     while let Some(result) = state.poll() {
-        if !is_current_generation(result.generation, state.generation) {
+        if result.generation != state.generation {
             continue;
         }
 
@@ -58,7 +56,6 @@ fn poll_loads(
                 });
             }
             Err(message) => {
-                state.last_error = Some(message.clone());
                 failed.write(DirectoryLoadFailed {
                     path: result.path,
                     message,
@@ -66,10 +63,6 @@ fn poll_loads(
             }
         }
     }
-}
-
-fn is_current_generation(result_generation: u64, active_generation: u64) -> bool {
-    result_generation == active_generation
 }
 
 fn apply_loaded(
@@ -99,16 +92,5 @@ fn apply_failure(
 ) {
     for event in events.read() {
         state.last_error = Some(format!("{}: {}", event.path.display(), event.message));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_current_generation;
-
-    #[test]
-    fn stale_load_generations_are_rejected() {
-        assert!(!is_current_generation(1, 2));
-        assert!(is_current_generation(2, 2));
     }
 }

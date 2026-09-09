@@ -1,4 +1,4 @@
-use super::{loader, node::FileNode};
+use super::node::FileNode;
 use std::path::{Path, PathBuf};
 
 pub struct Navigator {
@@ -27,7 +27,7 @@ impl Navigator {
     }
 
     /// Starts a navigation to `path` without scanning; the caller is responsible for
-    /// emitting a [`crate::state::DirectoryRequested`] for `path`.
+    /// emitting a [`crate::load::DirectoryRequested`] for `path`.
     pub fn begin_navigate_to(&mut self, path: &Path) {
         self.history.push(self.current_path.clone());
         self.current_path = path.to_path_buf();
@@ -74,7 +74,9 @@ impl Navigator {
     }
 
     pub fn count_by_type(&self) -> (usize, usize) {
-        loader::count_by_type(&self.entries)
+        let dirs = self.entries.iter().filter(|node| node.is_dir).count();
+        let files = self.entries.len() - dirs;
+        (dirs, files)
     }
 
     pub fn grid_height(&self) -> i32 {

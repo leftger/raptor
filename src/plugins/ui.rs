@@ -1,7 +1,7 @@
 use crate::config;
-use crate::state::{
-    DirectoryLoadState, DirectoryLoaded, NavigatorResource, SelectionState, UiNotice, UiSettings,
-};
+use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
+use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
+use crate::state::{NavigatorResource, SelectionState, UiNotice, UiSettings};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use std::path::PathBuf;
@@ -230,7 +230,7 @@ fn spawn_breadcrumbs(
             commands.entity(entity).despawn();
         }
 
-        let components = crate::filesystem::loader::get_path_components(&event.path);
+        let components = get_path_components(&event.path);
         let container = *container;
         commands.entity(container).with_children(|bar| {
             for (name, path) in components {
@@ -240,11 +240,7 @@ fn spawn_breadcrumbs(
                 } else {
                     config::TEXT_SECONDARY
                 };
-                let display = if name == "/" {
-                    name.clone()
-                } else {
-                    format!("{name}/")
-                };
+                let display = breadcrumb_label(&name);
                 let observer_path = path.clone();
                 bar.spawn((
                     BreadcrumbButton { path },
@@ -265,11 +261,11 @@ fn spawn_breadcrumbs(
                 .observe(
                     move |_click: On<Pointer<Click>>,
                           mut navigator: ResMut<NavigatorResource>,
-                          mut requests: MessageWriter<crate::state::DirectoryRequested>| {
+                          mut requests: MessageWriter<DirectoryRequested>| {
                         let path = observer_path.clone();
                         if path != navigator.0.current_path {
                             navigator.0.begin_navigate_to(&path);
-                            requests.write(crate::state::DirectoryRequested { path });
+                            requests.write(DirectoryRequested { path });
                         }
                     },
                 );
@@ -335,13 +331,7 @@ fn update_breadcrumb_styling(
             background.0 = bg;
         }
 
-        // Keep separators readable; full path hierarchy is already in the button text.
-        let name = current_path_name(&button.path);
-        let display = if name == "/" {
-            name
-        } else {
-            format!("{name}/")
-        };
+        let display = breadcrumb_label(&path_component_name(&button.path));
         if **text != display {
             **text = display;
         }
@@ -461,12 +451,6 @@ fn truncate_path_prefix(path: &str, max_length: usize) -> String {
         start += 1;
     }
     format!("...{}", &path[start..])
-}
-
-fn current_path_name(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "/".to_string())
 }
 
 #[cfg(test)]

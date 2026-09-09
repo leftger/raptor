@@ -1,7 +1,6 @@
 use crate::config;
 use crate::state::ScanEffectResource;
 use bevy::asset::RenderAssetUsages;
-use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
@@ -10,7 +9,7 @@ pub struct EffectsPlugin;
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (setup_scan_effect, setup_scanlines))
-            .add_systems(Update, (update_scan_effect, insert_vignette));
+            .add_systems(Update, update_scan_effect);
     }
 }
 
@@ -84,21 +83,6 @@ fn setup_scanlines(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         ZIndex(10),
         Pickable::IGNORE,
     ));
-}
-
-fn insert_vignette(
-    mut commands: Commands,
-    camera: Query<Entity, (With<Camera3d>, Without<Vignette>)>,
-) {
-    for entity in &camera {
-        commands.entity(entity).insert(Vignette {
-            intensity: (config::VIGNETTE_ALPHA * 2.5).min(1.0),
-            radius: 0.65,
-            smoothness: 3.0,
-            color: Color::BLACK,
-            ..default()
-        });
-    }
 }
 
 fn update_scan_effect(

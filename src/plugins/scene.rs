@@ -1,6 +1,7 @@
 use crate::config;
 use crate::filesystem::FileNode;
-use crate::state::{DirectoryLoaded, DirectorySceneRoot, NavigatorResource, SelectionState};
+use crate::load::DirectoryLoaded;
+use crate::state::{DirectorySceneRoot, NavigatorResource, SelectionState};
 use bevy::prelude::*;
 
 pub struct ScenePlugin;
@@ -21,7 +22,6 @@ impl Plugin for ScenePlugin {
 #[derive(Resource)]
 pub struct RaptorAssets {
     pub unit_cube: Handle<Mesh>,
-    pub grid_line: Handle<Mesh>,
     pub grid_material: Handle<StandardMaterial>,
     pub dir_body: Handle<StandardMaterial>,
     pub file_body: Handle<StandardMaterial>,
@@ -62,7 +62,6 @@ fn setup_assets(
 
     commands.insert_resource(RaptorAssets {
         unit_cube,
-        grid_line: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         grid_material: materials.add(unlit_material(config::GRID_COLOR, Some(0.35))),
         dir_body: materials.add(unlit_material(config::DIR_COLOR, None)),
         file_body: materials.add(unlit_material(config::FILE_COLOR, None)),
@@ -116,7 +115,7 @@ fn spawn_grid(commands: &mut Commands, assets: &RaptorAssets) {
         // Along X at fixed Z.
         commands.spawn((
             DirectorySceneRoot,
-            Mesh3d(assets.grid_line.clone()),
+            Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.grid_material.clone()),
             Pickable::IGNORE,
             Transform::from_translation(Vec3::new(0.0, 0.0, pos)).with_scale(Vec3::new(
@@ -129,7 +128,7 @@ fn spawn_grid(commands: &mut Commands, assets: &RaptorAssets) {
         // Along Z at fixed X.
         commands.spawn((
             DirectorySceneRoot,
-            Mesh3d(assets.grid_line.clone()),
+            Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.grid_material.clone()),
             Pickable::IGNORE,
             Transform::from_translation(Vec3::new(pos, 0.0, 0.0)).with_scale(Vec3::new(

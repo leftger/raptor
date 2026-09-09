@@ -1,6 +1,7 @@
 use crate::config;
 use crate::state::OrbitCameraResource;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 
 pub struct CameraPlugin;
@@ -22,6 +23,13 @@ fn setup_camera(mut commands: Commands) {
             config::DEFAULT_CAMERA_DISTANCE,
         )
         .looking_at(Vec3::ZERO, Vec3::Y),
+        Vignette {
+            intensity: (config::VIGNETTE_ALPHA * 2.5).min(1.0),
+            radius: 0.65,
+            smoothness: 3.0,
+            color: Color::BLACK,
+            ..default()
+        },
     ));
 
     commands.spawn((

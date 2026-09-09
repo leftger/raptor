@@ -63,21 +63,21 @@ pub const SCANLINE_STEP: usize = 4;
 pub const SCANLINE_HEIGHT: f32 = 2.0;
 pub const SCANLINE_ALPHA: f32 = 0.1;
 
-/// Convert a macroquad-style grid coordinate to world coordinates.
-pub fn world_position(x: i32, z: i32, height: f32) -> Vec3 {
-    Vec3::new(
-        x as f32 * GRID_SPACING,
-        height / 2.0,
-        z as f32 * GRID_SPACING,
-    )
+/// Convert a grid coordinate to a point on the ground plane.
+pub fn ground_position(x: i32, z: i32) -> Vec3 {
+    Vec3::new(x as f32 * GRID_SPACING, 0.0, z as f32 * GRID_SPACING)
 }
 
-/// Returns the height the block occupies (the original macroquad code kept block centers at
-/// `height / 2.0`; callers can add `height` for tops when placing labels).
+/// Convert a grid coordinate to world coordinates at the block center.
+pub fn world_position(x: i32, z: i32, height: f32) -> Vec3 {
+    let mut position = ground_position(x, z);
+    position.y = height / 2.0;
+    position
+}
+
+/// World position just above a block, used for labels.
 pub fn block_top_position(x: i32, z: i32, height: f32) -> Vec3 {
-    Vec3::new(
-        x as f32 * GRID_SPACING,
-        height + 0.5,
-        z as f32 * GRID_SPACING,
-    )
+    let mut position = ground_position(x, z);
+    position.y = height + 0.5;
+    position
 }

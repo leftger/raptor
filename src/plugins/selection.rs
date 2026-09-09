@@ -1,10 +1,8 @@
 use crate::command::Command;
 use crate::config;
+use crate::load::{DirectoryLoaded, DirectoryRequested};
 use crate::platform;
-use crate::state::{
-    DirectoryLoaded, DirectoryRequested, NavigatorResource, OrbitCameraResource,
-    ScanEffectResource, SelectionState, UiNotice, UiSettings,
-};
+use crate::state::{NavigatorResource, OrbitCameraResource, SelectionState, UiNotice, UiSettings};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::collections::HashMap;
@@ -106,7 +104,6 @@ fn read_keyboard_commands(keys: Res<ButtonInput<KeyCode>>, mut commands: Message
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn handle_commands(
     mut command_events: MessageReader<Command>,
     mut navigator: ResMut<NavigatorResource>,
@@ -114,7 +111,6 @@ fn handle_commands(
     mut orbit: ResMut<OrbitCameraResource>,
     mut ui_settings: ResMut<UiSettings>,
     mut ui_notice: ResMut<UiNotice>,
-    mut scan: ResMut<ScanEffectResource>,
     mut requests: MessageWriter<DirectoryRequested>,
 ) {
     for command in command_events.read() {
@@ -125,13 +121,11 @@ fn handle_commands(
             &mut orbit,
             &mut ui_settings,
             &mut ui_notice,
-            &mut scan,
             &mut requests,
         );
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn execute_command(
     command: Command,
     navigator: &mut crate::filesystem::Navigator,
@@ -139,7 +133,6 @@ fn execute_command(
     orbit: &mut OrbitCameraResource,
     ui_settings: &mut UiSettings,
     ui_notice: &mut UiNotice,
-    scan: &mut ScanEffectResource,
     requests: &mut MessageWriter<DirectoryRequested>,
 ) {
     match command {
@@ -233,20 +226,6 @@ fn execute_command(
             }
         }
     }
-
-    // A navigation command starts a fresh scan effect; harmless to reset for open file etc.
-    if matches!(
-        command,
-        Command::OpenSelected
-            | Command::GoBack
-            | Command::GoToParent
-            | Command::GoToRoot
-            | Command::GoHome
-            | Command::ReloadDirectory
-            | Command::ToggleHidden
-    ) {
-        scan.reset();
-    }
 }
 
 fn move_selection(
@@ -322,11 +301,7 @@ fn focus_camera_on_selection(
     if let Some(index) = selection.selected
         && let Some(node) = navigator.entries.get(index)
     {
-        orbit.set_target(Vec3::new(
-            node.grid_pos.0 as f32 * config::GRID_SPACING,
-            0.0,
-            node.grid_pos.1 as f32 * config::GRID_SPACING,
-        ));
+        orbit.set_target(config::ground_position(node.grid_pos.0, node.grid_pos.1));
     }
 }
 
@@ -374,11 +349,7 @@ fn update_mouse_picking(
             height / 2.0,
             config::BLOCK_DEPTH / 2.0,
         );
-        let center = Vec3::new(
-            node.grid_pos.0 as f32 * config::GRID_SPACING,
-            height / 2.0,
-            node.grid_pos.1 as f32 * config::GRID_SPACING,
-        );
+        let center = config::world_position(node.grid_pos.0, node.grid_pos.1, height);
 
         if let Some(distance) = ray_box_intersection(&ray, center, half_size) {
             match closest {
@@ -420,7 +391,7 @@ fn handle_mouse_click(
     };
 
     if selection.selected == Some(hovered) {
-        // Clicking the already-selected block opens/enters it (macroquad parity).
+        // Clicking the already-selected block opens or enters it.
         commands.write(Command::OpenSelected);
     } else {
         selection.selected = Some(hovered);

@@ -4,16 +4,18 @@ mod cli;
 mod command;
 mod config;
 mod filesystem;
+mod load;
 mod platform;
 mod plugins;
 mod state;
 
 use cli::Options;
 use config::{WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
+use load::DirectoryLoadState;
 use plugins::RaptorPlugins;
 use state::{
-    DirectoryLoadState, NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState,
-    UiNotice, UiSettings,
+    NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState, UiNotice,
+    UiSettings,
 };
 
 fn main() {

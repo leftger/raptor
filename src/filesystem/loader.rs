@@ -110,10 +110,7 @@ pub fn get_path_components(path: &Path) -> Vec<(String, PathBuf)> {
     let mut current = path.to_path_buf();
 
     loop {
-        let name = current
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "/".to_string());
+        let name = path_component_name(&current);
         components.push((name, current.clone()));
 
         if let Some(parent) = current.parent() {
@@ -130,15 +127,23 @@ pub fn get_path_components(path: &Path) -> Vec<(String, PathBuf)> {
     components
 }
 
-pub fn count_by_type(nodes: &[FileNode]) -> (usize, usize) {
-    let dirs = nodes.iter().filter(|n| n.is_dir).count();
-    let files = nodes.iter().filter(|n| !n.is_dir).count();
-    (dirs, files)
+pub fn path_component_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string())
+}
+
+pub fn breadcrumb_label(name: &str) -> String {
+    if name == "/" {
+        name.to_string()
+    } else {
+        format!("{name}/")
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::load_directory_with_limits;
+    use super::{breadcrumb_label, load_directory_with_limits, path_component_name};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -233,5 +238,12 @@ mod tests {
         assert!(link.is_dir);
         assert_eq!(link.children_count, 0);
         assert_eq!(link.size_display(), "linked directory");
+    }
+
+    #[test]
+    fn breadcrumb_labels_add_a_trailing_slash_except_for_root() {
+        assert_eq!(path_component_name(Path::new("/")), "/");
+        assert_eq!(breadcrumb_label("/"), "/");
+        assert_eq!(breadcrumb_label("home"), "home/");
     }
 }
