@@ -2,6 +2,7 @@ use super::node::FileNode;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug)]
 pub struct DirectoryContents {
     pub nodes: Vec<FileNode>,
     pub grid_width: i32,

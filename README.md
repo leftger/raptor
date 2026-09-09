@@ -12,7 +12,7 @@
 
 ## What Is This?
 
-**RAPTOR** is a 3D filesystem navigator built with **Rust + macroquad**, designed to make browsing your folders feel like hacking the mainframe *inside* Jurassic Park.
+**RAPTOR** is a 3D filesystem navigator built with **Rust + Bevy**, designed to make browsing your folders feel like hacking the mainframe *inside* Jurassic Park.
 
 Remember that overly dramatic scene where a kid exclaims
 
@@ -37,7 +37,7 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Automatic Directory Grid Layout**
 * **Clickable breadcrumbs** for jumping back through parent folders
 * **Reload current directory** (`r`)
-*  **Selection, Hover, and Glow Effects**
+* **Selection, Hover, and Glow Effects**
 * **Raycast Block Picking**
 * **Dynamic Block Heights** (file size / children count)
 * **Scanning Intro Line** (because retro sci-fi vibes)
@@ -45,7 +45,7 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Labels Toggle** (Tab)
 * **Interactive UI Panels** with live stats
 * **Smooth camera tweening**
-*  **Cool glowing wireframes because aesthetics**
+* **Cool glowing wireframes because aesthetics**
 
 ## Navigation
 
@@ -72,7 +72,7 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 
 * Hover → Highlight block
 * Click → Select
-* Double click → Enter directory / open file
+* Click selected block again → Enter directory / open file
 * Click breadcrumb path segment → Jump to that directory
 
 ### **UI**
@@ -94,7 +94,7 @@ And I thought:
 And boom — **RAPTOR** hatched.
 
 No dinosaurs were harmed in the making of this filesystem explorer.
-(Except maybe your CPU when opening a directory with 30k files.)
+(Except maybe your GPU when opening a directory with 30k files.)
 
 ## Running
 
@@ -119,10 +119,12 @@ cargo run --release -- --help
 
 ## Dependencies
 
-RAPTOR is built using **macroquad**, a Rust game framework that works on Linux, macOS and Windows with minimal setup.
+RAPTOR is built using **Bevy 0.19**, a modern Rust game engine that works on Linux, macOS and Windows.
 
-Macroquad repo (installation notes & troubleshooting):
-https://github.com/not-fl3/macroquad
+Bevy repo (installation notes & troubleshooting):
+https://github.com/bevyengine/bevy
+
+The filesystem, CLI, and OS-integration modules remain plain Rust so they can be unit-tested without a GPU.
 
 ## Future Ideas (aka InGen Phase 2)
 

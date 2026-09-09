@@ -1,45 +1,48 @@
-use macroquad::prelude::*;
+use bevy::prelude::*;
 
-mod app;
-mod camera;
 mod cli;
+mod command;
 mod config;
 mod filesystem;
-mod input;
-mod math;
 mod platform;
-mod render;
+mod plugins;
+mod state;
 
-use app::AppState;
-use input::KeyboardHandler;
-use render::render_frame;
+use cli::Options;
+use config::{WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
+use plugins::RaptorPlugins;
+use state::{
+    DirectoryLoadState, NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState,
+    UiSettings,
+};
 
-fn window_conf() -> Conf {
-    Conf {
-        window_title: config::WINDOW_TITLE.to_string(),
-        window_width: config::WINDOW_WIDTH,
-        window_height: config::WINDOW_HEIGHT,
-        fullscreen: false,
-        high_dpi: true,
-        sample_count: 4,
-        ..Default::default()
-    }
-}
+fn main() {
+    let options = Options::parse();
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let initial_path = options
+        .initial_path
+        .clone()
+        .filter(|path| path.is_dir())
+        .unwrap_or(home);
 
-#[macroquad::main(window_conf)]
-async fn main() {
-    let options = cli::Options::parse();
-    let mut state = AppState::new(options);
-
-    loop {
-        let commands = KeyboardHandler::poll_commands();
-        for command in commands {
-            state.execute_command(command);
-        }
-
-        state.update();
-
-        render_frame(&state);
-        next_frame().await
-    }
+    App::new()
+        .insert_resource(NavigatorResource::new(initial_path, options.show_hidden))
+        .insert_resource(UiSettings {
+            show_labels: options.show_labels,
+            show_fps: options.show_fps,
+        })
+        .insert_resource(DirectoryLoadState::default())
+        .insert_resource(OrbitCameraResource::default())
+        .insert_resource(SelectionState::default())
+        .insert_resource(ScanEffectResource::default())
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: WINDOW_TITLE.into(),
+                resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins(RaptorPlugins)
+        .run();
 }

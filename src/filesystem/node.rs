@@ -39,15 +39,6 @@ impl FileNode {
         }
     }
 
-    pub fn world_position(&self) -> macroquad::prelude::Vec3 {
-        let height = self.calculate_height();
-        macroquad::prelude::Vec3::new(
-            self.grid_pos.0 as f32 * config::GRID_SPACING,
-            height / 2.0,
-            self.grid_pos.1 as f32 * config::GRID_SPACING,
-        )
-    }
-
     pub fn display_name(&self, max_length: usize) -> String {
         if self.name.len() <= max_length {
             return self.name.clone();

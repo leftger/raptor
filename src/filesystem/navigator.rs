@@ -10,90 +10,69 @@ pub struct Navigator {
 }
 
 impl Navigator {
-    pub fn with_hidden(initial_path: PathBuf, show_hidden: bool) -> Self {
-        let mut nav = Self {
-            current_path: initial_path.clone(),
+    /// Creates a navigator positioned at `initial_path` without performing a filesystem scan.
+    ///
+    /// The Bevy port intentionally drives loads through the background-loading event
+    /// pipeline so huge directories do not stall startup or the frame loop.
+    pub fn empty(initial_path: PathBuf, show_hidden: bool) -> Self {
+        Self {
+            current_path: initial_path,
             entries: vec![],
             grid_width: 1,
             history: vec![],
             show_hidden,
-        };
-        nav.load(&initial_path);
-        nav
-    }
-
-    pub fn load(&mut self, path: &Path) {
-        self.current_path = path.to_path_buf();
-        self.entries.clear();
-
-        if let Ok(contents) = loader::load_directory(path, self.show_hidden) {
-            self.entries = contents.nodes;
-            self.grid_width = contents.grid_width;
         }
     }
 
-    pub fn reload(&mut self) {
-        let path = self.current_path.clone();
-        self.load(&path);
-    }
-
-    pub fn navigate_to(&mut self, path: &Path) {
+    /// Starts a navigation to `path` without scanning; the caller is responsible for
+    /// emitting a [`crate::state::DirectoryRequested`] for `path`.
+    pub fn begin_navigate_to(&mut self, path: &Path) {
         self.history.push(self.current_path.clone());
-        self.load(path);
+        self.current_path = path.to_path_buf();
     }
 
-    pub fn go_back(&mut self) -> bool {
+    /// Starts a back/history navigation without scanning; returns the path to load if any.
+    pub fn begin_go_back(&mut self) -> Option<PathBuf> {
         if let Some(prev_path) = self.history.pop() {
-            self.load(&prev_path);
-            true
+            self.current_path = prev_path.clone();
+            Some(prev_path)
         } else if let Some(parent_path) = self.current_path.parent().map(Path::to_path_buf) {
-            self.load(&parent_path);
-            true
+            self.current_path = parent_path.clone();
+            Some(parent_path)
         } else {
-            false
+            None
         }
     }
 
-    pub fn go_to_parent(&mut self) -> bool {
+    /// Starts a parent navigation without scanning; returns the path to load if any.
+    pub fn begin_go_to_parent(&mut self) -> Option<PathBuf> {
         if let Some(parent_path) = self.current_path.parent().map(Path::to_path_buf) {
-            self.navigate_to(&parent_path);
-            true
+            self.history.push(self.current_path.clone());
+            self.current_path = parent_path.clone();
+            Some(parent_path)
         } else {
-            false
+            None
         }
     }
 
-    pub fn go_to_root(&mut self) {
-        self.navigate_to(&PathBuf::from("/"));
+    /// Starts a root navigation without scanning.
+    pub fn begin_go_to_root(&mut self) -> PathBuf {
+        let root = PathBuf::from("/");
+        self.history.push(self.current_path.clone());
+        self.current_path = root.clone();
+        root
     }
 
-    pub fn go_home(&mut self) {
+    /// Starts a home navigation without scanning; returns the home path to load.
+    pub fn begin_go_home(&mut self) -> PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        self.load(&home);
+        self.current_path = home.clone();
         self.history.clear();
-    }
-
-    pub fn enter_directory(&mut self, index: usize) -> bool {
-        if let Some(node) = self.entries.get(index)
-            && node.is_dir
-        {
-            let path = node.path.clone();
-            self.navigate_to(&path);
-            return true;
-        }
-        false
-    }
-
-    pub fn get_path_components(&self) -> Vec<(String, PathBuf)> {
-        loader::get_path_components(&self.current_path)
+        home
     }
 
     pub fn count_by_type(&self) -> (usize, usize) {
         loader::count_by_type(&self.entries)
-    }
-
-    pub fn has_parent(&self) -> bool {
-        self.current_path.parent().is_some()
     }
 
     pub fn grid_height(&self) -> i32 {

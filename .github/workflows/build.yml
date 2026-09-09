@@ -1,9 +1,9 @@
-name: Release
+name: CI
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main, feat/bevy-port]
+  pull_request:
   workflow_dispatch:
     inputs:
       create_release:
@@ -13,6 +13,26 @@ on:
         default: false
 
 jobs:
+  quality:
+    name: Format / Clippy / Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libxcb-randr0-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+
   create-release:
     name: Prepare and Get Version
     permissions:
@@ -30,7 +50,7 @@ jobs:
         run: |
           VERSION=""
           if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v} 
+            VERSION=${GITHUB_REF#refs/tags/v}
           else
             VERSION="0.0.0-manual-$(date +%s)"
           fi
@@ -78,19 +98,19 @@ jobs:
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
 
-      - name: Install Linux dependencies (for macroquad)
+      - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev libfontconfig1-dev libxcb-randr0-dev
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libxcb-randr0-dev
 
       - name: Install WiX Toolset (for MSI bundle)
         if: matrix.os == 'windows-latest'
         run: |
           choco install wix-toolset -y
 
-      - name: Bundle and Package
-        run: cargo bundle --release
+      - name: Check release build
+        run: cargo check --release
 
       - name: Bundle and Package
         run: cargo bundle --release

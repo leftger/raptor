@@ -6,9 +6,9 @@ description = "Realtime Abstracted Path Tree Observer"
 authors = ["Erick Jesus <erick.jesus2060@gmail.com>"]
 
 [dependencies]
+bevy = { version = "0.19", default-features = false, features = ["3d", "ui"] }
 bytesize = "2.2.0"
 dirs = "6.0.0"
-macroquad = "0.4"
 
 [package.metadata.bundle]
 name = "raptor"
