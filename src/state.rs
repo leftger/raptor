@@ -122,3 +122,22 @@ pub struct LabelsRoot;
 /// Marker for entities that should be despawned whenever the directory changes.
 #[derive(Component, Debug)]
 pub struct DirectorySceneRoot;
+
+/// The active interaction mode over the shared directory scene.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InteractionMode {
+    #[default]
+    Explorer,
+    Lightcycle,
+}
+
+/// Non-directory entities owned by the lightcycle mode (cycle, walls, portal).
+///
+/// Kept separate from [`DirectorySceneRoot`] so a directory change never
+/// despawns the player.
+#[derive(Component, Debug)]
+pub struct LightcycleSceneRoot;
+
+/// Trail mesh chunks owned by the lightcycle mode.
+#[derive(Component, Debug)]
+pub struct TrailSceneRoot;

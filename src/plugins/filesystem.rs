@@ -1,5 +1,7 @@
 use crate::load::{DirectoryLoadFailed, DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
-use crate::state::{NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState};
+use crate::state::{
+    InteractionMode, NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState,
+};
 use bevy::prelude::*;
 
 pub struct FilesystemPlugin;
@@ -65,12 +67,13 @@ fn poll_loads(
     }
 }
 
-fn apply_loaded(
+pub(crate) fn apply_loaded(
     mut events: MessageReader<DirectoryLoaded>,
     mut navigator: ResMut<NavigatorResource>,
     mut selection: ResMut<SelectionState>,
     mut scan: ResMut<ScanEffectResource>,
     mut camera: ResMut<OrbitCameraResource>,
+    mode: Res<InteractionMode>,
 ) {
     for event in events.read() {
         let navigator = &mut navigator.0;
@@ -82,7 +85,9 @@ fn apply_loaded(
         selection.selected = None;
         selection.hovered = None;
         scan.reset();
-        camera.reset_target();
+        if *mode == InteractionMode::Explorer {
+            camera.reset_target();
+        }
     }
 }
 

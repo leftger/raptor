@@ -2,7 +2,9 @@ use crate::command::Command;
 use crate::config;
 use crate::load::{DirectoryLoaded, DirectoryRequested};
 use crate::platform;
-use crate::state::{NavigatorResource, OrbitCameraResource, SelectionState, UiNotice, UiSettings};
+use crate::state::{
+    InteractionMode, NavigatorResource, OrbitCameraResource, SelectionState, UiNotice, UiSettings,
+};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::collections::HashMap;
@@ -16,14 +18,21 @@ impl Plugin for SelectionPlugin {
             .add_systems(
                 Update,
                 (
-                    read_keyboard_commands,
-                    handle_commands.after(read_keyboard_commands),
                     rebuild_spatial_index,
-                    update_mouse_picking.after(rebuild_spatial_index),
-                    handle_mouse_click.after(update_mouse_picking),
+                    (
+                        read_keyboard_commands,
+                        handle_commands.after(read_keyboard_commands),
+                        update_mouse_picking.after(rebuild_spatial_index),
+                        handle_mouse_click.after(update_mouse_picking),
+                    )
+                        .run_if(in_explorer_mode),
                 ),
             );
     }
+}
+
+fn in_explorer_mode(mode: Res<InteractionMode>) -> bool {
+    *mode == InteractionMode::Explorer
 }
 
 #[derive(Resource, Default)]

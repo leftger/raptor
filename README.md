@@ -46,6 +46,7 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Interactive UI Panels** with live stats
 * **Smooth camera tweening**
 * **Cool glowing wireframes because aesthetics**
+* **TRON-style Lightcycle Mode** (press `M` in the 3D view)
 
 ## Navigation
 
@@ -79,6 +80,23 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * `.`   → Toggle hidden files
 * `Tab` → Toggle labels
 
+## Lightcycle Mode (TRON-style)
+
+Press **`M`** to toggle between the classic explorer and a lightcycle run over
+the same directory grid.
+
+* `A` / `Left`  → Queue a left turn (applied at the next cell boundary)
+* `D` / `Right` → Queue a right turn
+* `R` → Restart the run in the current directory
+* `M` → Back to Explorer
+* `u` / `-` / breadcrumbs → Directory jumps (the run resets when the new folder loads)
+* Folders → Enter them and load the directory
+* Files, your own trail, and the arena walls → Crash
+* Glowing gate on the `-Z` wall → Go to the parent directory (inactive at `/`)
+
+The cycle moves continuously between cell centers; turns are queued and execute
+at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
+while riding, and are restored when you toggle back.
 
 ## Why Jurassic Park?
 

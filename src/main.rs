@@ -4,6 +4,7 @@ mod cli;
 mod command;
 mod config;
 mod filesystem;
+mod lightcycle;
 mod load;
 mod platform;
 mod plugins;

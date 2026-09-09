@@ -1,5 +1,5 @@
 use crate::config;
-use crate::state::OrbitCameraResource;
+use crate::state::{InteractionMode, OrbitCameraResource};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
@@ -10,8 +10,12 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(config::BACKGROUND_COLOR))
             .add_systems(Startup, setup_camera)
-            .add_systems(Update, update_camera);
+            .add_systems(Update, update_camera.run_if(in_explorer_mode));
     }
+}
+
+fn in_explorer_mode(mode: Res<InteractionMode>) -> bool {
+    *mode == InteractionMode::Explorer
 }
 
 fn setup_camera(mut commands: Commands) {
@@ -48,24 +52,16 @@ fn update_camera(
     mouse_motion: Res<AccumulatedMouseMotion>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
 ) {
-    let mut changed = false;
     if mouse_buttons.pressed(MouseButton::Right) && mouse_motion.delta != Vec2::ZERO {
         orbit.rotate(mouse_motion.delta.x, mouse_motion.delta.y);
-        changed = true;
     }
 
     if mouse_scroll.delta.y != 0.0 {
         orbit.zoom(mouse_scroll.delta.y);
-        changed = true;
     }
 
     if orbit.target.distance_squared(orbit.target_destination) > 0.0001 {
         orbit.update();
-        changed = true;
-    }
-
-    if !changed {
-        return;
     }
 
     camera.translation = orbit.position();

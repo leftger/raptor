@@ -1,7 +1,8 @@
 use crate::config;
 use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
+use crate::lightcycle::LightcycleState;
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
-use crate::state::{NavigatorResource, SelectionState, UiNotice, UiSettings};
+use crate::state::{InteractionMode, NavigatorResource, SelectionState, UiNotice, UiSettings};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ impl Plugin for UiPlugin {
                     spawn_breadcrumbs,
                     update_header_text,
                     update_breadcrumb_styling,
+                    update_footer_text,
                     update_status_text,
                     update_selection_info,
                 ),
@@ -47,6 +49,15 @@ struct StatusLineText;
 
 #[derive(Component)]
 struct SelectionInfoText;
+
+#[derive(Component)]
+struct SelectionInfoPanel;
+
+#[derive(Component)]
+struct FooterPrimaryText;
+
+#[derive(Component)]
+struct FooterSecondaryText;
 
 #[derive(Component)]
 struct UiChrome;
@@ -160,6 +171,7 @@ fn setup_ui(mut commands: Commands) {
                 ))
                 .with_children(|footer| {
                     footer.spawn((
+                        FooterPrimaryText,
                         Text::new(
                             "NAV: h j k l  |  o/ENTER: Open  |  r: Reload  |  f: Reveal  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels",
                         ),
@@ -170,6 +182,7 @@ fn setup_ui(mut commands: Commands) {
                         TextColor(config::TEXT_WARNING),
                     ));
                     footer.spawn((
+                        FooterSecondaryText,
                         Text::new(
                             "MOUSE: Right-drag rotate | Scroll zoom | Click select | Click again enter | Breadcrumb: jump to folder",
                         ),
@@ -193,6 +206,7 @@ fn setup_ui(mut commands: Commands) {
             // Selection info panel
             parent
                 .spawn((
+                    SelectionInfoPanel,
                     Node {
                         position_type: PositionType::Absolute,
                         right: px(20.0),
@@ -338,11 +352,44 @@ fn update_breadcrumb_styling(
     }
 }
 
+fn update_footer_text(
+    mode: Res<InteractionMode>,
+    mut primary: Query<&mut Text, (With<FooterPrimaryText>, Without<FooterSecondaryText>)>,
+    mut secondary: Query<&mut Text, (With<FooterSecondaryText>, Without<FooterPrimaryText>)>,
+) {
+    let (primary_text, secondary_text) = if *mode == InteractionMode::Explorer {
+        (
+            "NAV: h j k l  |  o/ENTER: Open  |  r: Reload  |  f: Reveal  |  .: Hidden  |  u/-: Parent  |  /: Root  |  TAB: Labels",
+            "MOUSE: Right-drag rotate | Scroll zoom | Click select | Click again enter | Breadcrumb: jump to folder",
+        )
+    } else {
+        (
+            "LIGHTCYCLE  |  A/D: Turn  |  R: Restart  |  M: Explorer  |  Folders: enter  |  Files/trail/wall: crash  |  Gate: parent",
+            "MOUSE: disabled  |  u/-: Parent directory  |  Breadcrumb: jump to folder  |  Scroll zoom: disabled in this mode",
+        )
+    };
+
+    if let Ok(mut text) = primary.single_mut()
+        && **text != primary_text
+    {
+        **text = primary_text.to_string();
+    }
+
+    if let Ok(mut text) = secondary.single_mut()
+        && **text != secondary_text
+    {
+        **text = secondary_text.to_string();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn update_status_text(
+    mode: Res<InteractionMode>,
     ui_settings: Res<UiSettings>,
     navigator: Res<NavigatorResource>,
     load_state: Res<DirectoryLoadState>,
     ui_notice: Res<UiNotice>,
+    lightcycle: Res<LightcycleState>,
     diagnostics: Res<DiagnosticsStore>,
     mut status_text: Query<&mut Text, (With<StatusLineText>, Without<ChildrenStatsText>)>,
     mut children_stats: Query<&mut Text, (With<ChildrenStatsText>, Without<StatusLineText>)>,
@@ -351,13 +398,32 @@ fn update_status_text(
         return;
     };
 
-    let mut status = format!(
-        "Labels: {} | Hidden: {}",
-        if ui_settings.show_labels { "ON" } else { "OFF" },
-        if navigator.0.show_hidden { "ON" } else { "OFF" },
-    );
+    let mut status = if *mode == InteractionMode::Lightcycle {
+        match &lightcycle.run {
+            Some(run) => {
+                let mut status = format!("MODE: LIGHTCYCLE | TRAIL: {}", run.sim.trail.len());
+                if run.sim.phase == crate::lightcycle::logic::RunPhase::Ready {
+                    status = format!("{status} | READY: no empty spawn cell");
+                }
+                if let Some(crash) = &run.crash_label {
+                    status = format!("{status} | CRASHED: {crash}");
+                }
+                if let Some(entering) = &run.entering_label {
+                    status = format!("{status} | ENTERING: {entering}");
+                }
+                status
+            }
+            None => "MODE: LIGHTCYCLE | STARTING...".to_string(),
+        }
+    } else {
+        format!(
+            "Labels: {} | Hidden: {}",
+            if ui_settings.show_labels { "ON" } else { "OFF" },
+            if navigator.0.show_hidden { "ON" } else { "OFF" },
+        )
+    };
 
-    if navigator.0.entries_truncated {
+    if *mode == InteractionMode::Explorer && navigator.0.entries_truncated {
         status = format!(
             "SHOWING FIRST {} ENTRIES | {status}",
             crate::config::MAX_DIRECTORY_ENTRIES
@@ -397,13 +463,22 @@ fn update_status_text(
 }
 
 fn update_selection_info(
+    mode: Res<InteractionMode>,
     navigator: Res<NavigatorResource>,
     selection: Res<SelectionState>,
+    mut panel: Single<&mut Visibility, With<SelectionInfoPanel>>,
     mut query: Query<(&mut Text, &mut Visibility), With<SelectionInfoText>>,
 ) {
     let Ok((mut text, mut visibility)) = query.single_mut() else {
         return;
     };
+
+    if *mode == InteractionMode::Lightcycle {
+        **panel = Visibility::Hidden;
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    **panel = Visibility::Visible;
 
     let Some(index) = selection.selected else {
         *visibility = Visibility::Hidden;

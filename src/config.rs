@@ -63,6 +63,31 @@ pub const SCANLINE_STEP: usize = 4;
 pub const SCANLINE_HEIGHT: f32 = 2.0;
 pub const SCANLINE_ALPHA: f32 = 0.1;
 
+pub const LIGHTCYCLE_CELLS_PER_SEC: f32 = 3.5;
+pub const LIGHTCYCLE_FIXED_STEP: f32 = 1.0 / 60.0;
+pub const LIGHTCYCLE_MAX_SUBSTEPS: usize = 4;
+pub const LIGHTCYCLE_ARENA_PADDING: i32 = 1;
+pub const LIGHTCYCLE_EMPTY_ARENA_HALF: i32 = 2;
+pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;
+
+pub const LIGHTCYCLE_CYCLE_HEIGHT: f32 = 0.8;
+pub const LIGHTCYCLE_CYCLE_SIZE: f32 = 0.7;
+pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.2;
+pub const LIGHTCYCLE_TRAIL_SIZE: f32 = 2.0;
+pub const LIGHTCYCLE_WALL_HEIGHT: f32 = 1.4;
+pub const LIGHTCYCLE_WALL_THICKNESS: f32 = 0.2;
+pub const LIGHTCYCLE_PORTAL_HEIGHT: f32 = 2.6;
+pub const LIGHTCYCLE_PORTAL_WIDTH: f32 = 1.6;
+
+pub const LIGHTCYCLE_CYCLE_COLOR: Color = Color::srgba(1.0, 0.15, 0.9, 1.0);
+pub const LIGHTCYCLE_TRAIL_COLOR: Color = Color::srgba(0.0, 1.0, 1.0, 1.0);
+pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
+pub const LIGHTCYCLE_PORTAL_COLOR: Color = Color::srgba(1.0, 0.85, 0.1, 1.0);
+
+pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 9.0;
+pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 5.0;
+pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 2.0;
+
 /// Convert a grid coordinate to a point on the ground plane.
 pub fn ground_position(x: i32, z: i32) -> Vec3 {
     Vec3::new(x as f32 * GRID_SPACING, 0.0, z as f32 * GRID_SPACING)

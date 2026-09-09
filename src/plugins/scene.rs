@@ -1,7 +1,7 @@
 use crate::config;
 use crate::filesystem::FileNode;
 use crate::load::DirectoryLoaded;
-use crate::state::{DirectorySceneRoot, NavigatorResource, SelectionState};
+use crate::state::{DirectorySceneRoot, InteractionMode, NavigatorResource, SelectionState};
 use bevy::prelude::*;
 
 pub struct ScenePlugin;
@@ -13,9 +13,30 @@ impl Plugin for ScenePlugin {
                 Update,
                 (
                     spawn_scene,
-                    update_highlighting.run_if(resource_changed::<SelectionState>),
+                    update_highlighting.run_if(in_explorer_mode),
+                    hide_highlighting_in_lightcycle.run_if(in_lightcycle_mode),
                 ),
             );
+    }
+}
+
+fn in_explorer_mode(mode: Res<InteractionMode>) -> bool {
+    *mode == InteractionMode::Explorer
+}
+
+fn in_lightcycle_mode(mode: Res<InteractionMode>) -> bool {
+    *mode == InteractionMode::Lightcycle
+}
+
+fn hide_highlighting_in_lightcycle(
+    mut hover: Query<&mut Visibility, (With<HoverShell>, Without<SelectedShell>)>,
+    mut selected: Query<&mut Visibility, (With<SelectedShell>, Without<HoverShell>)>,
+) {
+    for mut visibility in &mut hover {
+        *visibility = Visibility::Hidden;
+    }
+    for mut visibility in &mut selected {
+        *visibility = Visibility::Hidden;
     }
 }
 

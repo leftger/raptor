@@ -1,5 +1,5 @@
 use crate::config;
-use crate::state::ScanEffectResource;
+use crate::state::{InteractionMode, ScanEffectResource};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -88,6 +88,7 @@ fn setup_scanlines(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 fn update_scan_effect(
     time: Res<Time>,
     mut scan: ResMut<ScanEffectResource>,
+    mode: Res<InteractionMode>,
     mut plane: Query<(&mut Transform, &mut Visibility), With<ScanPlane>>,
 ) {
     scan.update(time.delta_secs());
@@ -96,7 +97,7 @@ fn update_scan_effect(
         return;
     };
 
-    if scan.active {
+    if scan.active && *mode == InteractionMode::Explorer {
         transform.translation.y = scan.y_position;
         *visibility = Visibility::Visible;
     } else {

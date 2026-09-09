@@ -1,5 +1,5 @@
 use crate::config;
-use crate::state::{LabelsRoot, NavigatorResource, SelectionState, UiSettings};
+use crate::state::{InteractionMode, LabelsRoot, NavigatorResource, SelectionState, UiSettings};
 use bevy::prelude::*;
 use bevy::text::FontSize;
 use bevy::window::PrimaryWindow;
@@ -14,9 +14,29 @@ pub struct LabelsPlugin;
 
 impl Plugin for LabelsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_label_root)
-            .add_systems(Update, update_labels);
+        app.add_systems(Startup, setup_label_root).add_systems(
+            Update,
+            (
+                sync_label_visibility,
+                update_labels.run_if(in_explorer_mode),
+            ),
+        );
     }
+}
+
+fn in_explorer_mode(mode: Res<InteractionMode>) -> bool {
+    *mode == InteractionMode::Explorer
+}
+
+fn sync_label_visibility(
+    mode: Res<InteractionMode>,
+    mut labels_root: Single<&mut Visibility, With<LabelsRoot>>,
+) {
+    **labels_root = if *mode == InteractionMode::Explorer {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
 }
 
 fn setup_label_root(mut commands: Commands) {
