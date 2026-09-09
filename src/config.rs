@@ -67,6 +67,8 @@ pub const LIGHTCYCLE_CELLS_PER_SEC: f32 = 3.5;
 pub const LIGHTCYCLE_FIXED_STEP: f32 = 1.0 / 60.0;
 pub const LIGHTCYCLE_MAX_SUBSTEPS: usize = 4;
 pub const LIGHTCYCLE_TURN_DURATION: f32 = 0.22;
+/// How early (in cells) the rendered path begins curving before an intersection.
+pub const LIGHTCYCLE_TURN_RADIUS: f32 = 0.35;
 pub const LIGHTCYCLE_ARENA_PADDING: i32 = 1;
 pub const LIGHTCYCLE_EMPTY_ARENA_HALF: i32 = 2;
 pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;
@@ -89,9 +91,9 @@ pub const LIGHTCYCLE_TRAIL_COLOR: Color = Color::srgba(0.0, 1.0, 1.0, 1.0);
 pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
 pub const LIGHTCYCLE_PORTAL_COLOR: Color = Color::srgba(1.0, 0.85, 0.1, 1.0);
 
-pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 9.0;
-pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 5.0;
-pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 2.0;
+pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
+pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
+pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 4.0;
 
 /// Convert a grid coordinate to a point on the ground plane.
 pub fn ground_position(x: i32, z: i32) -> Vec3 {

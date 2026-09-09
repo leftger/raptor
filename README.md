@@ -99,9 +99,10 @@ at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
 while riding, and are restored when you toggle back.
 
 In Lightcycle mode the directory entries are re-laid out as widely spaced
-"downtown" towers with empty streets between them. Directory towers load the
-next arena; file towers are solid and crash the cycle. The cycle also leaves a
-continuous neon wall trail behind it, classic TRON style.
+"downtown" towers with empty streets between them, plus a visible neon street
+grid. Directory towers load the next arena; file towers are solid and crash the
+cycle. The cycle rounds intersections smoothly and leaves a continuous neon
+wall trail behind it, classic TRON style.
 
 ## Why Jurassic Park?
 

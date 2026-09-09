@@ -48,6 +48,7 @@ struct LightcycleAssets {
     portal_material: Handle<StandardMaterial>,
     dir_tower_material: Handle<StandardMaterial>,
     file_tower_material: Handle<StandardMaterial>,
+    street_grid_material: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -84,6 +85,12 @@ fn setup_lightcycle_assets(
         portal_material: materials.add(unlit_material(config::LIGHTCYCLE_PORTAL_COLOR)),
         dir_tower_material: materials.add(unlit_material(config::DIR_COLOR)),
         file_tower_material: materials.add(unlit_material(config::FILE_COLOR)),
+        street_grid_material: materials.add(StandardMaterial {
+            base_color: config::GRID_COLOR.with_alpha(0.3),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
     });
 }
 
@@ -226,6 +233,7 @@ fn spawn_run_entities(
 
     spawn_arena_walls(commands, assets, &run.arena);
     spawn_towers(commands, assets, meshes, run);
+    spawn_street_grid(commands, assets, meshes, &run.arena);
 }
 
 fn spawn_towers(
@@ -281,6 +289,68 @@ fn tower_cube_mesh(node: &FileNode) -> Mesh {
             config::LIGHTCYCLE_TOWER_SIZE,
         )),
     )
+}
+
+fn spawn_street_grid(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+) {
+    if let Some(mesh) = build_street_grid_mesh(arena) {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.street_grid_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn build_street_grid_mesh(arena: &Arena) -> Option<Mesh> {
+    let spacing = config::GRID_SPACING;
+    let line_width = 0.05;
+    let min_x = (arena.min.0 as f32 - 0.5) * spacing;
+    let max_x = (arena.max.0 as f32 + 0.5) * spacing;
+    let min_z = (arena.min.1 as f32 - 0.5) * spacing;
+    let max_z = (arena.max.1 as f32 + 0.5) * spacing;
+    let mid_x = (min_x + max_x) * 0.5;
+    let mid_z = (min_z + max_z) * 0.5;
+    let width = max_x - min_x;
+    let depth = max_z - min_z;
+
+    let mut merged: Option<Mesh> = None;
+    let mut push = |mesh: Mesh| {
+        if let Some(existing) = &mut merged {
+            existing
+                .merge(&mesh)
+                .expect("street grid meshes must be merge-compatible");
+        } else {
+            merged = Some(mesh);
+        }
+    };
+
+    for x in arena.min.0..=arena.max.0 {
+        let center = Vec3::new(x as f32 * spacing, 0.01, mid_z);
+        push(street_grid_line_mesh(
+            center,
+            Vec3::new(line_width, 0.02, depth),
+        ));
+    }
+    for z in arena.min.1..=arena.max.1 {
+        let center = Vec3::new(mid_x, 0.01, z as f32 * spacing);
+        push(street_grid_line_mesh(
+            center,
+            Vec3::new(width, 0.02, line_width),
+        ));
+    }
+
+    merged
+}
+
+fn street_grid_line_mesh(center: Vec3, scale: Vec3) -> Mesh {
+    Mesh::from(Cuboid::default())
+        .transformed_by(Transform::from_translation(center).with_scale(scale))
 }
 
 fn spawn_arena_walls(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena) {
@@ -622,19 +692,104 @@ fn smoothstep(t: f32) -> f32 {
 }
 
 fn cycle_world_position(sim: &LightcycleSim) -> Vec3 {
+    let height = config::LIGHTCYCLE_CYCLE_HEIGHT;
     let base = config::ground_position(sim.cell.0, sim.cell.1);
-    let (dx, dz) = sim.heading.delta();
 
-    let t = if sim.phase == RunPhase::Running {
-        sim.cell_t
-    } else {
-        0.0
-    };
+    if sim.phase != RunPhase::Running {
+        return Vec3::new(base.x, height * 0.5, base.z);
+    }
 
+    let (x, z) = cycle_cell_position(sim);
     Vec3::new(
-        base.x + dx as f32 * t * config::GRID_SPACING,
-        config::LIGHTCYCLE_CYCLE_HEIGHT * 0.5,
-        base.z + dz as f32 * t * config::GRID_SPACING,
+        x * config::GRID_SPACING,
+        height * 0.5,
+        z * config::GRID_SPACING,
+    )
+}
+
+/// Continuous cell-space position for the rendered cycle.
+///
+/// Straight segments use the raw simulation position. Near queued/applied turns
+/// the path follows a rounded 90-degree arc around the intersection so the
+/// cycle visibly curves through corners instead of snapping an L-shape.
+fn cycle_cell_position(sim: &LightcycleSim) -> (f32, f32) {
+    if let Some((x, z)) = rounded_cell_position(sim) {
+        return (x, z);
+    }
+
+    let (dx, dz) = sim.heading.delta();
+    (
+        sim.cell.0 as f32 + dx as f32 * sim.cell_t,
+        sim.cell.1 as f32 + dz as f32 * sim.cell_t,
+    )
+}
+
+fn rounded_cell_position(sim: &LightcycleSim) -> Option<(f32, f32)> {
+    let radius = config::LIGHTCYCLE_TURN_RADIUS;
+
+    // Approaching a queued turn: the first half of the arc happens just before
+    // the cycle reaches the intersection cell.
+    if let Some(turn) = sim.queued_turn
+        && sim.cell_t >= 1.0 - radius
+    {
+        let incoming = sim.heading.delta();
+        let outgoing = sim.heading.turn(turn).delta();
+        let u = ((sim.cell_t - (1.0 - radius)) / radius) * 0.5;
+        return Some(arc_cell_point(
+            sim.next_cell(),
+            incoming,
+            outgoing,
+            u,
+            radius,
+        ));
+    }
+
+    // Just applied a turn: render the second half of the arc after leaving the
+    // intersection cell. The previous trail cell tells us the incoming heading.
+    if sim.queued_turn.is_none()
+        && sim.cell_t <= radius
+        && let Some(&previous) = sim.trail.last()
+    {
+        let incoming = (sim.cell.0 - previous.0, sim.cell.1 - previous.1);
+        let outgoing = sim.heading.delta();
+        let is_turn = incoming.0 * outgoing.0 + incoming.1 * outgoing.1 == 0;
+        if is_turn {
+            let u = 0.5 + (sim.cell_t / radius) * 0.5;
+            return Some(arc_cell_point(sim.cell, incoming, outgoing, u, radius));
+        }
+    }
+
+    None
+}
+
+fn arc_cell_point(
+    corner: (i32, i32),
+    incoming: (i32, i32),
+    outgoing: (i32, i32),
+    u: f32,
+    radius: f32,
+) -> (f32, f32) {
+    let corner_x = corner.0 as f32;
+    let corner_z = corner.1 as f32;
+    let center_x = corner_x - incoming.0 as f32 * radius + outgoing.0 as f32 * radius;
+    let center_z = corner_z - incoming.1 as f32 * radius + outgoing.1 as f32 * radius;
+
+    let start_x = -outgoing.0 as f32;
+    let start_z = -outgoing.1 as f32;
+    let start_angle = start_z.atan2(start_x);
+    let end_angle = (incoming.1 as f32).atan2(incoming.0 as f32);
+
+    let mut delta = end_angle - start_angle;
+    if delta > std::f32::consts::PI {
+        delta -= std::f32::consts::TAU;
+    } else if delta < -std::f32::consts::PI {
+        delta += std::f32::consts::TAU;
+    }
+
+    let theta = start_angle + delta * u.clamp(0.0, 1.0);
+    (
+        center_x + radius * theta.cos(),
+        center_z + radius * theta.sin(),
     )
 }
 
