@@ -83,3 +83,43 @@ impl Navigator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Navigator;
+    use std::path::PathBuf;
+
+    #[test]
+    fn begin_navigate_pushes_history_and_sets_path() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a"), false);
+        navigator.begin_navigate_to(&PathBuf::from("/a/b"));
+        assert_eq!(navigator.current_path, PathBuf::from("/a/b"));
+        assert_eq!(navigator.history, vec![PathBuf::from("/a")]);
+    }
+
+    #[test]
+    fn begin_go_back_pops_history() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a"), false);
+        navigator.begin_navigate_to(&PathBuf::from("/a/b"));
+        let path = navigator.begin_go_back().unwrap();
+        assert_eq!(path, PathBuf::from("/a"));
+        assert_eq!(navigator.current_path, PathBuf::from("/a"));
+        assert!(navigator.history.is_empty());
+    }
+
+    #[test]
+    fn go_back_without_history_goes_to_parent() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a/b"), false);
+        let path = navigator.begin_go_back().unwrap();
+        assert_eq!(path, PathBuf::from("/a"));
+        assert_eq!(navigator.current_path, PathBuf::from("/a"));
+    }
+
+    #[test]
+    fn toggle_hidden_is_a_navigator_field_not_a_global() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a"), false);
+        assert!(!navigator.show_hidden);
+        navigator.show_hidden = true;
+        assert!(navigator.show_hidden);
+    }
+}
