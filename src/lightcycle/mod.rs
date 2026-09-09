@@ -29,4 +29,24 @@ pub struct LightcycleState {
     pub run: Option<ActiveRun>,
     /// Accumulated time used for fixed-step simulation.
     pub clock: f32,
+    /// Active crash animation state (debris burst + camera shake).
+    pub crash_fx: Option<CrashFx>,
+}
+
+/// Timeline for the crash animation.
+#[derive(Debug, Clone, Copy)]
+pub struct CrashFx {
+    pub timer: f32,
+    pub duration: f32,
+    pub spawned: bool,
+}
+
+impl CrashFx {
+    pub fn new(duration: f32) -> Self {
+        Self {
+            timer: duration,
+            duration,
+            spawned: false,
+        }
+    }
 }

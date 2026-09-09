@@ -29,6 +29,8 @@ impl Plugin for LightcyclePlugin {
                     sync_directory_scene_visibility,
                     read_lightcycle_input.run_if(in_lightcycle_mode),
                     step_lightcycle.run_if(in_lightcycle_mode),
+                    spawn_crash_effect.run_if(in_lightcycle_mode),
+                    update_crash_effects.run_if(in_lightcycle_mode),
                     rebuild_trail_mesh.run_if(in_lightcycle_mode),
                     update_cycle_transform.run_if(in_lightcycle_mode),
                     update_chase_camera.run_if(in_lightcycle_mode),
@@ -49,10 +51,20 @@ struct LightcycleAssets {
     dir_tower_material: Handle<StandardMaterial>,
     file_tower_material: Handle<StandardMaterial>,
     street_grid_material: Handle<StandardMaterial>,
+    crash_material: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
 struct CycleEntity;
+
+/// Small mesh burst emitted at the crash point.
+#[derive(Component)]
+struct CrashDebris {
+    velocity: Vec3,
+    life: f32,
+    max_life: f32,
+    initial_scale: f32,
+}
 
 /// Smooth visual rotation state for the cycle. The simulation heading still
 /// changes at the cell boundary; this component eases the rendered yaw over a
@@ -91,6 +103,7 @@ fn setup_lightcycle_assets(
             alpha_mode: AlphaMode::Blend,
             ..default()
         }),
+        crash_material: materials.add(unlit_material(Color::srgb(1.0, 0.45, 0.1))),
     });
 }
 
@@ -183,6 +196,7 @@ fn toggle_mode(
     despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
     state.clock = 0.0;
     state.run = None;
+    state.crash_fx = None;
 
     if *mode == InteractionMode::Lightcycle {
         *mode = InteractionMode::Explorer;
@@ -441,6 +455,7 @@ fn reset_on_directory_loaded(
         spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
 
         state.clock = 0.0;
+        state.crash_fx = None;
         state.run = Some(run);
     }
 }
@@ -485,6 +500,7 @@ fn read_lightcycle_input(
     if restart {
         restart_run(&mut run);
         state.clock = 0.0;
+        state.crash_fx = None;
     }
 
     if go_up && let Some(parent) = navigator.0.begin_go_to_parent() {
@@ -591,12 +607,98 @@ fn step_lightcycle(
             }
         }
 
+        if run.sim.phase == RunPhase::Crashed && state.crash_fx.is_none() {
+            state.crash_fx = Some(crate::lightcycle::CrashFx::new(
+                config::LIGHTCYCLE_CRASH_FX_DURATION,
+            ));
+        }
+
         if run.sim.phase != RunPhase::Running {
             break;
         }
     }
 
     state.run = Some(run);
+}
+
+fn spawn_crash_effect(
+    mut state: ResMut<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut commands: Commands,
+) {
+    let Some(fx) = state.crash_fx.as_mut() else {
+        return;
+    };
+    if fx.spawned {
+        return;
+    }
+    fx.spawned = true;
+
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+    let origin = cycle_world_position(&run.sim);
+    let count = 18;
+
+    for index in 0..count {
+        let angle = index as f32 / count as f32 * std::f32::consts::TAU;
+        let speed = 5.0 + (index % 5) as f32 * 1.3;
+        let horizontal = Vec3::new(angle.cos(), 0.0, angle.sin());
+        let velocity = horizontal * speed + Vec3::Y * (4.0 + (index % 4) as f32 * 1.1);
+        let initial_scale = 0.18 + (index % 4) as f32 * 0.05;
+        let life = 0.55 + (index % 3) as f32 * 0.1;
+
+        commands.spawn((
+            LightcycleSceneRoot,
+            CrashDebris {
+                velocity,
+                life,
+                max_life: life,
+                initial_scale,
+            },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(if index % 3 == 0 {
+                assets.trail_material.clone()
+            } else {
+                assets.crash_material.clone()
+            }),
+            Transform::from_translation(origin)
+                .with_rotation(Quat::from_rotation_y(angle))
+                .with_scale(Vec3::splat(initial_scale)),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn update_crash_effects(
+    time: Res<Time>,
+    mut state: ResMut<LightcycleState>,
+    mut commands: Commands,
+    mut debris: Query<(Entity, &mut Transform, &mut CrashDebris)>,
+) {
+    let delta = time.delta_secs();
+    let gravity = -18.0;
+
+    for (entity, mut transform, mut piece) in &mut debris {
+        piece.life -= delta;
+        piece.velocity.y += gravity * delta;
+        transform.translation += piece.velocity * delta;
+
+        let life_ratio = (piece.life / piece.max_life).max(0.0);
+        let scale = piece.initial_scale * life_ratio + 0.02;
+        transform.scale = Vec3::splat(scale);
+
+        if piece.life <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    if let Some(fx) = state.crash_fx.as_mut() {
+        fx.timer -= delta;
+        if fx.timer <= 0.0 {
+            state.crash_fx = None;
+        }
+    }
 }
 
 fn rebuild_trail_mesh(
@@ -884,6 +986,7 @@ fn update_cycle_transform(
 
 fn update_chase_camera(
     state: Res<LightcycleState>,
+    time: Res<Time>,
     mut camera: Single<&mut Transform, (With<Camera3d>, Without<CycleEntity>)>,
     cycle: Query<&Transform, (With<CycleEntity>, Without<Camera3d>)>,
 ) {
@@ -898,8 +1001,16 @@ fn update_chase_camera(
     let raw_forward = cycle.rotation * Vec3::X;
     let forward = Vec3::new(raw_forward.x, 0.0, raw_forward.z).normalize_or_zero();
     let look_target = cycle_pos + forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
-    let camera_position = cycle_pos - forward * config::LIGHTCYCLE_CAMERA_DISTANCE
+    let mut camera_position = cycle_pos - forward * config::LIGHTCYCLE_CAMERA_DISTANCE
         + Vec3::Y * config::LIGHTCYCLE_CAMERA_HEIGHT;
+
+    if let Some(fx) = state.crash_fx.as_ref() {
+        let intensity = (fx.timer / fx.duration).clamp(0.0, 1.0);
+        let t = time.elapsed_secs();
+        let shake =
+            Vec3::new((t * 83.0).sin(), (t * 97.0).sin(), (t * 71.0).sin()) * (intensity * 0.9);
+        camera_position += shake;
+    }
 
     camera.translation = camera_position;
     camera.look_at(look_target, Vec3::Y);
