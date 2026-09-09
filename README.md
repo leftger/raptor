@@ -98,11 +98,25 @@ No dinosaurs were harmed in the making of this filesystem explorer.
 
 ## Running
 
+For the fastest edit/build cycle, use Bevy's dynamic library:
+
+```bash
+cargo run --features dev
+```
+
+For normal optimized use:
+
 ```bash
 cargo run --release
 ```
 
 RAPTOR will open in all its neon glory.
+
+Distribution builds keep the slower size-focused LTO settings:
+
+```bash
+cargo build --profile dist
+```
 
 ### Command-line options
 
@@ -125,6 +139,11 @@ Bevy repo (installation notes & troubleshooting):
 https://github.com/bevyengine/bevy
 
 The filesystem, CLI, and OS-integration modules remain plain Rust so they can be unit-tested without a GPU.
+
+Directory scans run in the background. RAPTOR displays at most 30,000 entries from one
+directory and caps eager child counts at 500 to keep unusually large trees responsive.
+Capped counts are marked with `+`. Symbolic links are shown and can be opened, but linked
+directories are not traversed just to calculate block height.
 
 ## Future Ideas (aka InGen Phase 2)
 

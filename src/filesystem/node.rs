@@ -6,8 +6,10 @@ pub struct FileNode {
     pub name: String,
     pub path: PathBuf,
     pub is_dir: bool,
+    pub is_symlink: bool,
     pub size: u64,
     pub children_count: usize,
+    pub children_count_capped: bool,
     pub grid_pos: (i32, i32),
 }
 
@@ -23,8 +25,10 @@ impl FileNode {
             name,
             path,
             is_dir,
+            is_symlink: false,
             size,
             children_count,
+            children_count_capped: false,
             grid_pos: (0, 0),
         }
     }
@@ -59,14 +63,25 @@ impl FileNode {
 
     pub fn size_display(&self) -> String {
         if self.is_dir {
-            format!("{} items", self.children_count)
+            if self.is_symlink {
+                "linked directory".to_string()
+            } else if self.children_count_capped {
+                format!("{}+ items", self.children_count)
+            } else {
+                format!("{} items", self.children_count)
+            }
         } else {
             bytesize::ByteSize(self.size).to_string()
         }
     }
 
     pub fn type_display(&self) -> &'static str {
-        if self.is_dir { "DIR" } else { "FILE" }
+        match (self.is_symlink, self.is_dir) {
+            (true, true) => "SYMLINK DIR",
+            (true, false) => "SYMLINK",
+            (false, true) => "DIR",
+            (false, false) => "FILE",
+        }
     }
 }
 

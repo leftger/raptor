@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Open a file or directory with the operating system's default handler.
-pub fn open_path(path: &Path) -> bool {
+pub fn open_path(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = Command::new("open");
@@ -24,21 +24,21 @@ pub fn open_path(path: &Path) -> bool {
         command
     };
 
-    command.spawn().is_ok()
+    command.spawn().map(|_| ())
 }
 
 /// Reveal a file or directory in the operating system's file manager.
 ///
 /// macOS and Windows can select the exact item. On Linux there is no portable
 /// "select this item" command, so this opens the containing directory instead.
-pub fn reveal_path(path: &Path) -> bool {
+pub fn reveal_path(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
             .arg("-R")
             .arg(path.as_os_str())
             .spawn()
-            .is_ok()
+            .map(|_| ())
     }
 
     #[cfg(target_os = "windows")]
@@ -46,7 +46,7 @@ pub fn reveal_path(path: &Path) -> bool {
         Command::new("explorer")
             .arg(format!("/select,{}", path.display()))
             .spawn()
-            .is_ok()
+            .map(|_| ())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

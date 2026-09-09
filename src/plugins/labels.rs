@@ -1,5 +1,5 @@
 use crate::config;
-use crate::state::{DirectoryLoaded, LabelsRoot, NavigatorResource, SelectionState, UiSettings};
+use crate::state::{LabelsRoot, NavigatorResource, SelectionState, UiSettings};
 use bevy::prelude::*;
 use bevy::text::FontSize;
 use bevy::window::PrimaryWindow;
@@ -7,8 +7,6 @@ use bevy::window::PrimaryWindow;
 /// Fixed number of UI label entities. Each frame they are re-assigned to the closest
 /// visible blocks, so a 30k-entry directory can still label the blocks around the
 /// current view without spawning tens of thousands of UI nodes.
-const LABEL_BUDGET: usize = 2_000;
-
 #[derive(Component)]
 struct ProjectedLabel;
 
@@ -17,39 +15,27 @@ pub struct LabelsPlugin;
 impl Plugin for LabelsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_label_root)
-            .add_systems(Update, (spawn_label_pool, update_labels));
+            .add_systems(Update, update_labels);
     }
 }
 
 fn setup_label_root(mut commands: Commands) {
-    commands.spawn((
-        LabelsRoot,
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(0.0),
-            top: px(0.0),
-            width: percent(100.0),
-            height: percent(100.0),
-            ..default()
-        },
-        ZIndex(-1),
-        Pickable::IGNORE,
-    ));
-}
-
-fn spawn_label_pool(
-    mut commands: Commands,
-    mut loaded: MessageReader<DirectoryLoaded>,
-    root: Single<Entity, With<LabelsRoot>>,
-    old_labels: Query<Entity, With<ProjectedLabel>>,
-) {
-    for _event in loaded.read() {
-        for entity in &old_labels {
-            commands.entity(entity).despawn();
-        }
-
-        commands.entity(*root).with_children(|parent| {
-            for _ in 0..LABEL_BUDGET {
+    commands
+        .spawn((
+            LabelsRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0.0),
+                top: px(0.0),
+                width: percent(100.0),
+                height: percent(100.0),
+                ..default()
+            },
+            ZIndex(-1),
+            Pickable::IGNORE,
+        ))
+        .with_children(|parent| {
+            for _ in 0..config::LABEL_BUDGET {
                 parent.spawn((
                     ProjectedLabel,
                     Text::new(""),
@@ -69,7 +55,6 @@ fn spawn_label_pool(
                 ));
             }
         });
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -82,8 +67,8 @@ struct LabelCandidate {
 
 #[allow(clippy::type_complexity)]
 fn update_labels(
-    window: Single<&Window, With<PrimaryWindow>>,
-    camera: Single<(&Camera, &GlobalTransform), With<Camera3d>>,
+    window: Single<Ref<Window>, With<PrimaryWindow>>,
+    camera: Single<(&Camera, Ref<GlobalTransform>), With<Camera3d>>,
     navigator: Res<NavigatorResource>,
     ui_settings: Res<UiSettings>,
     selection: Res<SelectionState>,
@@ -99,7 +84,15 @@ fn update_labels(
         With<ProjectedLabel>,
     >,
 ) {
-    let (camera, camera_transform) = *camera;
+    let (camera, camera_transform) = &*camera;
+    if !window.is_changed()
+        && !camera_transform.is_changed()
+        && !navigator.is_changed()
+        && !ui_settings.is_changed()
+        && !selection.is_changed()
+    {
+        return;
+    }
 
     for (_, _, _, _, _, mut visibility) in &mut labels {
         *visibility = Visibility::Hidden;

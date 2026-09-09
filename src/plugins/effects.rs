@@ -1,18 +1,16 @@
 use crate::config;
 use crate::state::ScanEffectResource;
+use bevy::asset::RenderAssetUsages;
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 pub struct EffectsPlugin;
 
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (setup_scan_effect, setup_scanlines))
-            .add_systems(
-                Update,
-                (update_scan_effect, update_scanlines, insert_vignette),
-            );
+            .add_systems(Update, (update_scan_effect, insert_vignette));
     }
 }
 
@@ -21,15 +19,6 @@ struct ScanPlane;
 
 #[derive(Component)]
 struct ScanlineRoot;
-
-#[derive(Component)]
-struct ScanlineLine;
-
-#[derive(Resource)]
-struct ScanlineState {
-    root: Entity,
-    height: f32,
-}
 
 fn setup_scan_effect(
     mut commands: Commands,
@@ -50,64 +39,51 @@ fn setup_scan_effect(
     ));
 }
 
-fn setup_scanlines(mut commands: Commands, window: Single<&Window, With<PrimaryWindow>>) {
-    let height = window.height();
-    let root = commands
-        .spawn((
-            ScanlineRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0.0),
-                top: px(0.0),
-                width: percent(100.0),
-                height: percent(100.0),
-                ..default()
+fn setup_scanlines(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let alpha = (config::SCANLINE_ALPHA * 255.0) as u8;
+    let texture = images.add(Image::new(
+        Extent3d {
+            width: 1,
+            height: config::SCANLINE_STEP as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        (0..config::SCANLINE_STEP)
+            .flat_map(|row| {
+                let row_alpha = if row < config::SCANLINE_HEIGHT as usize {
+                    alpha
+                } else {
+                    0
+                };
+                [0, 0, 0, row_alpha]
+            })
+            .collect(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    ));
+
+    commands.spawn((
+        ScanlineRoot,
+        ImageNode {
+            image: texture,
+            image_mode: NodeImageMode::Tiled {
+                tile_x: true,
+                tile_y: true,
+                stretch_value: 1.0,
             },
-            ZIndex(10),
-            Pickable::IGNORE,
-        ))
-        .id();
-
-    spawn_scanline_lines(&mut commands, root, height as i32);
-    commands.insert_resource(ScanlineState { root, height });
-}
-
-fn spawn_scanline_lines(commands: &mut Commands, root: Entity, height: i32) {
-    commands.entity(root).with_children(|parent| {
-        for y in (0..height).step_by(config::SCANLINE_STEP) {
-            parent.spawn((
-                ScanlineLine,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: px(y as f32),
-                    left: px(0.0),
-                    width: percent(100.0),
-                    height: px(config::SCANLINE_HEIGHT),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, config::SCANLINE_ALPHA)),
-                Pickable::IGNORE,
-            ));
-        }
-    });
-}
-
-fn update_scanlines(
-    mut commands: Commands,
-    window: Single<&Window, With<PrimaryWindow>>,
-    mut state: ResMut<ScanlineState>,
-    old_lines: Query<Entity, With<ScanlineLine>>,
-) {
-    let new_height = window.height();
-    if (state.height - new_height).abs() < 1.0 {
-        return;
-    }
-
-    for entity in &old_lines {
-        commands.entity(entity).despawn();
-    }
-    spawn_scanline_lines(&mut commands, state.root, new_height as i32);
-    state.height = new_height;
+            ..default()
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0.0),
+            top: px(0.0),
+            width: percent(100.0),
+            height: percent(100.0),
+            ..default()
+        },
+        ZIndex(10),
+        Pickable::IGNORE,
+    ));
 }
 
 fn insert_vignette(

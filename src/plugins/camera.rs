@@ -40,15 +40,26 @@ fn update_camera(
     mouse_motion: Res<AccumulatedMouseMotion>,
     mouse_scroll: Res<AccumulatedMouseScroll>,
 ) {
-    if mouse_buttons.pressed(MouseButton::Right) {
+    let mut changed = false;
+    if mouse_buttons.pressed(MouseButton::Right) && mouse_motion.delta != Vec2::ZERO {
         orbit.rotate(mouse_motion.delta.x, mouse_motion.delta.y);
+        changed = true;
     }
 
     if mouse_scroll.delta.y != 0.0 {
         orbit.zoom(mouse_scroll.delta.y);
+        changed = true;
     }
 
-    orbit.update();
+    if orbit.target.distance_squared(orbit.target_destination) > 0.0001 {
+        orbit.update();
+        changed = true;
+    }
+
+    if !changed {
+        return;
+    }
+
     camera.translation = orbit.position();
     camera.look_at(orbit.target, Vec3::Y);
 }

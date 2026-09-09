@@ -1,8 +1,6 @@
 use crate::config;
 use crate::filesystem::FileNode;
-use crate::state::{
-    DirectoryLoaded, DirectorySceneRoot, FileBlock, NavigatorResource, SelectionState,
-};
+use crate::state::{DirectoryLoaded, DirectorySceneRoot, NavigatorResource, SelectionState};
 use bevy::prelude::*;
 
 pub struct ScenePlugin;
@@ -10,7 +8,13 @@ pub struct ScenePlugin;
 impl Plugin for ScenePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (setup_assets, spawn_highlight_shells).chain())
-            .add_systems(Update, (spawn_scene, update_highlighting));
+            .add_systems(
+                Update,
+                (
+                    spawn_scene,
+                    update_highlighting.run_if(resource_changed::<SelectionState>),
+                ),
+            );
     }
 }
 
@@ -21,9 +25,6 @@ pub struct RaptorAssets {
     pub grid_material: Handle<StandardMaterial>,
     pub dir_body: Handle<StandardMaterial>,
     pub file_body: Handle<StandardMaterial>,
-    pub hover_dir_body: Handle<StandardMaterial>,
-    pub hover_file_body: Handle<StandardMaterial>,
-    pub selected_body: Handle<StandardMaterial>,
     pub hover_glow: Handle<StandardMaterial>,
     pub hover_file_glow: Handle<StandardMaterial>,
     pub selected_glow: Handle<StandardMaterial>,
@@ -65,9 +66,6 @@ fn setup_assets(
         grid_material: materials.add(unlit_material(config::GRID_COLOR, Some(0.35))),
         dir_body: materials.add(unlit_material(config::DIR_COLOR, None)),
         file_body: materials.add(unlit_material(config::FILE_COLOR, None)),
-        hover_dir_body: materials.add(unlit_material(config::HOVER_DIR_COLOR, None)),
-        hover_file_body: materials.add(unlit_material(config::HOVER_FILE_COLOR, None)),
-        selected_body: materials.add(unlit_material(config::SELECTED_COLOR, None)),
         hover_glow: materials.add(unlit_material(config::HOVER_DIR_COLOR, Some(0.30))),
         hover_file_glow: materials.add(unlit_material(config::HOVER_FILE_COLOR, Some(0.30))),
         selected_glow: materials.add(unlit_material(config::SELECTED_COLOR, Some(0.30))),
@@ -96,6 +94,7 @@ fn spawn_scene(
     mut loaded: MessageReader<DirectoryLoaded>,
     old_scene: Query<Entity, With<DirectorySceneRoot>>,
     assets: Res<RaptorAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for event in loaded.read() {
         for entity in &old_scene {
@@ -103,7 +102,7 @@ fn spawn_scene(
         }
 
         spawn_grid(&mut commands, &assets);
-        spawn_blocks(&mut commands, &assets, &event.contents.nodes);
+        spawn_blocks(&mut commands, &assets, &mut meshes, &event.contents.nodes);
     }
 }
 
@@ -119,6 +118,7 @@ fn spawn_grid(commands: &mut Commands, assets: &RaptorAssets) {
             DirectorySceneRoot,
             Mesh3d(assets.grid_line.clone()),
             MeshMaterial3d(assets.grid_material.clone()),
+            Pickable::IGNORE,
             Transform::from_translation(Vec3::new(0.0, 0.0, pos)).with_scale(Vec3::new(
                 extent * 2.0,
                 line_width,
@@ -131,6 +131,7 @@ fn spawn_grid(commands: &mut Commands, assets: &RaptorAssets) {
             DirectorySceneRoot,
             Mesh3d(assets.grid_line.clone()),
             MeshMaterial3d(assets.grid_material.clone()),
+            Pickable::IGNORE,
             Transform::from_translation(Vec3::new(pos, 0.0, 0.0)).with_scale(Vec3::new(
                 line_width,
                 line_width,
@@ -140,38 +141,56 @@ fn spawn_grid(commands: &mut Commands, assets: &RaptorAssets) {
     }
 }
 
-fn spawn_blocks(commands: &mut Commands, assets: &RaptorAssets, nodes: &[FileNode]) {
-    let batch: Vec<_> = nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| {
-            let height = node.calculate_height();
-            let material = if node.is_dir {
-                assets.dir_body.clone()
-            } else {
-                assets.file_body.clone()
+fn spawn_blocks(
+    commands: &mut Commands,
+    assets: &RaptorAssets,
+    meshes: &mut Assets<Mesh>,
+    nodes: &[FileNode],
+) {
+    for is_dir in [true, false] {
+        let material = if is_dir {
+            assets.dir_body.clone()
+        } else {
+            assets.file_body.clone()
+        };
+        let matching: Vec<_> = nodes.iter().filter(|node| node.is_dir == is_dir).collect();
+
+        for chunk in matching.chunks(config::MESH_CHUNK_SIZE) {
+            let Some(mesh) = build_chunk_mesh(chunk) else {
+                continue;
             };
-
-            (
+            commands.spawn((
                 DirectorySceneRoot,
-                FileBlock { index },
-                Mesh3d(assets.unit_cube.clone()),
-                MeshMaterial3d(material),
-                Transform::from_translation(config::world_position(
-                    node.grid_pos.0,
-                    node.grid_pos.1,
-                    height,
-                ))
-                .with_scale(Vec3::new(
-                    config::BLOCK_WIDTH,
-                    height,
-                    config::BLOCK_DEPTH,
-                )),
-            )
-        })
-        .collect();
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(material.clone()),
+                Pickable::IGNORE,
+            ));
+        }
+    }
+}
 
-    commands.spawn_batch(batch);
+fn build_chunk_mesh(nodes: &[&FileNode]) -> Option<Mesh> {
+    let mut nodes = nodes.iter();
+    let first = transformed_cube(nodes.next()?);
+    let mut mesh = first;
+    for node in nodes {
+        // Every source is the same cuboid topology and attributes, so merging cannot fail.
+        mesh.merge(&transformed_cube(node))
+            .expect("cuboid meshes must be merge-compatible");
+    }
+    Some(mesh)
+}
+
+fn transformed_cube(node: &FileNode) -> Mesh {
+    let height = node.calculate_height();
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(config::world_position(
+            node.grid_pos.0,
+            node.grid_pos.1,
+            height,
+        ))
+        .with_scale(Vec3::new(config::BLOCK_WIDTH, height, config::BLOCK_DEPTH)),
+    )
 }
 
 #[allow(clippy::type_complexity)]
@@ -179,17 +198,13 @@ fn update_highlighting(
     navigator: Res<NavigatorResource>,
     selection: Res<SelectionState>,
     assets: Res<RaptorAssets>,
-    mut blocks: Query<
-        (&FileBlock, &mut MeshMaterial3d<StandardMaterial>),
-        (Without<HoverShell>, Without<SelectedShell>),
-    >,
     mut hover_shell: Query<
         (
             &mut Transform,
             &mut MeshMaterial3d<StandardMaterial>,
             &mut Visibility,
         ),
-        (With<HoverShell>, Without<SelectedShell>, Without<FileBlock>),
+        (With<HoverShell>, Without<SelectedShell>),
     >,
     mut selected_shell: Query<
         (
@@ -197,33 +212,9 @@ fn update_highlighting(
             &mut MeshMaterial3d<StandardMaterial>,
             &mut Visibility,
         ),
-        (With<SelectedShell>, Without<HoverShell>, Without<FileBlock>),
+        (With<SelectedShell>, Without<HoverShell>),
     >,
 ) {
-    for (block, mut material) in &mut blocks {
-        let Some(node) = navigator.0.entries.get(block.index) else {
-            continue;
-        };
-
-        let target = if selection.selected == Some(block.index) {
-            assets.selected_body.clone()
-        } else if selection.hovered == Some(block.index) {
-            if node.is_dir {
-                assets.hover_dir_body.clone()
-            } else {
-                assets.hover_file_body.clone()
-            }
-        } else if node.is_dir {
-            assets.dir_body.clone()
-        } else {
-            assets.file_body.clone()
-        };
-
-        if material.0 != target {
-            material.0 = target;
-        }
-    }
-
     let hover_index = selection
         .hovered
         .filter(|hovered| selection.selected != Some(*hovered));
@@ -291,4 +282,26 @@ fn set_shell_state(
         material.0 = target.clone();
     }
     *visibility = Visibility::Visible;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_chunk_mesh;
+    use crate::filesystem::FileNode;
+    use bevy::prelude::{Cuboid, Mesh};
+    use std::path::PathBuf;
+
+    #[test]
+    fn chunk_mesh_contains_every_source_cube() {
+        let mut first = FileNode::new("a".into(), PathBuf::from("a"), false, 1, 0);
+        first.grid_pos = (0, 0);
+        let mut second = FileNode::new("b".into(), PathBuf::from("b"), false, 1, 0);
+        second.grid_pos = (1, 0);
+
+        let mesh = build_chunk_mesh(&[&first, &second]).unwrap();
+        assert_eq!(
+            mesh.count_vertices(),
+            Mesh::from(Cuboid::default()).count_vertices() * 2
+        );
+    }
 }

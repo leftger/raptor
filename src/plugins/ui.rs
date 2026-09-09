@@ -1,6 +1,6 @@
 use crate::config;
 use crate::state::{
-    DirectoryLoadState, DirectoryLoaded, NavigatorResource, SelectionState, UiSettings,
+    DirectoryLoadState, DirectoryLoaded, NavigatorResource, SelectionState, UiNotice, UiSettings,
 };
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -352,6 +352,7 @@ fn update_status_text(
     ui_settings: Res<UiSettings>,
     navigator: Res<NavigatorResource>,
     load_state: Res<DirectoryLoadState>,
+    ui_notice: Res<UiNotice>,
     diagnostics: Res<DiagnosticsStore>,
     mut status_text: Query<&mut Text, (With<StatusLineText>, Without<ChildrenStatsText>)>,
     mut children_stats: Query<&mut Text, (With<ChildrenStatsText>, Without<StatusLineText>)>,
@@ -366,6 +367,13 @@ fn update_status_text(
         if navigator.0.show_hidden { "ON" } else { "OFF" },
     );
 
+    if navigator.0.entries_truncated {
+        status = format!(
+            "SHOWING FIRST {} ENTRIES | {status}",
+            crate::config::MAX_DIRECTORY_ENTRIES
+        );
+    }
+
     if ui_settings.show_fps
         && let Some(fps) = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
@@ -379,6 +387,9 @@ fn update_status_text(
     }
     if let Some(error) = &load_state.last_error {
         status = format!("ERROR: {error} | {status}");
+    }
+    if let Some(message) = &ui_notice.message {
+        status = format!("ERROR: {message} | {status}");
     }
 
     if **status_text != status {
@@ -416,8 +427,10 @@ fn update_selection_info(
     let line1 = format!("SELECTED: {} | TYPE: {}", node.name, node.type_display());
     let line2 = if node.is_dir {
         format!(
-            "CONTENTS: {} items | POS: ({}, {})",
-            node.children_count, node.grid_pos.0, node.grid_pos.1
+            "CONTENTS: {} | POS: ({}, {})",
+            node.size_display(),
+            node.grid_pos.0,
+            node.grid_pos.1
         )
     } else {
         format!(

@@ -17,6 +17,10 @@ pub const CAMERA_LERP_FACTOR: f32 = 0.1;
 
 pub const GRID_SPACING: f32 = 2.5;
 pub const GRID_SIZE: i32 = 20;
+pub const MAX_DIRECTORY_ENTRIES: usize = 30_000;
+pub const DIR_CHILD_COUNT_CAP: usize = 500;
+pub const MESH_CHUNK_SIZE: usize = 512;
+pub const LABEL_BUDGET: usize = 512;
 
 pub const BLOCK_WIDTH: f32 = 2.0;
 pub const BLOCK_DEPTH: f32 = 2.0;

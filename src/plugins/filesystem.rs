@@ -46,7 +46,7 @@ fn poll_loads(
     mut failed: MessageWriter<DirectoryLoadFailed>,
 ) {
     while let Some(result) = state.poll() {
-        if result.generation != state.generation {
+        if !is_current_generation(result.generation, state.generation) {
             continue;
         }
 
@@ -68,6 +68,10 @@ fn poll_loads(
     }
 }
 
+fn is_current_generation(result_generation: u64, active_generation: u64) -> bool {
+    result_generation == active_generation
+}
+
 fn apply_loaded(
     mut events: MessageReader<DirectoryLoaded>,
     mut navigator: ResMut<NavigatorResource>,
@@ -80,6 +84,7 @@ fn apply_loaded(
         navigator.current_path = event.path.clone();
         navigator.entries = event.contents.nodes.clone();
         navigator.grid_width = event.contents.grid_width;
+        navigator.entries_truncated = event.contents.truncated;
 
         selection.selected = None;
         selection.hovered = None;
@@ -94,5 +99,16 @@ fn apply_failure(
 ) {
     for event in events.read() {
         state.last_error = Some(format!("{}: {}", event.path.display(), event.message));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_current_generation;
+
+    #[test]
+    fn stale_load_generations_are_rejected() {
+        assert!(!is_current_generation(1, 2));
+        assert!(is_current_generation(2, 2));
     }
 }

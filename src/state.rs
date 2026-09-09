@@ -1,9 +1,8 @@
 use crate::config;
 use crate::filesystem::{DirectoryContents, Navigator};
 use bevy::prelude::{Component, Message, Resource};
+use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[derive(Resource)]
 pub struct NavigatorResource(pub Navigator);
@@ -33,6 +32,11 @@ impl Default for UiSettings {
             show_fps: true,
         }
     }
+}
+
+#[derive(Resource, Default)]
+pub struct UiNotice {
+    pub message: Option<String>,
 }
 
 #[derive(Resource)]
@@ -117,7 +121,7 @@ impl ScanEffectResource {
 pub struct DirectoryLoadState {
     pub generation: u64,
     pub loading: bool,
-    pub receiver: Option<Mutex<Receiver<DirectoryLoadResult>>>,
+    pub pending_task: Option<Task<DirectoryLoadResult>>,
     pub last_error: Option<String>,
 }
 
@@ -137,37 +141,27 @@ pub struct DirectoryLoadResult {
 impl DirectoryLoadState {
     /// Poll the active background scan without blocking.
     pub fn poll(&mut self) -> Option<DirectoryLoadResult> {
-        let receiver = self.receiver.as_ref()?;
-        match receiver.lock().unwrap().try_recv() {
-            Ok(result) => {
-                if result.generation == self.generation {
-                    self.loading = false;
-                }
-                Some(result)
-            }
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.loading = false;
-                None
-            }
+        let result = check_ready(self.pending_task.as_mut()?)?;
+        self.pending_task = None;
+        if result.generation == self.generation {
+            self.loading = false;
         }
+        Some(result)
     }
 
     pub fn begin_scan(&mut self, generation: u64, path: PathBuf, show_hidden: bool) {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.receiver = Some(Mutex::new(receiver));
         self.loading = true;
         self.last_error = None;
 
-        std::thread::spawn(move || {
+        self.pending_task = Some(IoTaskPool::get().spawn(async move {
             let result = crate::filesystem::loader::load_directory(&path, show_hidden)
                 .map_err(|error| error.to_string());
-            let _ = sender.send(DirectoryLoadResult {
+            DirectoryLoadResult {
                 generation,
                 path,
                 result,
-            });
-        });
+            }
+        }));
     }
 }
 
@@ -195,13 +189,6 @@ pub struct DirectoryLoadFailed {
 // ---------------------------------------------------------------------------
 // Components
 // ---------------------------------------------------------------------------
-
-/// Attached to each spawned block entity; `index` points into
-/// `NavigatorResource.entries`.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct FileBlock {
-    pub index: usize,
-}
 
 /// Root node for projected labels (below the main UI chrome).
 #[derive(Component, Debug)]
