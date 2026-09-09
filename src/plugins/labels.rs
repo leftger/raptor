@@ -14,29 +14,13 @@ pub struct LabelsPlugin;
 
 impl Plugin for LabelsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_label_root).add_systems(
-            Update,
-            (
-                sync_label_visibility,
-                update_labels.run_if(in_explorer_mode),
-            ),
-        );
+        app.add_systems(Startup, setup_label_root)
+            .add_systems(Update, (sync_label_visibility, update_labels));
     }
 }
 
-fn in_explorer_mode(mode: Res<InteractionMode>) -> bool {
-    *mode == InteractionMode::Explorer
-}
-
-fn sync_label_visibility(
-    mode: Res<InteractionMode>,
-    mut labels_root: Single<&mut Visibility, With<LabelsRoot>>,
-) {
-    **labels_root = if *mode == InteractionMode::Explorer {
-        Visibility::Visible
-    } else {
-        Visibility::Hidden
-    };
+fn sync_label_visibility(mut labels_root: Single<&mut Visibility, With<LabelsRoot>>) {
+    **labels_root = Visibility::Visible;
 }
 
 fn setup_label_root(mut commands: Commands) {
@@ -87,6 +71,7 @@ struct LabelCandidate {
 
 #[allow(clippy::type_complexity)]
 fn update_labels(
+    mode: Res<InteractionMode>,
     window: Single<Ref<Window>, With<PrimaryWindow>>,
     camera: Single<(&Camera, Ref<GlobalTransform>), With<Camera3d>>,
     navigator: Res<NavigatorResource>,
@@ -110,6 +95,7 @@ fn update_labels(
         && !navigator.is_changed()
         && !ui_settings.is_changed()
         && !selection.is_changed()
+        && !mode.is_changed()
     {
         return;
     }
@@ -129,7 +115,15 @@ fn update_labels(
     let mut candidates: Vec<LabelCandidate> = Vec::new();
     for (index, entry) in navigator.0.entries.iter().enumerate() {
         let height = entry.calculate_height();
-        let world_pos = config::block_top_position(entry.grid_pos.0, entry.grid_pos.1, height);
+        let (grid_x, grid_z) = if *mode == InteractionMode::Lightcycle {
+            (
+                entry.grid_pos.0 * config::LIGHTCYCLE_TOWER_STRIDE,
+                entry.grid_pos.1 * config::LIGHTCYCLE_TOWER_STRIDE,
+            )
+        } else {
+            entry.grid_pos
+        };
+        let world_pos = config::block_top_position(grid_x, grid_z, height);
 
         let Ok(screen) = camera.world_to_viewport(camera_transform, world_pos) else {
             continue;
