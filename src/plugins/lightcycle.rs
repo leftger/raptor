@@ -53,6 +53,16 @@ struct LightcycleAssets {
 #[derive(Component)]
 struct CycleEntity;
 
+/// Smooth visual rotation state for the cycle. The simulation heading still
+/// changes at the cell boundary; this component eases the rendered yaw over a
+/// short duration so the player can see where the turn happened.
+#[derive(Component)]
+struct CycleVisual {
+    from_rotation: Quat,
+    target_rotation: Quat,
+    progress: f32,
+}
+
 fn unlit_material(color: Color) -> StandardMaterial {
     StandardMaterial {
         base_color: color,
@@ -206,6 +216,11 @@ fn spawn_run_entities(
             config::LIGHTCYCLE_CYCLE_HEIGHT,
             config::LIGHTCYCLE_CYCLE_SIZE,
         )),
+        CycleVisual {
+            from_rotation: heading_rotation(run.sim.heading),
+            target_rotation: heading_rotation(run.sim.heading),
+            progress: 1.0,
+        },
         Pickable::IGNORE,
     ));
 
@@ -596,6 +611,16 @@ fn trail_segment_mesh(a: (i32, i32), b: (i32, i32)) -> Mesh {
         .transformed_by(Transform::from_translation(center).with_scale(scale))
 }
 
+fn heading_rotation(heading: Heading) -> Quat {
+    let (dx, dz) = heading.delta();
+    let direction = Vec3::new(dx as f32, 0.0, dz as f32).normalize_or_zero();
+    Quat::from_rotation_arc(Vec3::X, direction)
+}
+
+fn smoothstep(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
 fn cycle_world_position(sim: &LightcycleSim) -> Vec3 {
     let base = config::ground_position(sim.cell.0, sim.cell.1);
     let (dx, dz) = sim.heading.delta();
@@ -614,16 +639,37 @@ fn cycle_world_position(sim: &LightcycleSim) -> Vec3 {
 }
 
 fn update_cycle_transform(
+    time: Res<Time>,
     state: Res<LightcycleState>,
-    mut cycle: Query<&mut Transform, With<CycleEntity>>,
+    mut cycle: Query<(&mut Transform, &mut CycleVisual), With<CycleEntity>>,
 ) {
-    let Ok(mut transform) = cycle.single_mut() else {
+    let Ok((mut transform, mut visual)) = cycle.single_mut() else {
         return;
     };
     let Some(run) = state.run.as_ref() else {
         return;
     };
+
     transform.translation = cycle_world_position(&run.sim);
+
+    let target_rotation = heading_rotation(run.sim.heading);
+    if visual.target_rotation != target_rotation {
+        visual.from_rotation = transform.rotation;
+        visual.target_rotation = target_rotation;
+        visual.progress = 0.0;
+    }
+
+    if visual.progress < 1.0 {
+        visual.progress += time.delta_secs() / config::LIGHTCYCLE_TURN_DURATION;
+        if visual.progress >= 1.0 {
+            visual.progress = 1.0;
+        }
+        transform.rotation = visual
+            .from_rotation
+            .slerp(visual.target_rotation, smoothstep(visual.progress));
+    } else {
+        transform.rotation = target_rotation;
+    }
 }
 
 fn update_chase_camera(
@@ -634,13 +680,13 @@ fn update_chase_camera(
     let Ok(cycle) = cycle.single() else {
         return;
     };
-    let Some(run) = state.run.as_ref() else {
+    if state.run.is_none() {
         return;
-    };
+    }
 
     let cycle_pos = cycle.translation;
-    let (dx, dz) = run.sim.heading.delta();
-    let forward = Vec3::new(dx as f32, 0.0, dz as f32);
+    let raw_forward = cycle.rotation * Vec3::X;
+    let forward = Vec3::new(raw_forward.x, 0.0, raw_forward.z).normalize_or_zero();
     let look_target = cycle_pos + forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
     let camera_position = cycle_pos - forward * config::LIGHTCYCLE_CAMERA_DISTANCE
         + Vec3::Y * config::LIGHTCYCLE_CAMERA_HEIGHT;
