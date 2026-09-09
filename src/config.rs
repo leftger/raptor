@@ -68,7 +68,7 @@ pub const LIGHTCYCLE_FIXED_STEP: f32 = 1.0 / 60.0;
 pub const LIGHTCYCLE_MAX_SUBSTEPS: usize = 4;
 pub const LIGHTCYCLE_TURN_DURATION: f32 = 0.22;
 /// How early (in cells) the rendered path begins curving before an intersection.
-pub const LIGHTCYCLE_TURN_RADIUS: f32 = 0.35;
+pub const LIGHTCYCLE_TURN_RADIUS: f32 = 0.4;
 pub const LIGHTCYCLE_ARENA_PADDING: i32 = 1;
 pub const LIGHTCYCLE_EMPTY_ARENA_HALF: i32 = 2;
 pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;

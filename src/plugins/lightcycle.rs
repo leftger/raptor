@@ -620,17 +620,11 @@ fn rebuild_trail_mesh(
 
     // Build a continuous wall ribbon through every cell the cycle has occupied,
     // ending at the current head so the wall visibly trails behind the cycle.
+    // Corners are rounded with the same radius used by the rendered cycle path.
     let mut path = run.sim.trail.clone();
     path.push(run.sim.cell);
 
-    let segments: Vec<((i32, i32), (i32, i32))> = path
-        .windows(2)
-        .filter_map(|pair| match pair {
-            [a, b] => Some((*a, *b)),
-            _ => None,
-        })
-        .collect();
-
+    let segments = trail_ribbon_segments(&path);
     for chunk in segments.chunks(config::MESH_CHUNK_SIZE) {
         let Some(mesh) = build_trail_chunk_mesh(chunk) else {
             continue;
@@ -644,8 +638,71 @@ fn rebuild_trail_mesh(
     }
 }
 
+fn trail_ribbon_segments(path: &[(i32, i32)]) -> Vec<((f32, f32), (f32, f32))> {
+    let points = rounded_polyline(path);
+    points
+        .windows(2)
+        .filter_map(|pair| match pair {
+            [a, b] => {
+                let dx = b.0 - a.0;
+                let dz = b.1 - a.1;
+                (dx * dx + dz * dz > 0.0001).then_some((*a, *b))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn rounded_polyline(path: &[(i32, i32)]) -> Vec<(f32, f32)> {
+    let radius = config::LIGHTCYCLE_TURN_RADIUS;
+    let mut points = vec![cell_to_point(path[0])];
+
+    for index in 1..path.len().saturating_sub(1) {
+        let previous = path[index - 1];
+        let corner = path[index];
+        let next = path[index + 1];
+
+        if is_path_turn(previous, corner, next) {
+            let incoming = (corner.0 - previous.0, corner.1 - previous.1);
+            let outgoing = (next.0 - corner.0, next.1 - corner.1);
+            let arc_start = offset_cell_point(corner, incoming, -radius);
+            points.push(arc_start);
+
+            let samples = 6;
+            for step in 1..=samples {
+                let u = step as f32 / samples as f32;
+                points.push(arc_cell_point(corner, incoming, outgoing, u, radius));
+            }
+        } else {
+            points.push(cell_to_point(corner));
+        }
+    }
+
+    if let Some(last) = path.last() {
+        points.push(cell_to_point(*last));
+    }
+    points
+}
+
+fn is_path_turn(a: (i32, i32), b: (i32, i32), c: (i32, i32)) -> bool {
+    let incoming = (b.0 - a.0, b.1 - a.1);
+    let outgoing = (c.0 - b.0, c.1 - b.1);
+    incoming.0 * outgoing.0 + incoming.1 * outgoing.1 == 0
+}
+
+fn cell_to_point(cell: (i32, i32)) -> (f32, f32) {
+    (cell.0 as f32, cell.1 as f32)
+}
+
+fn offset_cell_point(cell: (i32, i32), direction: (i32, i32), distance: f32) -> (f32, f32) {
+    (
+        cell.0 as f32 + direction.0 as f32 * distance,
+        cell.1 as f32 + direction.1 as f32 * distance,
+    )
+}
+
 #[allow(clippy::type_complexity)]
-fn build_trail_chunk_mesh(segments: &[((i32, i32), (i32, i32))]) -> Option<Mesh> {
+fn build_trail_chunk_mesh(segments: &[((f32, f32), (f32, f32))]) -> Option<Mesh> {
     let first = *segments.first()?;
     let mut mesh = trail_segment_mesh(first.0, first.1);
     for &(a, b) in &segments[1..] {
@@ -655,30 +712,28 @@ fn build_trail_chunk_mesh(segments: &[((i32, i32), (i32, i32))]) -> Option<Mesh>
     Some(mesh)
 }
 
-fn trail_segment_mesh(a: (i32, i32), b: (i32, i32)) -> Mesh {
+fn trail_segment_mesh(a: (f32, f32), b: (f32, f32)) -> Mesh {
+    let spacing = config::GRID_SPACING;
     let height = config::LIGHTCYCLE_TRAIL_HEIGHT;
     let thickness = config::LIGHTCYCLE_TRAIL_THICKNESS;
-    let a_world = config::ground_position(a.0, a.1);
-    let b_world = config::ground_position(b.0, b.1);
 
-    let horizontal_length = if a_world.x != b_world.x {
-        (b_world.x - a_world.x).abs()
-    } else {
-        (b_world.z - a_world.z).abs()
-    };
+    let a_world = Vec3::new(a.0 * spacing, 0.0, a.1 * spacing);
+    let b_world = Vec3::new(b.0 * spacing, 0.0, b.1 * spacing);
+    let delta = b_world - a_world;
+    let length = delta.length();
+
     let center = Vec3::new(
         (a_world.x + b_world.x) * 0.5,
         height * 0.5,
         (a_world.z + b_world.z) * 0.5,
     );
-    let scale = if a_world.x != b_world.x {
-        Vec3::new(horizontal_length, height, thickness)
-    } else {
-        Vec3::new(thickness, height, horizontal_length)
-    };
+    let rotation = Quat::from_rotation_arc(Vec3::X, delta.normalize_or_zero());
 
-    Mesh::from(Cuboid::default())
-        .transformed_by(Transform::from_translation(center).with_scale(scale))
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(center)
+            .with_rotation(rotation)
+            .with_scale(Vec3::new(length, height, thickness)),
+    )
 }
 
 fn heading_rotation(heading: Heading) -> Quat {
