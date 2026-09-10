@@ -192,6 +192,59 @@ pub const DOCUMENT_FOLIO_DIM_COLOR: Color = Color::srgb(0.18, 0.10, 0.06);
 pub const DOCUMENT_FOCUS_COLOR: Color = Color::srgb(0.85, 0.45, 0.12);
 pub const MARKDOWN_TOWER_COLOR: Color = Color::srgb(0.92, 0.82, 0.58);
 
+// --- Procedural music -------------------------------------------------------
+
+/// Hard cap on simultaneously modulated per-entry voices. The voice bank is
+/// always compiled at this width so switching profiles never rebuilds the graph.
+pub const MUSIC_MAX_VOICES: usize = 8;
+/// Master volume when music starts, before `[` / `]` adjustments.
+pub const MUSIC_DEFAULT_VOLUME: f32 = 0.35;
+pub const MUSIC_VOLUME_STEP: f32 = 0.1;
+pub const MUSIC_MIN_VOLUME: f32 = 0.0;
+pub const MUSIC_MAX_VOLUME: f32 = 1.0;
+
+/// Calm (Explorer) base tempo range, in BPM.
+pub const MUSIC_CALM_BPM_MIN: f32 = 60.0;
+pub const MUSIC_CALM_BPM_MAX: f32 = 80.0;
+/// Action (Lightcycle) tempo is the folder theme scaled by this factor.
+pub const MUSIC_ACTION_TEMPO_MULTIPLIER: f32 = 1.6;
+
+/// How many per-entry voices may sound at once per profile.
+pub const MUSIC_CALM_VOICE_BUDGET: usize = 4;
+pub const MUSIC_ACTION_VOICE_BUDGET: usize = MUSIC_MAX_VOICES;
+
+/// Distance (world units; the grid spacing is [`GRID_SPACING`]) at which a
+/// block's voice has fallen to half weight.
+pub const MUSIC_CALM_PROXIMITY_RADIUS: f32 = 6.0;
+pub const MUSIC_ACTION_PROXIMITY_RADIUS: f32 = 13.0;
+/// Voices beyond `radius * this` are ignored entirely.
+pub const MUSIC_PROXIMITY_CUTOFF_MULTIPLIER: f32 = 3.0;
+
+/// Peak gain a single proximity voice may reach.
+pub const MUSIC_CALM_GAIN_CEILING: f32 = 0.25;
+pub const MUSIC_ACTION_GAIN_CEILING: f32 = 0.6;
+/// One-pole time constant for voice gain / pan / filter smoothing, in seconds.
+pub const MUSIC_CALM_SMOOTHING_TAU: f32 = 0.15;
+pub const MUSIC_ACTION_SMOOTHING_TAU: f32 = 0.04;
+
+/// A voice slot is released once its node's weight drops below this, and a new
+/// node must exceed [`MUSIC_SLOT_ACQUIRE_THRESHOLD`] to take a free slot. The gap
+/// between the two gives the assignment hysteresis, so voices do not thrash
+/// between nearby blocks.
+pub const MUSIC_SLOT_RELEASE_THRESHOLD: f32 = 0.12;
+pub const MUSIC_SLOT_ACQUIRE_THRESHOLD: f32 = 0.25;
+/// Stereo spread applied to a voice at the edge of the proximity radius.
+pub const MUSIC_PAN_RANGE: f32 = 0.8;
+
+/// Voice filter sweep: cutoff moves from the node's base cutoff up to
+/// `base + weight * span` as the listener closes in.
+pub const MUSIC_VOICE_CUTOFF_SPAN: f32 = 2400.0;
+pub const MUSIC_VOICE_CUTOFF_MIN: f32 = 300.0;
+
+pub const MUSIC_CALM_PAD_GAIN: f32 = 0.16;
+pub const MUSIC_ACTION_BASS_GAIN: f32 = 0.22;
+pub const MUSIC_ACTION_LEAD_GAIN: f32 = 0.14;
+
 pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
 pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
 pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 4.0;

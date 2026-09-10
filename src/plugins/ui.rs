@@ -3,6 +3,7 @@ use crate::document::DocumentLoadState;
 use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
 use crate::lightcycle::{LightcycleState, RunEnvironment};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
+use crate::plugins::music::MusicState;
 use crate::state::{InteractionMode, NavigatorResource, SelectionState, UiNotice, UiSettings};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -429,6 +430,7 @@ fn update_status_text(
     ui_notice: Res<UiNotice>,
     lightcycle: Res<LightcycleState>,
     document_load: Res<DocumentLoadState>,
+    music: Res<MusicState>,
     diagnostics: Res<DiagnosticsStore>,
     mut status_text: Query<&mut Text, (With<StatusLineText>, Without<ChildrenStatsText>)>,
     mut children_stats: Query<&mut Text, (With<ChildrenStatsText>, Without<StatusLineText>)>,
@@ -473,6 +475,27 @@ fn update_status_text(
             if navigator.0.show_hidden { "ON" } else { "OFF" },
         )
     };
+
+    let music_label = if music.enabled {
+        let (bpm, scale, family) = music.theme.as_ref().map_or_else(
+            || (0.0, "-", "-"),
+            |theme| {
+                (
+                    theme.bpm(music.profile),
+                    theme.scale.name(),
+                    theme.family.name(),
+                )
+            },
+        );
+        format!(
+            "MUSIC: ON {bpm:.0}bpm {} {scale}/{family} | near: {}",
+            music.profile.label(),
+            music.mixer.active_slots()
+        )
+    } else {
+        "MUSIC: OFF".to_string()
+    };
+    status = format!("{status} | {music_label}");
 
     if *mode == InteractionMode::Explorer && navigator.0.entries_truncated {
         status = format!(

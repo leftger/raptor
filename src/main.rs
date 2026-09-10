@@ -7,6 +7,7 @@ mod document;
 mod filesystem;
 mod lightcycle;
 mod load;
+mod music;
 mod platform;
 mod plugins;
 mod state;
@@ -16,6 +17,7 @@ use config::{WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
 use document::DocumentLoadState;
 use load::DirectoryLoadState;
 use plugins::RaptorPlugins;
+use plugins::music::MusicState;
 use state::{
     NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState, UiNotice,
     UiSettings,
@@ -49,6 +51,10 @@ fn main() {
         .insert_resource(OrbitCameraResource::default())
         .insert_resource(SelectionState::default())
         .insert_resource(ScanEffectResource::default())
+        .insert_resource(MusicState::with_settings(
+            options.music,
+            options.music_volume,
+        ))
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {

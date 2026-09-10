@@ -3,6 +3,7 @@ pub mod effects;
 pub mod filesystem;
 pub mod labels;
 pub mod lightcycle;
+pub mod music;
 pub mod scene;
 pub mod selection;
 pub mod ui;
@@ -22,6 +23,7 @@ impl Plugin for RaptorPlugins {
             ui::UiPlugin,
             effects::EffectsPlugin,
             lightcycle::LightcyclePlugin,
+            music::MusicPlugin,
         ));
     }
 }

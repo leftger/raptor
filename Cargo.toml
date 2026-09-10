@@ -12,6 +12,13 @@ bytesize = "2.2.0"
 dirs = "6.0.0"
 font8x8 = "0.3"
 
+# Procedural music. Glicol is local-only at 0.14.0-dev; pin a git rev before release.
+glicol = { path = "../music-stuff/glicol/rs/main" }
+# Raw output stream. We drive cpal directly instead of enabling `bevy_audio`.
+cpal = "0.18"
+# Lock-free handoff between the Bevy control side and the audio render thread.
+crossbeam-channel = "0.5"
+
 [features]
 default = []
 dev = ["bevy/dynamic_linking"]

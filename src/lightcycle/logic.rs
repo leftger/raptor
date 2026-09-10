@@ -218,7 +218,7 @@ pub enum CityTheme {
 }
 
 impl CityTheme {
-    fn from_seed(seed: u64) -> Self {
+    pub(crate) fn from_seed(seed: u64) -> Self {
         match seed % 4 {
             0 => Self::Cyan,
             1 => Self::Magenta,

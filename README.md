@@ -47,6 +47,7 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Smooth camera tweening**
 * **Cool glowing wireframes because aesthetics**
 * **TRON-style Lightcycle Mode** (press `M` in the 3D view)
+* **Procedural music** seeded by your folders (`N` to toggle)
 
 ## Navigation
 
@@ -79,6 +80,11 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 ### **UI**
 * `.`   → Toggle hidden files
 * `Tab` → Toggle labels
+
+### **Music**
+* `N`   → Toggle procedural music
+* `[`   → Volume down
+* `]`   → Volume up
 
 ## Lightcycle Mode (TRON-style)
 
@@ -170,6 +176,22 @@ Large files are capped (about 256 KiB / 256 blocks) so a huge markdown dump
 cannot stall a frame or spawn an unbounded mesh. Truncation is shown in the
 status line.
 
+## Procedural Music
+
+RAPTOR synthesizes its own soundtrack with [Glicol](https://glicol.org), driven
+by the filesystem:
+
+* Every folder's path seeds a deterministic theme — key, scale, tempo, and
+  timbre family — so revisiting a folder plays the same piece.
+* Each file and directory is a voice placed on the grid. As the camera (or the
+  lightcycle) approaches a block, its voice swells in and opens up, then fades
+  as you move away.
+* Explorer mode plays a calm, ambient interpretation. Lightcycle mode reworks
+  the same theme into a faster, driving arrangement.
+
+Music starts on and can be toggled with `N`; adjust the volume with `[` and `]`.
+Press `M` while music is playing to hear the calm track gear up into action.
+
 ## Why Jurassic Park?
 
 Because *FNS* from Jurassic Park is legendary.
@@ -217,6 +239,10 @@ cargo run --release -- /path/to/folder
 # Show hidden files, hide labels, and hide the FPS counter
 cargo run --release -- --hidden --no-labels --no-fps
 
+# Start with music off, or at half volume
+cargo run --release -- --no-music
+cargo run --release -- --music-volume 0.5
+
 # See all options
 cargo run --release -- --help
 ```
@@ -229,6 +255,16 @@ Bevy repo (installation notes & troubleshooting):
 https://github.com/bevyengine/bevy
 
 The filesystem, CLI, and OS-integration modules remain plain Rust so they can be unit-tested without a GPU.
+
+Procedural music is synthesized by [Glicol](https://glicol.org) and played
+through `cpal`, so RAPTOR does not enable Bevy's audio backend. On Linux you need
+the ALSA development headers to build the audio output:
+
+```bash
+sudo apt install libasound2-dev pkg-config
+```
+
+If no output device is available, RAPTOR runs silently instead of failing.
 
 Directory scans run in the background. RAPTOR displays at most 30,000 entries from one
 directory and caps eager child counts at 500 to keep unusually large trees responsive.
