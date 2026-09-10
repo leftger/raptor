@@ -3,8 +3,8 @@
 //! This module deliberately contains no Bevy types so movement, collisions,
 //! spawn search, and parent-portal rules can be unit-tested on a plain thread.
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
@@ -240,6 +240,9 @@ pub struct Arena {
     pub min: (i32, i32),
     pub max: (i32, i32),
     pub parent_portal: Option<ParentPortal>,
+    /// Path-seeded interior barriers. They are visual scenery and lethal
+    /// collision cells, but generation always carves routes to every landmark.
+    pub street_walls: BTreeSet<(i32, i32)>,
 }
 
 impl Arena {
@@ -288,6 +291,7 @@ impl Arena {
             min,
             max,
             parent_portal: parent_gate.map(|placement| ParentPortal::place(min, max, placement)),
+            street_walls: BTreeSet::new(),
         }
     }
 
@@ -297,6 +301,117 @@ impl Arena {
 
     pub fn center(&self) -> (i32, i32) {
         ((self.min.0 + self.max.0) / 2, (self.min.1 + self.max.1) / 2)
+    }
+
+    /// Populates the arena with deterministic short wall runs, then carves an
+    /// asphalt network from the spawn area to every tower and the parent gate.
+    ///
+    /// `seed_chance` is a percentage of cells that begin a wall run, not the
+    /// final occupied percentage. A run extends 2–4 cells before protected
+    /// landmark space and carved routes are removed.
+    pub fn generate_street_walls(
+        &mut self,
+        path: &Path,
+        occupied: impl IntoIterator<Item = (i32, i32)>,
+        seed_chance: u8,
+    ) {
+        let occupied: HashSet<_> = occupied.into_iter().collect();
+        let seed = stable_path_seed(path);
+        let mut protected = HashSet::new();
+
+        // A one-cell asphalt ring means every tower can be approached from any
+        // direction and closely packed towers still form a connected district.
+        for &(x, z) in &occupied {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    let cell = (x + dx, z + dz);
+                    if self.contains(cell) {
+                        protected.insert(cell);
+                    }
+                }
+            }
+        }
+        for cell in self.parent_gate_approaches() {
+            protected.insert(cell);
+        }
+
+        let hub = self
+            .nearest_empty_cell(|cell| occupied.contains(&cell), self.max.0 - self.min.0 + 1)
+            .unwrap_or_else(|| self.center());
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let cell = (hub.0 + dx, hub.1 + dz);
+                if self.contains(cell) {
+                    protected.insert(cell);
+                }
+            }
+        }
+
+        let chance = seed_chance.min(100) as u64;
+        let mut walls = BTreeSet::new();
+        for x in self.min.0..=self.max.0 {
+            for z in self.min.1..=self.max.1 {
+                let hash = cell_hash(seed, (x, z));
+                if hash % 100 >= chance {
+                    continue;
+                }
+
+                let direction = if hash & 0x100 == 0 { (1, 0) } else { (0, 1) };
+                let length = 2 + ((hash >> 9) % 3) as i32;
+                for step in 0..length {
+                    let cell = (x + direction.0 * step, z + direction.1 * step);
+                    if self.contains(cell)
+                        && !occupied.contains(&cell)
+                        && !protected.contains(&cell)
+                    {
+                        walls.insert(cell);
+                    }
+                }
+            }
+        }
+
+        // Connect one approach cell for each landmark to the central hub.
+        // Paths ignore generated walls while searching, then erase every wall
+        // they cross. Real tower cells remain impassable during the search.
+        let mut targets: Vec<_> = occupied
+            .iter()
+            .filter_map(|&tower| nearest_approach(self, tower, hub, &occupied))
+            .collect();
+        if let Some(target) = self.parent_gate_approach() {
+            targets.push(target);
+        }
+        targets.sort_unstable();
+        targets.dedup();
+
+        for target in targets {
+            if let Some(path) = grid_path(self, hub, target, &occupied, seed) {
+                for cell in path {
+                    walls.remove(&cell);
+                }
+            }
+        }
+
+        self.street_walls = walls;
+    }
+
+    fn parent_gate_approach(&self) -> Option<(i32, i32)> {
+        let approaches = self.parent_gate_approaches();
+        approaches.get(approaches.len() / 2).copied()
+    }
+
+    fn parent_gate_approaches(&self) -> Vec<(i32, i32)> {
+        let Some(portal) = self.parent_portal else {
+            return Vec::new();
+        };
+        let (from, to) = portal.along_span();
+        (from..=to)
+            .map(|along| match portal.wall {
+                Wall::NegZ => (along, self.min.1),
+                Wall::PosZ => (along, self.max.1),
+                Wall::NegX => (self.min.0, along),
+                Wall::PosX => (self.max.0, along),
+            })
+            .collect()
     }
 
     /// Returns the nearest empty cell to the arena center using an expanding
@@ -334,6 +449,80 @@ impl Arena {
 
         None
     }
+}
+
+/// Stable FNV-1a seed. Unlike `DefaultHasher`, this is deliberately fixed so a
+/// directory keeps the same streets across application and Rust releases.
+fn stable_path_seed(path: &Path) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn cell_hash(seed: u64, cell: (i32, i32)) -> u64 {
+    let mut value = seed
+        ^ (cell.0 as u32 as u64).wrapping_mul(0x9e3779b185ebca87)
+        ^ (cell.1 as u32 as u64).wrapping_mul(0xc2b2ae3d27d4eb4f);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58476d1ce4e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d049bb133111eb);
+    value ^ (value >> 31)
+}
+
+fn nearest_approach(
+    arena: &Arena,
+    tower: (i32, i32),
+    hub: (i32, i32),
+    occupied: &HashSet<(i32, i32)>,
+) -> Option<(i32, i32)> {
+    [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        .into_iter()
+        .map(|delta| (tower.0 + delta.0, tower.1 + delta.1))
+        .filter(|cell| arena.contains(*cell) && !occupied.contains(cell))
+        .min_by_key(|cell| (cell.0 - hub.0).abs() + (cell.1 - hub.1).abs())
+}
+
+/// Shortest grid path that avoids real towers. Generated walls are intentionally
+/// ignored: callers carve the returned route through them.
+fn grid_path(
+    arena: &Arena,
+    start: (i32, i32),
+    target: (i32, i32),
+    occupied: &HashSet<(i32, i32)>,
+    seed: u64,
+) -> Option<Vec<(i32, i32)>> {
+    let directions = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+    let rotation = (cell_hash(seed, target) % directions.len() as u64) as usize;
+    let mut queue = VecDeque::from([start]);
+    let mut previous = HashMap::from([(start, start)]);
+
+    while let Some(cell) = queue.pop_front() {
+        if cell == target {
+            let mut path = vec![target];
+            let mut cursor = target;
+            while cursor != start {
+                cursor = previous[&cursor];
+                path.push(cursor);
+            }
+            path.reverse();
+            return Some(path);
+        }
+
+        for index in 0..directions.len() {
+            let delta = directions[(index + rotation) % directions.len()];
+            let next = (cell.0 + delta.0, cell.1 + delta.1);
+            if arena.contains(next) && !occupied.contains(&next) && !previous.contains_key(&next) {
+                previous.insert(next, cell);
+                queue.push_back(next);
+            }
+        }
+    }
+
+    None
 }
 
 /// One run's mutable simulation state.
@@ -494,6 +683,9 @@ pub fn classify_next_content(
     if !arena.contains(cell) {
         return CellContent::Wall;
     }
+    if arena.street_walls.contains(&cell) {
+        return CellContent::Wall;
+    }
     if cell != sim.cell && sim.trail.contains(&cell) {
         return CellContent::Trail;
     }
@@ -513,7 +705,7 @@ mod tests {
         Arena, CellContent, CrashReason, EntryRequest, GatePlacement, Heading, LightcycleSim,
         RunPhase, StepOutcome, Turn, Wall, classify_next_content,
     };
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
     use std::path::PathBuf;
 
     const PADDING: i32 = 1;
@@ -567,6 +759,7 @@ mod tests {
                     min: (-half, -half),
                     max: (half, half),
                     parent_portal: None,
+                    street_walls: BTreeSet::new(),
                 },
                 cells: HashMap::new(),
                 is_dir: Vec::new(),
@@ -885,6 +1078,117 @@ mod tests {
         );
     }
 
+    fn generated_arena(path: &str) -> (Arena, HashSet<(i32, i32)>) {
+        let occupied: HashSet<_> = [(-6, -6), (0, 0), (6, 6)].into_iter().collect();
+        let mut arena =
+            Arena::from_nodes(occupied.iter().copied(), Some(centered_gate()), PADDING, 15);
+        arena.generate_street_walls(PathBuf::from(path).as_path(), occupied.iter().copied(), 35);
+        (arena, occupied)
+    }
+
+    fn reachable_streets(
+        arena: &Arena,
+        start: (i32, i32),
+        occupied: &HashSet<(i32, i32)>,
+    ) -> HashSet<(i32, i32)> {
+        let mut reached = HashSet::from([start]);
+        let mut queue = VecDeque::from([start]);
+        while let Some(cell) = queue.pop_front() {
+            for delta in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let next = (cell.0 + delta.0, cell.1 + delta.1);
+                if arena.contains(next)
+                    && !occupied.contains(&next)
+                    && !arena.street_walls.contains(&next)
+                    && reached.insert(next)
+                {
+                    queue.push_back(next);
+                }
+            }
+        }
+        reached
+    }
+
+    #[test]
+    fn generated_streets_are_stable_per_path() {
+        let (first, _) = generated_arena("/projects/raptor");
+        let (second, _) = generated_arena("/projects/raptor");
+        assert_eq!(first.street_walls, second.street_walls);
+        assert!(!first.street_walls.is_empty());
+    }
+
+    #[test]
+    fn a_two_file_room_still_gets_generated_scenery() {
+        let occupied = [(-3, -3), (0, -3)];
+        let mut arena = Arena::from_nodes(occupied, Some(centered_gate()), PADDING, 9);
+        arena.generate_street_walls(PathBuf::from("/two-files").as_path(), occupied, 9);
+        assert!(
+            !arena.street_walls.is_empty(),
+            "landmark protection and route carving erased every generated wall"
+        );
+    }
+
+    #[test]
+    fn different_paths_generate_different_streets() {
+        let (first, _) = generated_arena("/projects/raptor");
+        let (second, _) = generated_arena("/projects/another");
+        assert_ne!(first.street_walls, second.street_walls);
+    }
+
+    #[test]
+    fn generation_keeps_asphalt_around_every_tower() {
+        let (arena, occupied) = generated_arena("/projects/raptor");
+        for &(x, z) in &occupied {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    assert!(
+                        !arena.street_walls.contains(&(x + dx, z + dz)),
+                        "wall generated beside tower {:?}",
+                        (x, z)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_tower_and_parent_gate_remain_reachable() {
+        let (arena, occupied) = generated_arena("/projects/raptor");
+        let hub = arena
+            .nearest_empty_cell(
+                |cell| occupied.contains(&cell) || arena.street_walls.contains(&cell),
+                MAX_RADIUS,
+            )
+            .unwrap();
+        let reachable = reachable_streets(&arena, hub, &occupied);
+
+        for tower in occupied.iter().copied() {
+            let approach = super::nearest_approach(&arena, tower, hub, &occupied).unwrap();
+            assert!(
+                reachable.contains(&approach),
+                "tower {tower:?} was cut off at {approach:?}"
+            );
+        }
+        let gate = arena.parent_gate_approach().unwrap();
+        assert!(reachable.contains(&gate), "parent gate was cut off");
+        for approach in arena.parent_gate_approaches() {
+            assert!(
+                !arena.street_walls.contains(&approach),
+                "generated wall narrowed the parent gate at {approach:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_street_walls_are_lethal() {
+        let (arena, _) = generated_arena("/projects/raptor");
+        let wall = *arena.street_walls.iter().next().unwrap();
+        let sim = LightcycleSim::start(arena.center(), Heading::PosX);
+        assert_eq!(
+            classify_next_content(wall, &arena, &sim, &HashMap::new(), |_| false),
+            CellContent::Wall
+        );
+    }
+
     #[test]
     fn gate_placement_survives_a_degenerate_fraction() {
         for fraction in [-1.0, 2.0, f32::NAN] {
@@ -1041,6 +1345,7 @@ mod tests {
                 min: (-10, -10),
                 max: (10, 10),
                 parent_portal: None,
+                street_walls: BTreeSet::new(),
             },
             cells: HashMap::from([((4, 0), 0)]),
             is_dir: vec![false],

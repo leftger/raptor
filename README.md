@@ -117,6 +117,14 @@ Arenas are always square and never smaller than a fixed minimum, so a folder
 holding one or two entries still gives you room to turn around rather than a
 shallow corridor.
 
+Each directory path also seeds a stable network of short street barriers. The
+same folder keeps the same layout between visits, while different folders form
+different alleys and courtyards. Generation leaves an asphalt ring around every
+filesystem tower and carves routes from the spawn area to every tower and the
+full parent gate, so scenery cannot make a destination unreachable. Barrier
+density therefore tracks how much open street a folder has: sparse folders get
+alleyways, while a folder whose towers tile the whole arena gets few or none.
+
 ## Why Jurassic Park?
 
 Because *FNS* from Jurassic Park is legendary.

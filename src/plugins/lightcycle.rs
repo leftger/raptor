@@ -51,6 +51,7 @@ struct LightcycleAssets {
     cycle_scene: Handle<WorldAsset>,
     trail_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
+    street_wall_material: Handle<StandardMaterial>,
     portal_material: Handle<StandardMaterial>,
     portal_bar_material: Handle<StandardMaterial>,
     dir_tower_material: Handle<StandardMaterial>,
@@ -137,6 +138,7 @@ fn setup_lightcycle_assets(
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
+        street_wall_material: materials.add(unlit_material(config::LIGHTCYCLE_STREET_WALL_COLOR)),
         portal_material: materials.add(unlit_material(config::LIGHTCYCLE_PORTAL_COLOR)),
         portal_bar_material: materials.add(StandardMaterial {
             base_color: config::LIGHTCYCLE_PORTAL_COLOR
@@ -183,22 +185,26 @@ fn tower_position(grid_pos: (i32, i32)) -> (i32, i32) {
 }
 
 fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
-    let parent_gate = path
-        .parent()
-        .is_some()
-        .then(|| GatePlacement::for_path(path, config::LIGHTCYCLE_PORTAL_WIDTH_CELLS));
-    let arena = Arena::from_nodes(
-        nodes.iter().map(|node| tower_position(node.grid_pos)),
-        parent_gate,
-        config::LIGHTCYCLE_ARENA_PADDING,
-        config::LIGHTCYCLE_MIN_ARENA_SPAN,
-    );
-
     let cells: HashMap<_, _> = nodes
         .iter()
         .enumerate()
         .map(|(index, node)| (tower_position(node.grid_pos), index))
         .collect();
+    let parent_gate = path
+        .parent()
+        .is_some()
+        .then(|| GatePlacement::for_path(path, config::LIGHTCYCLE_PORTAL_WIDTH_CELLS));
+    let mut arena = Arena::from_nodes(
+        cells.keys().copied(),
+        parent_gate,
+        config::LIGHTCYCLE_ARENA_PADDING,
+        config::LIGHTCYCLE_MIN_ARENA_SPAN,
+    );
+    arena.generate_street_walls(
+        path,
+        cells.keys().copied(),
+        config::LIGHTCYCLE_STREET_WALL_SEED_CHANCE,
+    );
 
     let sim = spawn_sim(&arena, &cells);
 
@@ -214,14 +220,14 @@ fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
 
 fn spawn_sim(arena: &Arena, cells: &HashMap<(i32, i32), usize>) -> LightcycleSim {
     let Some(spawn) = arena.nearest_empty_cell(
-        |cell| cells.contains_key(&cell),
+        |cell| cells.contains_key(&cell) || arena.street_walls.contains(&cell),
         config::LIGHTCYCLE_SPAWN_SEARCH_RADIUS,
     ) else {
         return LightcycleSim::ready(arena.center(), Heading::PosX);
     };
 
     let heading = Heading::initial_heading(spawn, |cell| {
-        arena.contains(cell) && !cells.contains_key(&cell)
+        arena.contains(cell) && !cells.contains_key(&cell) && !arena.street_walls.contains(&cell)
     });
 
     match heading {
@@ -297,6 +303,7 @@ fn spawn_run_entities(
     ));
 
     spawn_arena_walls(commands, assets, &run.arena);
+    spawn_street_walls(commands, assets, meshes, &run.arena);
     spawn_towers(commands, assets, meshes, run);
     spawn_street_grid(commands, assets, meshes, &run.arena);
     spawn_trail_ribbon(commands, assets, meshes, run);
@@ -314,6 +321,45 @@ fn spawn_trail_ribbon(
         MeshMaterial3d(assets.trail_material.clone()),
         Pickable::IGNORE,
     ));
+}
+
+fn spawn_street_walls(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+) {
+    let cells: Vec<_> = arena.street_walls.iter().copied().collect();
+    for chunk in cells.chunks(config::MESH_CHUNK_SIZE) {
+        let Some(mesh) = build_street_wall_chunk_mesh(chunk) else {
+            continue;
+        };
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.street_wall_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn build_street_wall_chunk_mesh(cells: &[(i32, i32)]) -> Option<Mesh> {
+    let height = config::LIGHTCYCLE_STREET_WALL_HEIGHT;
+    let size = config::LIGHTCYCLE_STREET_WALL_SIZE;
+    let mut cells = cells.iter();
+    let mut mesh = street_wall_cube_mesh(*cells.next()?, height, size);
+    for &cell in cells {
+        mesh.merge(&street_wall_cube_mesh(cell, height, size))
+            .expect("street wall cuboid meshes must be merge-compatible");
+    }
+    Some(mesh)
+}
+
+fn street_wall_cube_mesh(cell: (i32, i32), height: f32, size: f32) -> Mesh {
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(config::world_position(cell.0, cell.1, height))
+            .with_scale(Vec3::new(size, height, size)),
+    )
 }
 
 fn spawn_towers(
@@ -744,14 +790,15 @@ fn step_lightcycle(
         substeps += 1;
 
         let outcome = {
-            let arena = run.arena.clone();
+            let arena = &run.arena;
             let cells = &run.cells;
             let nodes = &run.nodes;
+            let sim = &mut run.sim;
 
-            run.sim.advance(
+            sim.advance(
                 fixed_step * config::LIGHTCYCLE_CELLS_PER_SEC,
                 |next, sim| {
-                    classify_next_content(next, &arena, sim, cells, |index| nodes[index].is_dir)
+                    classify_next_content(next, arena, sim, cells, |index| nodes[index].is_dir)
                 },
             )
         };
@@ -768,6 +815,9 @@ fn step_lightcycle(
                         .map(|node| format!("file {}", node.name))
                         .unwrap_or_else(|| "file".to_string()),
                     CrashReason::Trail => "your trail".to_string(),
+                    CrashReason::Wall if run.arena.street_walls.contains(&crash_cell) => {
+                        "street barrier".to_string()
+                    }
                     CrashReason::Wall => "arena wall".to_string(),
                 };
                 run.crash_label = Some(label);

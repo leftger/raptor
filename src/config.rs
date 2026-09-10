@@ -75,6 +75,9 @@ pub const LIGHTCYCLE_ARENA_PADDING: i32 = 1;
 /// Smallest arena side, in cells. Arenas are square, so a folder with one or two
 /// entries still gets room to turn around instead of a shallow corridor.
 pub const LIGHTCYCLE_MIN_ARENA_SPAN: i32 = 9;
+/// Percentage of interior cells that seed a short procedural barrier. Routes
+/// to every filesystem landmark are carved after generation.
+pub const LIGHTCYCLE_STREET_WALL_SEED_CHANCE: u8 = 9;
 pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;
 /// Tower lattice spacing in cells. Each original grid row/column is multiplied
 /// by this stride, leaving empty street cells between directory/file towers.
@@ -104,6 +107,8 @@ pub const LIGHTCYCLE_TRAIL_EMANATE: f32 = 0.55;
 pub const LIGHTCYCLE_TRAIL_SPAWN_HEIGHT: f32 = 0.16;
 pub const LIGHTCYCLE_WALL_HEIGHT: f32 = 1.4;
 pub const LIGHTCYCLE_WALL_THICKNESS: f32 = 0.2;
+pub const LIGHTCYCLE_STREET_WALL_HEIGHT: f32 = 1.1;
+pub const LIGHTCYCLE_STREET_WALL_SIZE: f32 = 1.75;
 pub const LIGHTCYCLE_PORTAL_HEIGHT: f32 = 2.6;
 /// How many wall cells the parent gate covers. Wide enough that reaching the
 /// parent directory does not need single-cell precision.
@@ -124,6 +129,7 @@ pub const LIGHTCYCLE_TRAIL_COLOR: Color = Color::srgba(0.55, 0.95, 1.0, 1.0);
 /// so the sheet reads as thick glass rather than a cyan decal.
 pub const LIGHTCYCLE_TRAIL_ATTENUATION: Color = Color::srgba(0.35, 0.9, 0.85, 1.0);
 pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
+pub const LIGHTCYCLE_STREET_WALL_COLOR: Color = Color::srgba(0.05, 0.42, 0.68, 1.0);
 pub const LIGHTCYCLE_PORTAL_COLOR: Color = Color::srgba(1.0, 0.85, 0.1, 1.0);
 /// Trough of the gate frame's pulse.
 pub const LIGHTCYCLE_PORTAL_DIM_COLOR: Color = Color::srgba(0.32, 0.25, 0.03, 1.0);
