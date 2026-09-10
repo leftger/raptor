@@ -60,6 +60,8 @@ pub struct LightcycleState {
     pub clock: f32,
     /// Active crash animation state (debris burst + camera shake).
     pub crash_fx: Option<CrashFx>,
+    /// Active directory-tower transport animation.
+    pub entry_fx: Option<EntryFx>,
     /// Rebuild the containing directory arena after leaving a document.
     pub restore_directory: bool,
 }
@@ -79,5 +81,34 @@ impl CrashFx {
             duration,
             spawned: false,
         }
+    }
+}
+
+/// Timeline and deferred navigation target for a directory-tower transport.
+///
+/// The directory request waits until the visual reaches its bright apex so a
+/// fast filesystem scan cannot replace the old arena before the effect appears.
+#[derive(Debug, Clone)]
+pub struct EntryFx {
+    pub elapsed: f32,
+    pub duration: f32,
+    pub target: PathBuf,
+    pub spawned: bool,
+    pub requested: bool,
+}
+
+impl EntryFx {
+    pub fn new(target: PathBuf, duration: f32) -> Self {
+        Self {
+            elapsed: 0.0,
+            duration,
+            target,
+            spawned: false,
+            requested: false,
+        }
+    }
+
+    pub fn progress(&self) -> f32 {
+        (self.elapsed / self.duration).clamp(0.0, 1.0)
     }
 }

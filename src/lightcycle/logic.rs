@@ -25,20 +25,9 @@ impl Heading {
         }
     }
 
-    /// Picks a heading whose next cell is safe (`is_safe` returns true), so a
-    /// freshly spawned cycle does not crash immediately against a dense block.
-    pub fn initial_heading(
-        cell: (i32, i32),
-        mut is_safe: impl FnMut((i32, i32)) -> bool,
-    ) -> Option<Self> {
-        [Heading::PosX, Heading::PosZ, Heading::NegX, Heading::NegZ]
-            .iter()
-            .copied()
-            .find(|heading| {
-                let (dx, dz) = heading.delta();
-                is_safe((cell.0 + dx, cell.1 + dz))
-            })
-    }
+    /// Headings in the order the spawn search prefers them when several offer
+    /// the cycle equally long runway.
+    const PREFERENCE: [Self; 4] = [Self::PosX, Self::PosZ, Self::NegX, Self::NegZ];
 
     pub fn turn(self, turn: Turn) -> Self {
         match (self, turn) {
@@ -585,6 +574,135 @@ impl Arena {
 
         None
     }
+
+    /// Picks a spawn cell and heading with clear cells ahead of the cycle.
+    ///
+    /// [`Self::nearest_empty_cell`] only promises the spawn cell itself is free,
+    /// which left a rider dropped into an unfamiliar folder reacting to whatever
+    /// stood in the very next cell. This keeps the same bias toward the arena
+    /// center but only accepts a candidate that can run `desired_runway` cells in
+    /// a straight line, widening the search until one does.
+    ///
+    /// Returns `None` when no free cell has anywhere to go at all, which is not a
+    /// spawn but a stall; the caller holds the run instead of starting it.
+    pub fn spawn_with_runway(
+        &self,
+        mut blocked: impl FnMut((i32, i32)) -> bool,
+        max_radius: i32,
+        desired_runway: i32,
+    ) -> Option<((i32, i32), Heading)> {
+        let (cx, cz) = self.center();
+        // Nothing exists beyond the arena's own extent, so this bounds the scan
+        // when no cell anywhere can offer the full runway.
+        let extent = (self.max.0 - self.min.0).max(self.max.1 - self.min.1);
+        let mut fallback: Option<SpawnCandidate> = None;
+
+        for radius in 0..=max_radius.min(extent) {
+            let mut ring_best: Option<SpawnCandidate> = None;
+
+            for x in (cx - radius)..=(cx + radius) {
+                for z in (cz - radius)..=(cz + radius) {
+                    let cell = (x, z);
+                    let on_ring = (x - cx).abs().max((z - cz).abs()) == radius;
+                    if !on_ring || !self.contains(cell) || blocked(cell) {
+                        continue;
+                    }
+                    let Some((runway, heading)) =
+                        self.longest_runway_heading(cell, &mut blocked, desired_runway)
+                    else {
+                        continue;
+                    };
+
+                    let candidate = SpawnCandidate {
+                        cell,
+                        heading,
+                        runway,
+                        distance_sq: (x - cx) * (x - cx) + (z - cz) * (z - cz),
+                    };
+                    if ring_best.is_none_or(|best| candidate.rank() > best.rank()) {
+                        ring_best = Some(candidate);
+                    }
+                }
+            }
+
+            let Some(candidate) = ring_best else {
+                continue;
+            };
+            if candidate.runway >= desired_runway {
+                return Some((candidate.cell, candidate.heading));
+            }
+            if fallback.is_none_or(|best| candidate.rank() > best.rank()) {
+                fallback = Some(candidate);
+            }
+        }
+
+        fallback.map(|candidate| (candidate.cell, candidate.heading))
+    }
+
+    /// The heading out of `cell` with the most clear cells ahead of it.
+    ///
+    /// `None` means the cycle would be boxed in whichever way it faced.
+    fn longest_runway_heading(
+        &self,
+        cell: (i32, i32),
+        blocked: &mut impl FnMut((i32, i32)) -> bool,
+        limit: i32,
+    ) -> Option<(i32, Heading)> {
+        Heading::PREFERENCE
+            .into_iter()
+            .enumerate()
+            .map(|(rank, heading)| {
+                (
+                    self.clear_runway(cell, heading, blocked, limit),
+                    rank,
+                    heading,
+                )
+            })
+            .filter(|&(runway, ..)| runway > 0)
+            .max_by_key(|&(runway, rank, _)| (runway, std::cmp::Reverse(rank)))
+            .map(|(runway, _, heading)| (runway, heading))
+    }
+
+    /// Counts the cells the cycle can cross from `cell` along `heading` before it
+    /// would hit something, stopping at `limit`.
+    ///
+    /// Leaving the arena counts as blocked, which covers both the perimeter wall
+    /// and the parent gate: aiming a fresh run at the gate would bounce the rider
+    /// straight back out to the parent directory.
+    fn clear_runway(
+        &self,
+        cell: (i32, i32),
+        heading: Heading,
+        blocked: &mut impl FnMut((i32, i32)) -> bool,
+        limit: i32,
+    ) -> i32 {
+        let (dx, dz) = heading.delta();
+        let mut cursor = cell;
+        for step in 0..limit {
+            cursor = (cursor.0 + dx, cursor.1 + dz);
+            if !self.contains(cursor) || blocked(cursor) {
+                return step;
+            }
+        }
+        limit
+    }
+}
+
+/// One cell the spawn search is weighing up, with the heading it would start on.
+#[derive(Debug, Clone, Copy)]
+struct SpawnCandidate {
+    cell: (i32, i32),
+    heading: Heading,
+    runway: i32,
+    distance_sq: i32,
+}
+
+impl SpawnCandidate {
+    /// Sort key, highest wins: the longest runway, then the cell closest to the
+    /// arena center, then a fixed cell order so one folder always spawns alike.
+    fn rank(self) -> (i32, i32, i32, i32) {
+        (self.runway, -self.distance_sq, -self.cell.0, -self.cell.1)
+    }
 }
 
 /// Stable FNV-1a seed. Unlike `DefaultHasher`, this is deliberately fixed so a
@@ -1012,11 +1130,155 @@ mod tests {
         assert_eq!(sim.heading, Heading::PosX);
     }
 
+    /// Counts the clear cells ahead of `cell`, walking the grid the way the sim
+    /// will so the assertions do not lean on the search's own arithmetic.
+    fn clear_ahead(
+        arena: &Arena,
+        blocked: impl Fn((i32, i32)) -> bool,
+        cell: (i32, i32),
+        heading: Heading,
+        limit: i32,
+    ) -> i32 {
+        let (dx, dz) = heading.delta();
+        let mut cursor = cell;
+        for step in 0..limit {
+            cursor = (cursor.0 + dx, cursor.1 + dz);
+            if !arena.contains(cursor) || blocked(cursor) {
+                return step;
+            }
+        }
+        limit
+    }
+
+    const RUNWAY: i32 = 6;
+
     #[test]
-    fn initial_heading_avoids_blocked_neighbor() {
-        let blocked = |cell: (i32, i32)| cell == (1, 0);
-        let heading = Heading::initial_heading((0, 0), |cell| !blocked(cell)).unwrap();
-        assert_eq!(heading, Heading::PosZ);
+    fn spawn_leaves_the_asked_for_runway_ahead_of_the_cycle() {
+        let towers: Vec<_> = (0..5)
+            .flat_map(|x| (0..5).map(move |z| (x * 5, z * 5)))
+            .collect();
+        let mut arena = Arena::from_nodes(towers.iter().copied(), Some(centered_gate()), 2, 13);
+        arena.generate_city(&PathBuf::from("/dense/city"), towers.iter().copied(), 18, 5);
+
+        let occupied: HashSet<_> = towers.iter().copied().collect();
+        let blocked =
+            |cell: (i32, i32)| occupied.contains(&cell) || arena.street_walls.contains(&cell);
+        let (spawn, heading) = arena
+            .spawn_with_runway(blocked, MAX_RADIUS, RUNWAY)
+            .expect("a generated city has somewhere to ride");
+
+        assert!(arena.contains(spawn) && !blocked(spawn));
+        assert_eq!(clear_ahead(&arena, blocked, spawn, heading, RUNWAY), RUNWAY);
+    }
+
+    /// The old search only checked the single cell in front of the spawn, so a
+    /// pocket like this one started the run a third of a second from a crash.
+    #[test]
+    fn spawn_moves_off_center_when_the_center_is_a_dead_end() {
+        let pocket = [(2, 0), (-2, 0), (0, 2), (0, -2)];
+        let arena = Arena::from_nodes(pocket.iter().copied(), None, 2, 13);
+        let walls: HashSet<_> = pocket.iter().copied().collect();
+        let blocked = |cell: (i32, i32)| walls.contains(&cell);
+
+        let center = arena.center();
+        assert_eq!(center, (0, 0));
+        for heading in [Heading::PosX, Heading::PosZ, Heading::NegX, Heading::NegZ] {
+            assert_eq!(
+                clear_ahead(&arena, blocked, center, heading, RUNWAY),
+                1,
+                "the pocket should box the center in after one cell"
+            );
+        }
+
+        let (spawn, heading) = arena
+            .spawn_with_runway(blocked, MAX_RADIUS, RUNWAY)
+            .expect("the open arena around the pocket is rideable");
+        assert_ne!(spawn, center, "spawning in the pocket is the bug");
+        assert_eq!(clear_ahead(&arena, blocked, spawn, heading, RUNWAY), RUNWAY);
+    }
+
+    /// Short of the target the search still hands back the roomiest cell it saw,
+    /// rather than refusing to start a run in a cramped folder.
+    #[test]
+    fn a_cramped_arena_still_spawns_facing_its_longest_run() {
+        let arena = Arena::from_nodes(std::iter::empty::<(i32, i32)>(), None, PADDING, 5);
+        let blocked = |cell: (i32, i32)| cell.0 != 0 && cell.1 != 0;
+
+        let (spawn, heading) = arena
+            .spawn_with_runway(blocked, MAX_RADIUS, RUNWAY)
+            .expect("the open cross through the middle is rideable");
+        let runway = clear_ahead(&arena, blocked, spawn, heading, RUNWAY);
+        assert!(runway > 0 && runway < RUNWAY);
+        assert_eq!(
+            runway,
+            [Heading::PosX, Heading::PosZ, Heading::NegX, Heading::NegZ]
+                .into_iter()
+                .map(|heading| clear_ahead(&arena, blocked, spawn, heading, RUNWAY))
+                .max()
+                .unwrap(),
+            "it should face the longest run available from that cell"
+        );
+    }
+
+    /// Folder sizes that used to spawn hard against something. A folder with two
+    /// entries gave the rider a single clear cell, under a third of a second at
+    /// `LIGHTCYCLE_CELLS_PER_SEC`, and small folders were the worst because their
+    /// arenas are tight and their plazas sit right where the spawn search looked.
+    #[test]
+    fn generated_cities_all_spawn_with_the_full_runway() {
+        for count in [0i32, 1, 2, 3, 5, 9, 17, 40, 120] {
+            for name in ["/a", "/usr/share/doc", "/home/user/projects/raptor"] {
+                let width = ((count as f32).sqrt().ceil() as i32).max(1);
+                let towers: Vec<(i32, i32)> = (0..count)
+                    .map(|index| {
+                        (
+                            (index % width - width / 2) * 5,
+                            (index / width - width / 2) * 5,
+                        )
+                    })
+                    .collect();
+                let path = PathBuf::from(format!("{name}/{count}"));
+                let mut arena =
+                    Arena::from_nodes(towers.iter().copied(), Some(centered_gate()), 2, 13);
+                arena.generate_city(&path, towers.iter().copied(), 18, 5);
+
+                let occupied: HashSet<_> = towers.iter().copied().collect();
+                let blocked = |cell: (i32, i32)| {
+                    occupied.contains(&cell) || arena.street_walls.contains(&cell)
+                };
+                let (spawn, heading) = arena
+                    .spawn_with_runway(blocked, MAX_RADIUS, RUNWAY)
+                    .unwrap_or_else(|| panic!("no spawn for {count} entries in {name}"));
+
+                assert_eq!(
+                    clear_ahead(&arena, blocked, spawn, heading, RUNWAY),
+                    RUNWAY,
+                    "{count} entries in {name} spawned short of the runway"
+                );
+
+                // The runway must not come at the cost of exiling the rider to
+                // the edge of the city, away from the folder's towers.
+                let center = arena.center();
+                let offset = (spawn.0 - center.0).abs() + (spawn.1 - center.1).abs();
+                assert!(offset <= 2, "spawned {offset} cells off center in {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_boxed_in_cell_is_not_a_spawn() {
+        let arena = Arena::from_nodes(std::iter::empty::<(i32, i32)>(), None, PADDING, 9);
+        assert!(
+            arena
+                .spawn_with_runway(|cell| cell != (0, 0), MAX_RADIUS, RUNWAY)
+                .is_none(),
+            "a single free cell with no exit has to stall the run, not start it"
+        );
+        assert!(
+            arena
+                .spawn_with_runway(|_| true, MAX_RADIUS, RUNWAY)
+                .is_none()
+        );
     }
 
     #[test]

@@ -87,6 +87,7 @@ the same directory grid.
 
 * `A` / `Left`  → Queue a left turn (applied at the next cell boundary)
 * `D` / `Right` → Queue a right turn
+* **Right-mouse drag** → Hold to look around the cycle (springs back on release)
 * `R` → Restart the run in the current directory
 * `M` → Back to Explorer
 * `u` / `-` / breadcrumbs → Directory jumps (the run resets when the new folder loads)
@@ -108,15 +109,35 @@ The cycle moves continuously between cell centers; turns are queued and execute
 at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
 while riding, and are restored when you toggle back.
 
+The chase camera follows the cycle's heading, but hold the right mouse button
+and drag to swing it around the bike and tilt it between a near-ground view and
+a near-overhead one — useful for finding the parent gate without riding the
+whole perimeter. Free look is a hold: let go and the camera eases back to the
+default over-the-shoulder shot, so you cannot ride on blind. Spinning it several
+turns still unwinds the short way round.
+
 In Lightcycle mode the directory entries are re-laid out as widely spaced
 "downtown" towers inside a path-seeded TRON district. Directory towers load the
 next arena; file towers are solid and crash the cycle. The cycle rounds
 intersections smoothly and leaves a liquid-glass wall that streams off its
 tail, thickening to full height a fraction of a cell behind the bike.
 
+Riding into a directory tower stops the cycle inside a cyan transport column.
+Recognizer-style halos sweep upward around it while the bike is lifted into the
+beam, and the next directory begins loading near the animation's bright apex.
+The short delay is intentional: even an instant filesystem scan cannot replace
+the arena before the transport is visible.
+
 Arenas are always square and never smaller than a fixed minimum, so a folder
 holding one or two entries still gives you room to turn around rather than a
 shallow corridor.
+
+Every run starts with clear road ahead. The spawn search picks a cell and a
+heading with at least six empty cells in a straight line — over a second and a
+half of runway — so dropping into an unfamiliar folder gives you time to read the
+streets instead of reacting to whatever is in the next cell. It still starts you
+near the middle of the city, and in a folder too cramped to offer that much it
+faces you down the longest run it can find.
 
 The city generator lays connected arterial roads, tower plazas, perimeter
 boulevards, and alternate-route loops before it places any architecture. The
