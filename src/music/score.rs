@@ -59,18 +59,30 @@ fn action_base_cutoffs(theme: &MusicTheme) -> (f32, f32) {
     )
 }
 
-/// Definitions for the profile's base voices plus the shared accent and
-/// arpeggiator chains.
+/// Definitions for the profile's base voices plus the shared arpeggiator and
+/// sound-effect chains.
 pub fn base_voices(theme: &MusicTheme, profile: ModeProfile) -> String {
     let wave = theme.family.waveform();
     let mut code = String::new();
 
-    // Shared, silent until an accent opens it. Node layout: 0 noise, 1 low-pass
-    // (param 0 cutoff), 2 gain, 3 pan. See [`accent_message`]. Glicol's `noise`
-    // node takes an integer seed, not a float.
+    // Shared effects, all silent until triggered. Layout for each: 0 osc/noise,
+    // 1 low-pass (param 0 cutoff), 2 gain, 3 pan. See [`sfx_message`]. Glicol's
+    // `noise` node takes an integer seed, not a float.
     let _ = writeln!(
         code,
-        "~accent: noise 1 >> lpf 1800.0 0.7 >> mul 0.0 >> pan 0.0;"
+        "~sfx_crash: noise 1 >> lpf 4000.0 0.7 >> mul 0.0 >> pan 0.0;"
+    );
+    let _ = writeln!(
+        code,
+        "~sfx_turn: squ 1200.0 >> lpf 3200.0 0.7 >> mul 0.0 >> pan -0.15;"
+    );
+    let _ = writeln!(
+        code,
+        "~sfx_beam: saw 180.0 >> lpf 600.0 0.7 >> mul 0.0 >> pan 0.0;"
+    );
+    let _ = writeln!(
+        code,
+        "~sfx_portal: tri 660.0 >> lpf 2500.0 0.7 >> mul 0.0 >> pan 0.1;"
     );
 
     // Shared evolving melody, retriggered from the control side. Layout:
@@ -140,10 +152,19 @@ pub fn voice_bank(theme: &MusicTheme) -> String {
     code
 }
 
-/// The single `o:` chain mixing the profile's base voices, the accent, the
-/// arpeggiator, and the whole bank.
+/// The single `o:` chain mixing the profile's base voices, the sound effects,
+/// the arpeggiator, and the whole bank.
 pub fn output_chain(profile: ModeProfile) -> String {
-    let mut code = String::from("o: mix ~accent ~arp");
+    let mut code = String::from("o: mix");
+    for chain in [
+        "~sfx_crash",
+        "~sfx_turn",
+        "~sfx_beam",
+        "~sfx_portal",
+        "~arp",
+    ] {
+        let _ = write!(code, " {chain}");
+    }
     for name in base_refs(profile) {
         let _ = write!(code, " {name}");
     }
