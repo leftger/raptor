@@ -254,6 +254,20 @@ pub const MUSIC_ACTION_PUMP_RATE: f32 = 2.0;
 /// enough to read as a blend, short enough to feel responsive while browsing.
 pub const MUSIC_CROSSFADE_SECONDS: f32 = 0.7;
 
+/// Arpeggiator. `BEATS` is step length in beats, so tempo drives the rate:
+/// Explorer gets one soft note per beat, Lightcycle eighths. `TAU` is the
+/// per-note decay time constant, and `GAIN` the per-note peak.
+pub const MUSIC_CALM_ARP_BEATS: f32 = 1.0;
+pub const MUSIC_ACTION_ARP_BEATS: f32 = 2.0;
+pub const MUSIC_CALM_ARP_TAU: f32 = 0.26;
+pub const MUSIC_ACTION_ARP_TAU: f32 = 0.11;
+pub const MUSIC_CALM_ARP_GAIN: f32 = 0.10;
+pub const MUSIC_ACTION_ARP_GAIN: f32 = 0.17;
+
+/// Slow filter sweep applied to the base voices, in cycles per second.
+pub const MUSIC_CALM_SWEEP_RATE: f32 = 0.05;
+pub const MUSIC_ACTION_SWEEP_RATE: f32 = 0.12;
+
 pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
 pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
 pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 4.0;

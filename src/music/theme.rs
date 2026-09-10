@@ -155,6 +155,37 @@ impl ModeProfile {
             Self::Action => config::MUSIC_ACTION_SMOOTHING_TAU,
         }
     }
+
+    /// Seconds between arpeggiator notes at `bpm`.
+    pub fn arp_interval(self, bpm: f32) -> f32 {
+        let beats = match self {
+            Self::Calm => config::MUSIC_CALM_ARP_BEATS,
+            Self::Action => config::MUSIC_ACTION_ARP_BEATS,
+        };
+        if bpm > 0.0 { 60.0 / bpm / beats } else { 1.0 }
+    }
+
+    pub fn arp_decay_tau(self) -> f32 {
+        match self {
+            Self::Calm => config::MUSIC_CALM_ARP_TAU,
+            Self::Action => config::MUSIC_ACTION_ARP_TAU,
+        }
+    }
+
+    pub fn arp_gain(self) -> f32 {
+        match self {
+            Self::Calm => config::MUSIC_CALM_ARP_GAIN,
+            Self::Action => config::MUSIC_ACTION_ARP_GAIN,
+        }
+    }
+
+    /// Cycles per second of the base-voice filter sweep.
+    pub fn sweep_rate(self) -> f32 {
+        match self {
+            Self::Calm => config::MUSIC_CALM_SWEEP_RATE,
+            Self::Action => config::MUSIC_ACTION_SWEEP_RATE,
+        }
+    }
 }
 
 /// The stable musical identity of one directory.

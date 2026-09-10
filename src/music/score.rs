@@ -43,7 +43,24 @@ pub fn base_refs(profile: ModeProfile) -> &'static [&'static str] {
     }
 }
 
-/// Definitions for the profile's base voices and the shared accent chain.
+/// Base cutoffs for the calm pads, shared by the graph and the filter sweep.
+fn calm_pad_cutoffs(theme: &MusicTheme) -> (f32, f32) {
+    let cutoff = (theme.root_hz() * 6.0).clamp(400.0, 2400.0);
+    (cutoff, (cutoff * 1.2).clamp(400.0, 3000.0))
+}
+
+/// Base cutoffs for the action bass and lead.
+fn action_base_cutoffs(theme: &MusicTheme) -> (f32, f32) {
+    let bass = theme.degree_hz(0, -1);
+    let lead = theme.degree_hz(4, 1);
+    (
+        (bass * 8.0).clamp(500.0, 2600.0),
+        (lead * 6.0).clamp(700.0, 3200.0),
+    )
+}
+
+/// Definitions for the profile's base voices plus the shared accent and
+/// arpeggiator chains.
 pub fn base_voices(theme: &MusicTheme, profile: ModeProfile) -> String {
     let wave = theme.family.waveform();
     let mut code = String::new();
@@ -56,26 +73,35 @@ pub fn base_voices(theme: &MusicTheme, profile: ModeProfile) -> String {
         "~accent: noise 1 >> lpf 1800.0 0.7 >> mul 0.0 >> pan 0.0;"
     );
 
+    // Shared evolving melody, retriggered from the control side. Layout:
+    // 0 osc, 1 low-pass, 2 gain, 3 pan. See [`arp_message`].
+    let _ = writeln!(
+        code,
+        "~arp: {wave} {:.2} >> lpf {:.1} 0.6 >> mul 0.0 >> pan 0.0;",
+        theme.degree_hz(0, 0),
+        theme.node_cutoff(theme.seed)
+    );
+
     match profile {
         ModeProfile::Calm => {
             let root = theme.root_hz();
             let fifth = theme.degree_hz(4, 0);
-            let cutoff = (root * 6.0).clamp(400.0, 2400.0);
+            let (c0, c1) = calm_pad_cutoffs(theme);
             let _ = writeln!(
                 code,
-                "~pad0: {wave} {root:.2} >> lpf {cutoff:.1} 0.7 >> mul {:.3} >> pan -0.25;",
+                "~pad0: {wave} {root:.2} >> lpf {c0:.1} 0.7 >> mul {:.3} >> pan -0.25;",
                 config::MUSIC_CALM_PAD_GAIN
             );
             let _ = writeln!(
                 code,
-                "~pad1: {wave} {fifth:.2} >> lpf {:.1} 0.7 >> mul {:.3} >> pan 0.25;",
-                (cutoff * 1.2).clamp(400.0, 3000.0),
+                "~pad1: {wave} {fifth:.2} >> lpf {c1:.1} 0.7 >> mul {:.3} >> pan 0.25;",
                 config::MUSIC_CALM_PAD_GAIN * 0.8
             );
         }
         ModeProfile::Action => {
             let bass = theme.degree_hz(0, -1);
             let lead = theme.degree_hz(4, 1);
+            let (c0, c1) = action_base_cutoffs(theme);
             // Tempo-synced tremolo in 0..1, so the arrangement pumps.
             let pump_hz = (theme.bpm(ModeProfile::Action) / 60.0) * config::MUSIC_ACTION_PUMP_RATE;
             let half_depth = config::MUSIC_ACTION_PUMP_DEPTH / 2.0;
@@ -86,14 +112,12 @@ pub fn base_voices(theme: &MusicTheme, profile: ModeProfile) -> String {
             );
             let _ = writeln!(
                 code,
-                "~bass: saw {bass:.2} >> lpf {:.1} 0.8 >> mul {:.3} >> mul ~pump >> pan -0.15;",
-                (bass * 8.0).clamp(500.0, 2600.0),
+                "~bass: saw {bass:.2} >> lpf {c0:.1} 0.8 >> mul {:.3} >> mul ~pump >> pan -0.15;",
                 config::MUSIC_ACTION_BASS_GAIN
             );
             let _ = writeln!(
                 code,
-                "~lead: squ {lead:.2} >> lpf {:.1} 0.7 >> mul {:.3} >> mul ~pump >> pan 0.2;",
-                (lead * 6.0).clamp(700.0, 3200.0),
+                "~lead: squ {lead:.2} >> lpf {c1:.1} 0.7 >> mul {:.3} >> mul ~pump >> pan 0.2;",
                 config::MUSIC_ACTION_LEAD_GAIN
             );
         }
@@ -116,10 +140,10 @@ pub fn voice_bank(theme: &MusicTheme) -> String {
     code
 }
 
-/// The single `o:` chain mixing the profile's base voices, the accent, and the
-/// whole bank.
+/// The single `o:` chain mixing the profile's base voices, the accent, the
+/// arpeggiator, and the whole bank.
 pub fn output_chain(profile: ModeProfile) -> String {
-    let mut code = String::from("o: mix ~accent");
+    let mut code = String::from("o: mix ~accent ~arp");
     for name in base_refs(profile) {
         let _ = write!(code, " {name}");
     }
@@ -151,6 +175,28 @@ pub fn voice_message(slot: usize, freq: f32, cutoff: f32, gain: f32, pan: f32) -
 /// layout produced by [`base_voices`]: 1 = low-pass cutoff, 2 = gain.
 pub fn accent_message(cutoff: f32, gain: f32) -> String {
     format!("~accent,1,0,{cutoff:.1};~accent,2,0,{gain:.4};")
+}
+
+/// A `send_msg` payload that plays one arpeggiator note. Layout: 0 oscillator,
+/// 1 low-pass, 2 gain, 3 pan.
+pub fn arp_message(freq: f32, cutoff: f32, gain: f32, pan: f32) -> String {
+    format!("~arp,0,0,{freq:.3};~arp,1,0,{cutoff:.3};~arp,2,0,{gain:.4};~arp,3,0,{pan:.3};")
+}
+
+/// A `send_msg` payload that sweeps the profile's base-voice filters. `sweep`
+/// runs 0..1, closing to ~0.65x and opening to ~1.65x of the base cutoff.
+pub fn base_filter_message(theme: &MusicTheme, profile: ModeProfile, sweep: f32) -> String {
+    let open = 0.65 + sweep.clamp(0.0, 1.0);
+    let (c0, c1) = match profile {
+        ModeProfile::Calm => calm_pad_cutoffs(theme),
+        ModeProfile::Action => action_base_cutoffs(theme),
+    };
+    let c0 = (c0 * open).clamp(config::MUSIC_VOICE_CUTOFF_MIN, 12_000.0);
+    let c1 = (c1 * open).clamp(config::MUSIC_VOICE_CUTOFF_MIN, 12_000.0);
+    match profile {
+        ModeProfile::Calm => format!("~pad0,1,0,{c0:.1};~pad1,1,0,{c1:.1};"),
+        ModeProfile::Action => format!("~bass,1,0,{c0:.1};~lead,1,0,{c1:.1};"),
+    }
 }
 
 #[cfg(test)]
@@ -197,6 +243,27 @@ mod tests {
         assert!(action.contains("~pump"));
         assert!(calm.contains("~accent"));
         assert!(action.contains("~accent"));
+        assert!(calm.contains("~arp"));
+        assert!(action.contains("~arp"));
+    }
+
+    #[test]
+    fn arp_message_addresses_the_fixed_node_layout() {
+        let message = arp_message(330.0, 1200.0, 0.08, -0.3);
+        assert!(message.contains("~arp,0,0,330.000;"));
+        assert!(message.contains("~arp,1,0,1200.000;"));
+        assert!(message.contains("~arp,2,0,0.0800;"));
+        assert!(message.contains("~arp,3,0,-0.300;"));
+    }
+
+    #[test]
+    fn base_filter_sweep_targets_the_profile_base() {
+        let calm = base_filter_message(&theme(), ModeProfile::Calm, 0.5);
+        assert!(calm.contains("~pad0,1,0,"));
+        assert!(calm.contains("~pad1,1,0,"));
+        let action = base_filter_message(&theme(), ModeProfile::Action, 0.5);
+        assert!(action.contains("~bass,1,0,"));
+        assert!(action.contains("~lead,1,0,"));
     }
 
     #[test]

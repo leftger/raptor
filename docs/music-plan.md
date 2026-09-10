@@ -145,6 +145,19 @@ Positions are chain slots (`saw`=0, `lpf`=1, `mul`=2, `pan`=3).
   sine bell, `.md` -> triangle), so approaching a file is recognizable.
 - Level scales with `size` / `children_count`, bounded, so big things are louder.
 
+### Melody, rhythm and movement
+
+- **Arpeggiator (`arp.rs`).** A shared `~arp` voice steps a seeded scale-degree
+  pattern (rotated by the theme seed), so the base track evolves instead of
+  droning. Explorer steps once per beat and softly; Lightcycle steps twice per
+  beat with more gain (`MUSIC_*_ARP_*`). Each note retriggers a decaying
+  envelope, and a fresh note briefly opens the filter, so notes read as plucks
+  with a brighter attack. State resets with the room/profile.
+- **Base filter sweep.** A slow tempo-independent LFO
+  (`MUSIC_*_SWEEP_RATE`) moves the pad / bass / lead cutoffs between ~0.65x and
+  ~1.65x of their base, so the arrangement breathes.
+- **Velocity.** Downbeats accent at full velocity, off-beats at 0.72 / 0.55.
+
 ### Proximity kernel
 
 - Listener: Explorer -> `OrbitCameraResource.target` (already chases the selected

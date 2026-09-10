@@ -15,10 +15,11 @@ use crate::lightcycle::logic::stable_path_seed;
 use crate::load::DirectoryLoaded;
 use crate::music::engine::AudioHandle;
 use crate::music::proximity::{Listener, NodePoint};
-use crate::music::score::voice_message;
-use crate::music::{ModeProfile, MusicAccent, MusicTheme, VoiceMixer, full_code};
+use crate::music::score::{arp_message, base_filter_message, voice_message};
+use crate::music::{ArpState, ModeProfile, MusicAccent, MusicTheme, VoiceMixer, full_code};
 use crate::state::{InteractionMode, OrbitCameraResource};
 use bevy::prelude::*;
+use std::f32::consts::TAU;
 use std::fmt::Write as _;
 
 pub struct MusicPlugin;
@@ -32,6 +33,8 @@ pub struct MusicState {
     pub theme: Option<MusicTheme>,
     pub profile: ModeProfile,
     pub mixer: VoiceMixer,
+    /// The evolving melody layer.
+    pub arp: ArpState,
     /// The current directory's entries, as musical points on the ground plane.
     pub nodes: Vec<NodePoint>,
     /// Reused buffer for the per-frame `send_msg` payload.
@@ -54,6 +57,7 @@ impl MusicState {
             theme: None,
             profile: ModeProfile::Calm,
             mixer: VoiceMixer::new(),
+            arp: ArpState::new(),
             nodes: Vec::new(),
             params: String::new(),
             last_params: String::new(),
@@ -118,6 +122,7 @@ fn sync_profile_with_mode(mode: Res<InteractionMode>, mut music: ResMut<MusicSta
     }
     music.profile = profile;
     music.mixer.clear();
+    music.arp.reset();
     if let Some(theme) = &music.theme {
         music
             .handle
@@ -154,6 +159,7 @@ fn rebuild_for_directory(
             .collect();
 
         music.mixer.clear();
+        music.arp.reset();
         music
             .handle
             .set_code(&full_code(&theme, profile), theme.bpm(profile));
@@ -193,6 +199,7 @@ fn update_proximity(
         theme,
         profile,
         mixer,
+        arp,
         nodes,
         params,
         last_params,
@@ -202,10 +209,12 @@ fn update_proximity(
         return;
     };
 
-    let targets = mixer.update(listener, nodes, theme, *profile, time.delta_secs());
-    if targets.is_empty() {
-        return;
-    }
+    let dt = time.delta_secs();
+    let targets = mixer.update(listener, nodes, theme, *profile, dt);
+
+    // The evolving melody plus a slow filter sweep on the base voices.
+    let arp_voice = arp.update(dt, theme, *profile);
+    let sweep = 0.5 + 0.5 * (time.elapsed_secs() * profile.sweep_rate() * TAU).sin();
 
     params.clear();
     for target in targets {
@@ -221,6 +230,19 @@ fn update_proximity(
             )
         );
     }
+    // A new note opens the filter briefly, so the attack is brighter than the
+    // tail.
+    let arp_cutoff = if arp_voice.triggered {
+        (arp_voice.cutoff * 1.35).min(12_000.0)
+    } else {
+        arp_voice.cutoff
+    };
+    let _ = write!(
+        params,
+        "{}{}",
+        arp_message(arp_voice.freq, arp_cutoff, arp_voice.gain, arp_voice.pan),
+        base_filter_message(theme, *profile, sweep)
+    );
     if params != last_params {
         handle.set_voice_params(params);
         last_params.clear();
