@@ -69,7 +69,7 @@ pub enum RunPhase {
     Ready,
     Running,
     Crashed,
-    /// A folder or parent portal has been requested and we are waiting for the load result.
+    /// A folder, parent portal, or markdown file has been requested.
     EnteringDir,
 }
 
@@ -86,7 +86,9 @@ pub enum StepOutcome {
     Moved,
     Crashed(CrashReason),
     EnteringDir(usize),
+    EnteringDocument(usize),
     GoToParent,
+    CloseDocument,
 }
 
 /// What a destination cell contains for collision purposes.
@@ -95,15 +97,18 @@ pub enum CellContent {
     Empty,
     File(usize),
     Dir(usize),
+    Markdown(usize),
     Trail,
     Wall,
     ParentPortal,
+    ClosePortal,
 }
 
 /// Which external navigation request a run is waiting on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryRequest {
     Directory(usize),
+    Document(usize),
     Parent,
 }
 
@@ -253,8 +258,6 @@ pub struct CityStructure {
     pub pulse_phase: u8,
 }
 
-/// Rectangular playable arena on the grid.
-///
 /// Grows an inclusive cell range to `span` cells, keeping its contents centered.
 /// Ranges already that long are left alone.
 fn expand_axis(min: i32, max: i32, span: i32) -> (i32, i32) {
@@ -266,6 +269,15 @@ fn expand_axis(min: i32, max: i32, span: i32) -> (i32, i32) {
     (min - before, max + (extra - before))
 }
 
+/// Directory cities and markdown pages share bounds and portals, but the
+/// kind decides which generator and palette may run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ArenaKind {
+    #[default]
+    Directory,
+    Document,
+}
+
 /// `min`/`max` are inclusive cell coordinates inside the arena. Everything one
 /// step beyond those bounds is wall territory, including the parent gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,6 +285,7 @@ pub struct Arena {
     pub min: (i32, i32),
     pub max: (i32, i32),
     pub parent_portal: Option<ParentPortal>,
+    pub kind: ArenaKind,
     /// Connected arteries, plazas, and the perimeter boulevard.
     pub roads: BTreeSet<(i32, i32)>,
     /// Lethal footprints occupied by `structures`.
@@ -327,6 +340,7 @@ impl Arena {
             min,
             max,
             parent_portal: parent_gate.map(|placement| ParentPortal::place(min, max, placement)),
+            kind: ArenaKind::Directory,
             roads: BTreeSet::new(),
             street_walls: BTreeSet::new(),
             structures: Vec::new(),
@@ -521,7 +535,7 @@ impl Arena {
         approaches.get(approaches.len() / 2).copied()
     }
 
-    fn parent_gate_approaches(&self) -> Vec<(i32, i32)> {
+    pub fn parent_gate_approaches(&self) -> Vec<(i32, i32)> {
         let Some(portal) = self.parent_portal else {
             return Vec::new();
         };
@@ -575,7 +589,7 @@ impl Arena {
 
 /// Stable FNV-1a seed. Unlike `DefaultHasher`, this is deliberately fixed so a
 /// directory keeps the same streets across application and Rust releases.
-fn stable_path_seed(path: &Path) -> u64 {
+pub(crate) fn stable_path_seed(path: &Path) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in path.to_string_lossy().as_bytes() {
         hash ^= u64::from(*byte);
@@ -779,6 +793,11 @@ impl LightcycleSim {
                     self.pending_request = Some(EntryRequest::Directory(index));
                     return StepOutcome::EnteringDir(index);
                 }
+                CellContent::Markdown(index) => {
+                    self.phase = RunPhase::EnteringDir;
+                    self.pending_request = Some(EntryRequest::Document(index));
+                    return StepOutcome::EnteringDocument(index);
+                }
                 CellContent::File(_) => {
                     return self.crash(CrashReason::File);
                 }
@@ -792,6 +811,11 @@ impl LightcycleSim {
                     self.phase = RunPhase::EnteringDir;
                     self.pending_request = Some(EntryRequest::Parent);
                     return StepOutcome::GoToParent;
+                }
+                CellContent::ClosePortal => {
+                    self.phase = RunPhase::EnteringDir;
+                    self.pending_request = Some(EntryRequest::Parent);
+                    return StepOutcome::CloseDocument;
                 }
             }
         }
@@ -814,12 +838,17 @@ pub fn classify_next_content(
     sim: &LightcycleSim,
     cells: &HashMap<(i32, i32), usize>,
     is_dir: impl Fn(usize) -> bool,
+    is_markdown: impl Fn(usize) -> bool,
 ) -> CellContent {
     if arena
         .parent_portal
         .is_some_and(|portal| portal.contains(cell))
     {
-        return CellContent::ParentPortal;
+        return if arena.kind == ArenaKind::Document {
+            CellContent::ClosePortal
+        } else {
+            CellContent::ParentPortal
+        };
     }
     if !arena.contains(cell) {
         return CellContent::Wall;
@@ -833,6 +862,8 @@ pub fn classify_next_content(
     if let Some(&index) = cells.get(&cell) {
         return if is_dir(index) {
             CellContent::Dir(index)
+        } else if is_markdown(index) {
+            CellContent::Markdown(index)
         } else {
             CellContent::File(index)
         };
@@ -843,8 +874,8 @@ pub fn classify_next_content(
 #[cfg(test)]
 mod tests {
     use super::{
-        Arena, CellContent, CityTheme, CrashReason, EntryRequest, GatePlacement, Heading,
-        LightcycleSim, RunPhase, StepOutcome, Turn, Wall, classify_next_content,
+        Arena, ArenaKind, CellContent, CityTheme, CrashReason, EntryRequest, GatePlacement,
+        Heading, LightcycleSim, RunPhase, StepOutcome, Turn, Wall, classify_next_content,
     };
     use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
     use std::path::PathBuf;
@@ -900,6 +931,7 @@ mod tests {
                     min: (-half, -half),
                     max: (half, half),
                     parent_portal: None,
+                    kind: ArenaKind::Directory,
                     roads: BTreeSet::new(),
                     street_walls: BTreeSet::new(),
                     structures: Vec::new(),
@@ -912,9 +944,14 @@ mod tests {
 
         fn classify(&self) -> impl FnMut((i32, i32), &LightcycleSim) -> CellContent + '_ {
             move |cell, sim| {
-                classify_next_content(cell, &self.arena, sim, &self.cells, |index| {
-                    self.is_dir[index]
-                })
+                classify_next_content(
+                    cell,
+                    &self.arena,
+                    sim,
+                    &self.cells,
+                    |index| self.is_dir[index],
+                    |_| false,
+                )
             }
         }
     }
@@ -1030,6 +1067,18 @@ mod tests {
         assert_eq!(outcome, StepOutcome::EnteringDir(0));
         assert_eq!(sim.phase, RunPhase::EnteringDir);
         assert_eq!(sim.pending_request, Some(EntryRequest::Directory(0)));
+    }
+
+    #[test]
+    fn next_cell_is_markdown_requests_document_not_crash() {
+        let layout = TestLayout::new(&[(1, 0)], &[], None);
+        let mut sim = LightcycleSim::start((0, 0), Heading::PosX);
+        let outcome = sim.advance(1.0, |cell, sim| {
+            classify_next_content(cell, &layout.arena, sim, &layout.cells, |_| false, |_| true)
+        });
+        assert_eq!(outcome, StepOutcome::EnteringDocument(0));
+        assert_eq!(sim.pending_request, Some(EntryRequest::Document(0)));
+        assert_eq!(sim.phase, RunPhase::EnteringDir);
     }
 
     #[test]
@@ -1453,7 +1502,7 @@ mod tests {
         let wall = *arena.street_walls.iter().next().unwrap();
         let sim = LightcycleSim::start(arena.center(), Heading::PosX);
         assert_eq!(
-            classify_next_content(wall, &arena, &sim, &HashMap::new(), |_| false),
+            classify_next_content(wall, &arena, &sim, &HashMap::new(), |_| false, |_| false),
             CellContent::Wall
         );
     }
@@ -1614,6 +1663,7 @@ mod tests {
                 min: (-10, -10),
                 max: (10, 10),
                 parent_portal: None,
+                kind: ArenaKind::Directory,
                 roads: BTreeSet::new(),
                 street_walls: BTreeSet::new(),
                 structures: Vec::new(),

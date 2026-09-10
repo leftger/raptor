@@ -1,10 +1,15 @@
 use crate::config;
+use crate::document::{
+    DocumentLayout, DocumentLoadFailed, DocumentLoadState, DocumentLoaded, DocumentRequested,
+    build_document_arena_from_parse,
+    parse::{ParseLimits, parse_markdown_bytes},
+};
 use crate::filesystem::FileNode;
 use crate::lightcycle::logic::{
-    Arena, CityStructure, CityStructureKind, CityTheme, CrashReason, GatePlacement, Heading,
-    LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall, classify_next_content,
+    Arena, ArenaKind, CityStructure, CityStructureKind, CityTheme, CrashReason, GatePlacement,
+    Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall, classify_next_content,
 };
-use crate::lightcycle::{ActiveRun, LightcycleState};
+use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
 use crate::state::{
     DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
@@ -22,21 +27,30 @@ impl Plugin for LightcyclePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InteractionMode>()
             .init_resource::<LightcycleState>()
+            .add_message::<DocumentRequested>()
+            .add_message::<DocumentLoaded>()
+            .add_message::<DocumentLoadFailed>()
             .add_systems(Startup, setup_lightcycle_assets)
             .add_systems(
                 Update,
                 (
                     toggle_mode,
                     reset_on_directory_loaded,
+                    start_document_loads,
+                    poll_document_loads,
+                    reset_on_document_loaded,
                     apply_load_failure,
+                    apply_document_load_failure,
                     sync_directory_scene_visibility,
                     read_lightcycle_input.run_if(in_lightcycle_mode),
                     step_lightcycle.run_if(in_lightcycle_mode),
+                    restore_directory_arena.run_if(in_lightcycle_mode),
                     spawn_crash_effect.run_if(in_lightcycle_mode),
                     update_crash_effects.run_if(in_lightcycle_mode),
                     update_trail_mesh.run_if(in_lightcycle_mode),
                     animate_parent_gate.run_if(in_lightcycle_mode),
                     animate_city_beacons.run_if(in_lightcycle_mode),
+                    update_document_focus.run_if(in_lightcycle_mode),
                     update_cycle_transform.run_if(in_lightcycle_mode),
                     update_chase_camera.run_if(in_lightcycle_mode),
                 )
@@ -60,6 +74,14 @@ struct LightcycleAssets {
     portal_bar_material: Handle<StandardMaterial>,
     dir_tower_material: Handle<StandardMaterial>,
     file_tower_material: Handle<StandardMaterial>,
+    markdown_tower_material: Handle<StandardMaterial>,
+    document_floor_material: Handle<StandardMaterial>,
+    document_rule_material: Handle<StandardMaterial>,
+    document_margin_material: Handle<StandardMaterial>,
+    document_ink_material: Handle<StandardMaterial>,
+    document_heading_material: Handle<StandardMaterial>,
+    document_folio_material: Handle<StandardMaterial>,
+    document_focus_material: Handle<StandardMaterial>,
     crash_material: Handle<StandardMaterial>,
 }
 
@@ -93,6 +115,9 @@ struct CityBeacon {
     base_height: f32,
     phase: f32,
 }
+
+#[derive(Component)]
+struct DocumentFocusMarker;
 
 /// Direction the chase camera is currently following.
 ///
@@ -240,6 +265,23 @@ fn setup_lightcycle_assets(
         }),
         dir_tower_material: materials.add(unlit_material(config::DIR_COLOR)),
         file_tower_material: materials.add(unlit_material(config::FILE_COLOR)),
+        markdown_tower_material: materials.add(unlit_material(config::MARKDOWN_TOWER_COLOR)),
+        document_floor_material: materials.add(unlit_material(config::DOCUMENT_FLOOR_COLOR)),
+        document_rule_material: materials.add(unlit_material(config::DOCUMENT_RULE_COLOR)),
+        document_margin_material: materials.add(unlit_material(config::DOCUMENT_MARGIN_COLOR)),
+        document_ink_material: materials.add(neon_material(
+            config::DOCUMENT_INK_COLOR,
+            LinearRgba::from(config::DOCUMENT_INK_EMISSIVE),
+        )),
+        document_heading_material: materials.add(neon_material(
+            config::DOCUMENT_HEADING_COLOR,
+            LinearRgba::rgb(0.55, 0.28, 0.08),
+        )),
+        document_folio_material: materials.add(unlit_material(config::DOCUMENT_FOLIO_COLOR)),
+        document_focus_material: materials.add(neon_material(
+            config::DOCUMENT_FOCUS_COLOR,
+            LinearRgba::rgb(2.4, 0.9, 0.1),
+        )),
         crash_material: materials.add(unlit_material(Color::srgb(1.0, 0.45, 0.1))),
     });
 }
@@ -297,8 +339,29 @@ fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
     ActiveRun {
         sim,
         arena,
-        nodes,
-        cells,
+        environment: RunEnvironment::Directory { nodes, cells },
+        crash_label: None,
+        entering_label: None,
+    }
+}
+
+fn build_document_run(path: &Path, bytes: &[u8]) -> ActiveRun {
+    let parsed = parse_markdown_bytes(bytes, ParseLimits::default(), false);
+    let (arena, layout) = build_document_arena_from_parse(path, parsed);
+    let sim = spawn_sim(&arena, &HashMap::new());
+    ActiveRun {
+        sim,
+        arena,
+        environment: RunEnvironment::Document {
+            path: path.to_path_buf(),
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("document")
+                .to_string(),
+            layout,
+            focused_block: None,
+        },
         crash_label: None,
         entering_label: None,
     }
@@ -342,6 +405,7 @@ fn toggle_mode(
     state.clock = 0.0;
     state.run = None;
     state.crash_fx = None;
+    state.restore_directory = false;
 
     if *mode == InteractionMode::Lightcycle {
         *mode = InteractionMode::Explorer;
@@ -389,10 +453,19 @@ fn spawn_run_entities(
     ));
 
     spawn_city_floor(commands, assets, meshes, &run.arena);
-    spawn_road_markings(commands, assets, meshes, &run.arena);
-    spawn_city_structures(commands, assets, meshes, &run.arena);
-    spawn_arena_walls(commands, assets, &run.arena);
-    spawn_towers(commands, assets, meshes, run);
+    match &run.environment {
+        RunEnvironment::Directory { .. } => {
+            spawn_road_markings(commands, assets, meshes, &run.arena);
+            spawn_city_structures(commands, assets, meshes, &run.arena);
+            spawn_arena_walls(commands, assets, &run.arena);
+            spawn_towers(commands, assets, meshes, run);
+        }
+        RunEnvironment::Document { layout, .. } => {
+            spawn_document_page(commands, assets, meshes, &run.arena, layout);
+            spawn_arena_walls(commands, assets, &run.arena);
+            spawn_document_focus_marker(commands, assets, run);
+        }
+    }
     spawn_trail_ribbon(commands, assets, meshes, run);
 }
 
@@ -427,10 +500,15 @@ fn spawn_city_floor(
     let mesh = Mesh::from(Cuboid::default()).transformed_by(
         Transform::from_translation(center).with_scale(Vec3::new(span_x, 0.12, span_z)),
     );
+    let material = if arena.kind == ArenaKind::Document {
+        assets.document_floor_material.clone()
+    } else {
+        assets.city_floor_material.clone()
+    };
     commands.spawn((
         LightcycleSceneRoot,
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(assets.city_floor_material.clone()),
+        MeshMaterial3d(material),
         Pickable::IGNORE,
     ));
 }
@@ -638,24 +716,347 @@ fn city_base_trim_mesh(structure: &CityStructure) -> Mesh {
     )
 }
 
+fn spawn_document_page(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+    layout: &DocumentLayout,
+) {
+    spawn_document_rules(commands, assets, meshes, arena);
+    spawn_document_walls(commands, assets, meshes, arena);
+    spawn_document_arches(commands, assets, meshes, layout);
+    spawn_document_glyphs(commands, assets, meshes, layout);
+}
+
+fn spawn_document_rules(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+) {
+    let Some(mesh) = document_rule_mesh(arena) else {
+        return;
+    };
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(assets.document_rule_material.clone()),
+        Pickable::IGNORE,
+    ));
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(meshes.add(document_margin_mesh(arena))),
+        MeshMaterial3d(assets.document_margin_material.clone()),
+        Pickable::IGNORE,
+    ));
+}
+
+fn document_rule_mesh(arena: &Arena) -> Option<Mesh> {
+    let spacing = config::GRID_SPACING;
+    let mut merged: Option<Mesh> = None;
+    let mut push = |mesh: Mesh| {
+        if let Some(existing) = &mut merged {
+            existing
+                .merge(&mesh)
+                .expect("document rule meshes must be merge-compatible");
+        } else {
+            merged = Some(mesh);
+        }
+    };
+
+    for z in arena.min.1..=arena.max.1 {
+        let center = Vec3::new(
+            (arena.min.0 + arena.max.0) as f32 * spacing * 0.5,
+            0.02,
+            z as f32 * spacing,
+        );
+        let width = (arena.max.0 - arena.min.0 + 1) as f32 * spacing;
+        push(Mesh::from(Cuboid::default()).transformed_by(
+            Transform::from_translation(center).with_scale(Vec3::new(width, 0.03, 0.06)),
+        ));
+    }
+    merged
+}
+
+fn document_margin_mesh(arena: &Arena) -> Mesh {
+    let spacing = config::GRID_SPACING;
+    let margin_x = (arena.min.0 as f32 - 0.15) * spacing;
+    let center = Vec3::new(
+        margin_x,
+        0.03,
+        (arena.min.1 + arena.max.1) as f32 * spacing * 0.5,
+    );
+    let depth = (arena.max.1 - arena.min.1 + 1) as f32 * spacing;
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(center).with_scale(Vec3::new(0.08, 0.04, depth)),
+    )
+}
+
+fn spawn_document_walls(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+) {
+    let cells: Vec<_> = arena.street_walls.iter().copied().collect();
+    for chunk in cells.chunks(config::MESH_CHUNK_SIZE) {
+        let mut chunk = chunk.iter();
+        let Some(&first) = chunk.next() else {
+            continue;
+        };
+        let mut mesh = document_wall_mesh(first);
+        for &cell in chunk {
+            mesh.merge(&document_wall_mesh(cell))
+                .expect("document wall meshes must be merge-compatible");
+        }
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.document_ink_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn document_wall_mesh(cell: (i32, i32)) -> Mesh {
+    let height = 1.35;
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(config::world_position(cell.0, cell.1, height))
+            .with_scale(Vec3::new(1.7, height, 0.55)),
+    )
+}
+
+fn spawn_document_arches(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    layout: &DocumentLayout,
+) {
+    let headings: Vec<_> = layout
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.kind, crate::document::DocBlockKind::Heading(_)))
+        .collect();
+    for chunk in headings.chunks(config::MESH_CHUNK_SIZE) {
+        let mut chunk = chunk.iter();
+        let Some(first) = chunk.next() else {
+            continue;
+        };
+        let mut mesh = document_arch_mesh(first);
+        for block in chunk {
+            mesh.merge(&document_arch_mesh(block))
+                .expect("document arch meshes must be merge-compatible");
+        }
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.document_heading_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn document_arch_mesh(block: &crate::document::PlacedBlock) -> Mesh {
+    let (x, z) = block.landmark;
+    let origin = config::ground_position(x, z);
+    let (span, depth) = if block.along_x {
+        (2.4, 0.28)
+    } else {
+        (0.28, 2.4)
+    };
+    let left = Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(origin + Vec3::new(-span * 0.35, 1.1, -depth * 0.35))
+            .with_scale(Vec3::new(0.22, 2.2, 0.22)),
+    );
+    let mut mesh = left;
+    mesh.merge(
+        &Mesh::from(Cuboid::default()).transformed_by(
+            Transform::from_translation(origin + Vec3::new(span * 0.35, 1.1, depth * 0.35))
+                .with_scale(Vec3::new(0.22, 2.2, 0.22)),
+        ),
+    )
+    .expect("arch posts must merge");
+    mesh.merge(&Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(origin + Vec3::Y * 2.25).with_scale(Vec3::new(
+            span,
+            0.22,
+            depth.max(0.4),
+        )),
+    ))
+    .expect("arch lintel must merge");
+    mesh
+}
+
+fn spawn_document_glyphs(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    layout: &DocumentLayout,
+) {
+    let mut remaining = config::DOCUMENT_MAX_GLYPHS;
+    let mut heading_mesh: Option<Mesh> = None;
+    let mut plaque_mesh: Option<Mesh> = None;
+    for block in &layout.blocks {
+        if remaining == 0 {
+            break;
+        }
+        let (mesh, used) = document_glyph_line_mesh(block, remaining);
+        remaining = remaining.saturating_sub(used);
+        if used == 0 {
+            continue;
+        }
+        let target = if matches!(block.kind, crate::document::DocBlockKind::Heading(_)) {
+            &mut heading_mesh
+        } else {
+            &mut plaque_mesh
+        };
+        if let Some(existing) = target {
+            existing
+                .merge(&mesh)
+                .expect("glyph meshes must be merge-compatible");
+        } else {
+            *target = Some(mesh);
+        }
+    }
+
+    if let Some(mesh) = heading_mesh {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.document_heading_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+    if let Some(mesh) = plaque_mesh {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.document_ink_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn document_glyph_line_mesh(
+    block: &crate::document::PlacedBlock,
+    remaining: usize,
+) -> (Mesh, usize) {
+    let origin = config::ground_position(block.landmark.0, block.landmark.1);
+    let heading = matches!(block.kind, crate::document::DocBlockKind::Heading(_));
+    let pixel = if heading { 0.09 } else { 0.055 };
+    let height = if heading { 2.55 } else { 0.85 };
+    let forward = if block.along_x { Vec3::X } else { Vec3::Z };
+    let max_chars = remaining.min(if heading {
+        config::DOCUMENT_HEADING_GLYPHS
+    } else {
+        config::DOCUMENT_PARAGRAPH_GLYPHS
+    });
+    let chars: Vec<char> = block.preview.chars().take(max_chars).collect();
+    let mut mesh: Option<Mesh> = None;
+    let mut used = 0usize;
+    for (index, ch) in chars.iter().enumerate() {
+        let glyph = glyph_pixels(*ch);
+        used += 1;
+        let offset = forward * ((index as f32 - (chars.len() as f32 - 1.0) * 0.5) * pixel * 9.0);
+        for (row, row_bits) in glyph.iter().enumerate() {
+            for col in 0..8 {
+                if row_bits & (1 << col) == 0 {
+                    continue;
+                }
+                let local = Vec3::new(
+                    if block.along_x {
+                        (7 - col) as f32 * pixel
+                    } else {
+                        0.0
+                    },
+                    (7 - row) as f32 * pixel,
+                    if block.along_x {
+                        0.0
+                    } else {
+                        (7 - col) as f32 * pixel
+                    },
+                );
+                let cube = Mesh::from(Cuboid::default()).transformed_by(
+                    Transform::from_translation(origin + Vec3::Y * height + offset + local)
+                        .with_scale(Vec3::splat(pixel * 0.85)),
+                );
+                if let Some(existing) = &mut mesh {
+                    existing
+                        .merge(&cube)
+                        .expect("glyph pixels must be merge-compatible");
+                } else {
+                    mesh = Some(cube);
+                }
+            }
+        }
+    }
+    (
+        mesh.unwrap_or_else(|| collapsed_document_glyph(origin)),
+        used,
+    )
+}
+
+fn collapsed_document_glyph(origin: Vec3) -> Mesh {
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(origin + Vec3::Y * 0.2).with_scale(Vec3::splat(0.08)),
+    )
+}
+
+fn glyph_pixels(character: char) -> [u8; 8] {
+    if (character as u32) < 128 {
+        font8x8::legacy::BASIC_LEGACY[character as usize]
+    } else {
+        // Unsupported glyphs keep a diamond placeholder; the folio panel shows
+        // the original Unicode.
+        [
+            0b00011000, 0b00111100, 0b01111110, 0b11111111, 0b01111110, 0b00111100, 0b00011000,
+            0b00000000,
+        ]
+    }
+}
+
+fn spawn_document_focus_marker(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    run: &ActiveRun,
+) {
+    let pose = cycle_cell_pose(&run.sim);
+    commands.spawn((
+        LightcycleSceneRoot,
+        DocumentFocusMarker,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.document_focus_material.clone()),
+        Transform::from_translation(pose_world_position(&pose) + Vec3::Y * 0.08)
+            .with_scale(Vec3::new(1.4, 0.08, 1.4)),
+        Pickable::IGNORE,
+    ));
+}
+
 fn spawn_towers(
     commands: &mut Commands,
     assets: &LightcycleAssets,
     meshes: &mut Assets<Mesh>,
     run: &ActiveRun,
 ) {
-    for is_dir in [true, false] {
-        let material = if is_dir {
-            assets.dir_tower_material.clone()
-        } else {
-            assets.file_tower_material.clone()
-        };
-        let matching: Vec<&FileNode> = run
-            .nodes
-            .iter()
-            .filter(|node| node.is_dir == is_dir)
-            .collect();
-
+    let RunEnvironment::Directory { nodes, .. } = &run.environment else {
+        return;
+    };
+    for (filter, material) in [
+        (
+            (|node: &FileNode| node.is_dir) as fn(&FileNode) -> bool,
+            assets.dir_tower_material.clone(),
+        ),
+        (
+            |node: &FileNode| !node.is_dir && node.is_markdown(),
+            assets.markdown_tower_material.clone(),
+        ),
+        (
+            |node: &FileNode| !node.is_dir && !node.is_markdown(),
+            assets.file_tower_material.clone(),
+        ),
+    ] {
+        let matching: Vec<&FileNode> = nodes.iter().filter(|node| filter(node)).collect();
         for chunk in matching.chunks(config::MESH_CHUNK_SIZE) {
             let Some(mesh) = build_tower_chunk_mesh(chunk) else {
                 continue;
@@ -815,8 +1216,11 @@ fn spawn_wall_rail(commands: &mut Commands, assets: &LightcycleAssets, arena: &A
 
     let trim_height = config::LIGHTCYCLE_CITY_BASE_TRIM_HEIGHT;
     let trim_thickness = thickness + config::LIGHTCYCLE_CITY_BASE_TRIM_OVERHANG;
-    let accent =
-        assets.city_accent_materials[city_theme_index(arena.city_theme)][CITY_TRIM_ACCENT].clone();
+    let accent = if arena.kind == ArenaKind::Document {
+        assets.document_folio_material.clone()
+    } else {
+        assets.city_accent_materials[city_theme_index(arena.city_theme)][CITY_TRIM_ACCENT].clone()
+    };
 
     for (start, end) in rail_segments(min, max, gap) {
         let center = (start + end) * 0.5;
@@ -898,6 +1302,17 @@ fn spawn_parent_gate(commands: &mut Commands, assets: &LightcycleAssets, arena: 
         ),
     };
 
+    let frame_material = if arena.kind == ArenaKind::Document {
+        assets.document_folio_material.clone()
+    } else {
+        assets.portal_material.clone()
+    };
+    let bar_material = if arena.kind == ArenaKind::Document {
+        assets.document_focus_material.clone()
+    } else {
+        assets.portal_bar_material.clone()
+    };
+
     let half = opening * 0.5;
     let mut gate = commands.spawn((
         LightcycleSceneRoot,
@@ -910,7 +1325,7 @@ fn spawn_parent_gate(commands: &mut Commands, assets: &LightcycleAssets, arena: 
             frames.spawn((
                 GateFrame,
                 Mesh3d(assets.unit_cube.clone()),
-                MeshMaterial3d(assets.portal_material.clone()),
+                MeshMaterial3d(frame_material.clone()),
                 Transform::from_translation(translation).with_scale(scale),
                 Pickable::IGNORE,
             ));
@@ -939,7 +1354,7 @@ fn spawn_parent_gate(commands: &mut Commands, assets: &LightcycleAssets, arena: 
                     travel: height,
                 },
                 Mesh3d(assets.unit_cube.clone()),
-                MeshMaterial3d(assets.portal_bar_material.clone()),
+                MeshMaterial3d(bar_material.clone()),
                 Transform::from_scale(Vec3::new(
                     opening - frame,
                     config::LIGHTCYCLE_PORTAL_BAR_HEIGHT,
@@ -968,14 +1383,28 @@ fn gate_bar_height(bar: &GateScanBar, elapsed: f32) -> f32 {
 fn animate_parent_gate(
     time: Res<Time>,
     assets: Res<LightcycleAssets>,
+    state: Res<LightcycleState>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut bars: Query<(&GateScanBar, &mut Transform)>,
 ) {
     let elapsed = time.elapsed_secs();
+    let document = state.run.as_ref().is_some_and(ActiveRun::is_document);
+    let (handle, dim, bright) = if document {
+        (
+            &assets.document_folio_material,
+            config::DOCUMENT_FOLIO_DIM_COLOR,
+            config::DOCUMENT_FOLIO_COLOR,
+        )
+    } else {
+        (
+            &assets.portal_material,
+            config::LIGHTCYCLE_PORTAL_DIM_COLOR,
+            config::LIGHTCYCLE_PORTAL_COLOR,
+        )
+    };
 
-    if let Some(mut material) = materials.get_mut(&assets.portal_material) {
-        material.base_color = config::LIGHTCYCLE_PORTAL_DIM_COLOR
-            .mix(&config::LIGHTCYCLE_PORTAL_COLOR, gate_pulse(elapsed));
+    if let Some(mut material) = materials.get_mut(handle) {
+        material.base_color = dim.mix(&bright, gate_pulse(elapsed));
     }
 
     for (bar, mut transform) in &mut bars {
@@ -990,6 +1419,31 @@ fn animate_city_beacons(time: Res<Time>, mut beacons: Query<(&CityBeacon, &mut T
         transform.translation.y = beacon.base_height + wave * 0.18;
         transform.scale = Vec3::splat(0.2 + (wave * 0.5 + 0.5) * 0.08);
         transform.rotate_y(0.018);
+    }
+}
+
+fn update_document_focus(
+    mut state: ResMut<LightcycleState>,
+    mut marker: Query<&mut Transform, With<DocumentFocusMarker>>,
+) {
+    let Some(run) = state.run.as_mut() else {
+        return;
+    };
+    let RunEnvironment::Document {
+        layout,
+        focused_block,
+        ..
+    } = &mut run.environment
+    else {
+        return;
+    };
+    *focused_block = layout.focused_block(run.sim.cell);
+    let Some(index) = *focused_block else {
+        return;
+    };
+    let landmark = layout.blocks[index].landmark;
+    if let Ok(mut transform) = marker.single_mut() {
+        transform.translation = config::ground_position(landmark.0, landmark.1) + Vec3::Y * 0.08;
     }
 }
 
@@ -1015,6 +1469,68 @@ fn reset_on_directory_loaded(
 
         state.clock = 0.0;
         state.crash_fx = None;
+        state.restore_directory = false;
+        state.run = Some(run);
+    }
+}
+
+fn start_document_loads(
+    mut requests: MessageReader<DocumentRequested>,
+    mut documents: ResMut<DocumentLoadState>,
+) {
+    for request in requests.read() {
+        let generation = documents.next_generation();
+        documents.begin_load(generation, request.path.clone());
+    }
+}
+
+fn poll_document_loads(
+    mut documents: ResMut<DocumentLoadState>,
+    mut loaded: MessageWriter<DocumentLoaded>,
+    mut failed: MessageWriter<DocumentLoadFailed>,
+) {
+    while let Some(result) = documents.poll() {
+        if result.generation != documents.generation {
+            continue;
+        }
+        match result.result {
+            Ok(bytes) => {
+                loaded.write(DocumentLoaded {
+                    path: result.path,
+                    bytes,
+                });
+            }
+            Err(message) => {
+                failed.write(DocumentLoadFailed {
+                    path: result.path,
+                    message,
+                });
+            }
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn reset_on_document_loaded(
+    mut loaded: MessageReader<DocumentLoaded>,
+    mode: Res<InteractionMode>,
+    mut state: ResMut<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+    old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
+) {
+    if *mode != InteractionMode::Lightcycle {
+        return;
+    }
+
+    for event in loaded.read() {
+        despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
+        let run = build_document_run(&event.path, &event.bytes);
+        spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+        state.clock = 0.0;
+        state.crash_fx = None;
+        state.restore_directory = false;
         state.run = Some(run);
     }
 }
@@ -1027,12 +1543,29 @@ fn apply_load_failure(
         return;
     }
 
-    // Keep the cycle stopped at the folder/portal; DirectoryLoadState shows the error.
     if let Some(run) = state.run.as_mut()
         && run.sim.phase == RunPhase::EnteringDir
     {
         run.sim.pending_request = None;
         run.entering_label = None;
+        run.sim.phase = RunPhase::Running;
+    }
+}
+
+fn apply_document_load_failure(
+    mut failed: MessageReader<DocumentLoadFailed>,
+    mut documents: ResMut<DocumentLoadState>,
+    mut state: ResMut<LightcycleState>,
+) {
+    let Some(event) = failed.read().next() else {
+        return;
+    };
+    documents.last_error = Some(format!("{}: {}", event.path.display(), event.message));
+    if let Some(run) = state.run.as_mut() {
+        run.sim.pending_request = None;
+        run.entering_label = None;
+        run.sim.phase = RunPhase::Running;
+        run.crash_label = Some(format!("could not open {}", event.path.display()));
     }
 }
 
@@ -1062,20 +1595,49 @@ fn read_lightcycle_input(
         state.crash_fx = None;
     }
 
-    if go_up && let Some(parent) = navigator.0.begin_go_to_parent() {
-        run.sim.pause_for_directory_change();
-        run.entering_label = Some("parent directory".to_string());
-        run.crash_label = None;
-        requests.write(DirectoryRequested { path: parent });
+    if go_up {
+        if run.is_document() {
+            state.restore_directory = true;
+        } else if let Some(parent) = navigator.0.begin_go_to_parent() {
+            run.sim.pause_for_directory_change();
+            run.entering_label = Some("parent directory".to_string());
+            run.crash_label = None;
+            requests.write(DirectoryRequested { path: parent });
+        }
     }
 
     state.run = Some(run);
 }
 
 fn restart_run(run: &mut ActiveRun) {
-    run.sim = spawn_sim(&run.arena, &run.cells);
+    let cells = match &run.environment {
+        RunEnvironment::Directory { cells, .. } => cells.clone(),
+        RunEnvironment::Document { .. } => HashMap::new(),
+    };
+    run.sim = spawn_sim(&run.arena, &cells);
     run.crash_label = None;
     run.entering_label = None;
+}
+
+#[allow(clippy::type_complexity)]
+fn restore_directory_arena(
+    mut state: ResMut<LightcycleState>,
+    navigator: Res<NavigatorResource>,
+    assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+    old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
+) {
+    if !state.restore_directory {
+        return;
+    }
+    state.restore_directory = false;
+    despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
+    let run = build_active_run(&navigator.0.current_path, navigator.0.entries.clone());
+    spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+    state.clock = 0.0;
+    state.crash_fx = None;
+    state.run = Some(run);
 }
 
 fn step_lightcycle(
@@ -1083,6 +1645,7 @@ fn step_lightcycle(
     mut state: ResMut<LightcycleState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
+    mut documents: MessageWriter<DocumentRequested>,
 ) {
     let Some(mut run) = state.run.take() else {
         return;
@@ -1108,16 +1671,35 @@ fn step_lightcycle(
 
         let outcome = {
             let arena = &run.arena;
-            let cells = &run.cells;
-            let nodes = &run.nodes;
             let sim = &mut run.sim;
-
-            sim.advance(
-                fixed_step * config::LIGHTCYCLE_CELLS_PER_SEC,
-                |next, sim| {
-                    classify_next_content(next, arena, sim, cells, |index| nodes[index].is_dir)
-                },
-            )
+            match &run.environment {
+                RunEnvironment::Directory { nodes, cells } => sim.advance(
+                    fixed_step * config::LIGHTCYCLE_CELLS_PER_SEC,
+                    |next, sim| {
+                        classify_next_content(
+                            next,
+                            arena,
+                            sim,
+                            cells,
+                            |index| nodes[index].is_dir,
+                            |index| nodes[index].is_markdown(),
+                        )
+                    },
+                ),
+                RunEnvironment::Document { .. } => sim.advance(
+                    fixed_step * config::LIGHTCYCLE_CELLS_PER_SEC,
+                    |next, sim| {
+                        classify_next_content(
+                            next,
+                            arena,
+                            sim,
+                            &HashMap::new(),
+                            |_| false,
+                            |_| false,
+                        )
+                    },
+                ),
+            }
         };
 
         match outcome {
@@ -1126,14 +1708,21 @@ fn step_lightcycle(
                 let crash_cell = run.sim.next_cell();
                 let label = match reason {
                     CrashReason::File => run
-                        .cells
-                        .get(&crash_cell)
-                        .and_then(|&index| run.nodes.get(index))
-                        .map(|node| format!("file {}", node.name))
+                        .directory_cells()
+                        .and_then(|cells| cells.get(&crash_cell).copied())
+                        .and_then(|index| {
+                            run.directory_nodes()
+                                .and_then(|nodes| nodes.get(index))
+                                .map(|node| format!("file {}", node.name))
+                        })
                         .unwrap_or_else(|| "file".to_string()),
                     CrashReason::Trail => "your trail".to_string(),
                     CrashReason::Wall if run.arena.street_walls.contains(&crash_cell) => {
-                        "street barrier".to_string()
+                        if run.is_document() {
+                            "paragraph".to_string()
+                        } else {
+                            "street barrier".to_string()
+                        }
                     }
                     CrashReason::Wall => "arena wall".to_string(),
                 };
@@ -1141,15 +1730,32 @@ fn step_lightcycle(
                 run.entering_label = None;
             }
             StepOutcome::EnteringDir(index) => {
-                if let Some(node) = run.nodes.get(index) {
-                    let path = node.path.clone();
+                let details = run
+                    .directory_nodes()
+                    .and_then(|nodes| nodes.get(index))
+                    .map(|node| (node.name.clone(), node.path.clone()));
+                if let Some((name, path)) = details {
                     navigator.0.begin_navigate_to(&path);
-                    run.entering_label = Some(node.name.clone());
+                    run.entering_label = Some(name);
                     run.crash_label = None;
                     requests.write(DirectoryRequested { path });
                 } else {
                     run.sim.phase = RunPhase::Crashed;
                     run.crash_label = Some("missing directory".to_string());
+                }
+            }
+            StepOutcome::EnteringDocument(index) => {
+                let details = run
+                    .directory_nodes()
+                    .and_then(|nodes| nodes.get(index))
+                    .map(|node| (node.name.clone(), node.path.clone()));
+                if let Some((name, path)) = details {
+                    run.entering_label = Some(name);
+                    run.crash_label = None;
+                    documents.write(DocumentRequested { path });
+                } else {
+                    run.sim.phase = RunPhase::Running;
+                    run.crash_label = Some("missing document".to_string());
                 }
             }
             StepOutcome::GoToParent => {
@@ -1161,6 +1767,9 @@ fn step_lightcycle(
                     run.sim.phase = RunPhase::Crashed;
                     run.crash_label = Some("arena wall".to_string());
                 }
+            }
+            StepOutcome::CloseDocument => {
+                state.restore_directory = true;
             }
         }
 
@@ -2159,5 +2768,128 @@ mod tests {
 
         assert!(right_up.z > 0.1, "a right turn should bank toward +Z");
         assert!(left_up.z < -0.1, "a left turn should bank toward -Z");
+    }
+
+    fn heading_block(along_x: bool, preview: &str) -> crate::document::PlacedBlock {
+        crate::document::PlacedBlock {
+            kind: crate::document::DocBlockKind::Heading(1),
+            text: preview.to_string(),
+            preview: preview.to_string(),
+            spine: vec![(0, 0)],
+            walls: vec![],
+            landmark: (0, 0),
+            along_x,
+        }
+    }
+
+    #[test]
+    fn heading_glyph_meshes_are_non_empty() {
+        let (mesh, used) = super::document_glyph_line_mesh(&heading_block(true, "Title"), 24);
+        assert!(used > 0);
+        assert!(mesh.count_vertices() > 0);
+    }
+
+    #[test]
+    fn glyph_budget_caps_characters_per_line_and_overall() {
+        let long = "A".repeat(80);
+        let heading = heading_block(true, &long);
+        let (_, used) = super::document_glyph_line_mesh(&heading, config::DOCUMENT_MAX_GLYPHS);
+        assert_eq!(used, config::DOCUMENT_HEADING_GLYPHS);
+
+        let paragraph = crate::document::PlacedBlock {
+            kind: crate::document::DocBlockKind::Paragraph,
+            text: long.clone(),
+            preview: long,
+            spine: vec![(0, 0)],
+            walls: vec![],
+            landmark: (1, 0),
+            along_x: true,
+        };
+        let (_, used) = super::document_glyph_line_mesh(&paragraph, config::DOCUMENT_MAX_GLYPHS);
+        assert_eq!(used, config::DOCUMENT_PARAGRAPH_GLYPHS);
+
+        let leftover = super::document_glyph_line_mesh(&heading, 3).1;
+        assert_eq!(leftover, 3);
+    }
+
+    #[test]
+    fn heading_glyphs_follow_block_orientation() {
+        let along_x = super::document_glyph_line_mesh(&heading_block(true, "HEADING"), 24)
+            .0
+            .compute_aabb()
+            .unwrap();
+        let along_z = super::document_glyph_line_mesh(&heading_block(false, "HEADING"), 24)
+            .0
+            .compute_aabb()
+            .unwrap();
+        assert!(along_x.half_extents.x > along_x.half_extents.z);
+        assert!(along_z.half_extents.z > along_z.half_extents.x);
+    }
+
+    #[test]
+    fn page_rules_span_the_document_arena() {
+        let (arena, _) = crate::document::layout::build_document_arena(
+            std::path::Path::new("/docs/page.md"),
+            "# A\n\nB\n",
+        );
+        let aabb = super::document_rule_mesh(&arena)
+            .unwrap()
+            .compute_aabb()
+            .unwrap();
+        let spacing = config::GRID_SPACING;
+        assert!(aabb.half_extents.x * 2.0 >= (arena.max.0 - arena.min.0) as f32 * spacing * 0.9);
+        assert!(aabb.half_extents.z * 2.0 >= (arena.max.1 - arena.min.1) as f32 * spacing * 0.9);
+    }
+
+    #[test]
+    fn directory_and_document_palettes_and_portals_differ() {
+        assert_ne!(
+            config::DOCUMENT_FLOOR_COLOR,
+            config::LIGHTCYCLE_CITY_FLOOR_COLOR
+        );
+        assert_ne!(
+            config::DOCUMENT_FOLIO_COLOR,
+            config::LIGHTCYCLE_PORTAL_COLOR
+        );
+        assert_ne!(config::MARKDOWN_TOWER_COLOR, config::FILE_COLOR);
+        assert_ne!(
+            config::DOCUMENT_INK_COLOR,
+            config::LIGHTCYCLE_CITY_FLOOR_COLOR
+        );
+    }
+
+    #[test]
+    fn document_arenas_have_no_city_skyline() {
+        let run =
+            super::build_document_run(std::path::Path::new("/tmp/note.md"), b"# Hi\n\nHello\n");
+        assert_eq!(
+            run.arena.kind,
+            crate::lightcycle::logic::ArenaKind::Document
+        );
+        assert!(run.arena.structures.is_empty());
+        assert!(!run.arena.roads.is_empty());
+        assert!(run.is_document());
+    }
+
+    #[test]
+    fn closing_a_document_can_rebuild_the_containing_directory() {
+        let path = std::path::PathBuf::from("/tmp");
+        let nodes = vec![crate::filesystem::FileNode::new(
+            "note.md".into(),
+            path.join("note.md"),
+            false,
+            12,
+            0,
+        )];
+        let directory = super::build_active_run(&path, nodes.clone());
+        let document = super::build_document_run(&nodes[0].path, b"# Hi\n");
+        assert!(document.is_document());
+        assert!(!directory.is_document());
+        assert_eq!(
+            directory.arena.kind,
+            crate::lightcycle::logic::ArenaKind::Directory
+        );
+        let restored = super::build_active_run(&path, nodes);
+        assert_eq!(restored.arena, directory.arena);
     }
 }

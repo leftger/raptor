@@ -1,6 +1,7 @@
 use crate::config;
+use crate::document::DocumentLoadState;
 use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
-use crate::lightcycle::LightcycleState;
+use crate::lightcycle::{LightcycleState, RunEnvironment};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::state::{InteractionMode, NavigatorResource, SelectionState, UiNotice, UiSettings};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
@@ -22,6 +23,7 @@ impl Plugin for UiPlugin {
                     update_footer_text,
                     update_status_text,
                     update_selection_info,
+                    update_folio_panel,
                 ),
             );
     }
@@ -61,6 +63,12 @@ struct FooterSecondaryText;
 
 #[derive(Component)]
 struct UiChrome;
+
+#[derive(Component)]
+struct FolioPanel;
+
+#[derive(Component)]
+struct FolioPanelText;
 
 fn setup_ui(mut commands: Commands) {
     commands
@@ -230,6 +238,36 @@ fn setup_ui(mut commands: Commands) {
                         ..default()
                     },
                 ));
+
+            parent
+                .spawn((
+                    FolioPanel,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        right: px(20.0),
+                        top: px(config::HEADER_HEIGHT + 20.0),
+                        width: px(420.0),
+                        max_height: px(360.0),
+                        padding: UiRect::all(px(10.0)),
+                        overflow: Overflow::scroll_y(),
+                        display: Display::None,
+                        ..default()
+                    },
+                    BackgroundColor(config::UI_PANEL_COLOR),
+                ))
+                .with_child((
+                    FolioPanelText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: bevy::text::FontSize::Px(config::INFO_FONT_SIZE),
+                        ..default()
+                    },
+                    TextColor(config::TEXT_PRIMARY),
+                    Node {
+                        max_width: px(400.0),
+                        ..default()
+                    },
+                ));
         });
 }
 
@@ -364,8 +402,8 @@ fn update_footer_text(
         )
     } else {
         (
-            "LIGHTCYCLE  |  A/D: Turn  |  R: Restart  |  M: Explorer  |  Folders: enter  |  Files/trail/wall: crash  |  Gate: parent",
-            "MOUSE: disabled  |  u/-: Parent directory  |  Breadcrumb: jump to folder  |  Scroll zoom: disabled in this mode",
+            "LIGHTCYCLE  |  A/D: Turn  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  Files/trail/wall: crash  |  Gate: parent/close",
+            "MOUSE: disabled  |  u/-: Parent directory or close document  |  Breadcrumb: jump to folder  |  Approach text for the folio panel",
         )
     };
 
@@ -390,6 +428,7 @@ fn update_status_text(
     load_state: Res<DirectoryLoadState>,
     ui_notice: Res<UiNotice>,
     lightcycle: Res<LightcycleState>,
+    document_load: Res<DocumentLoadState>,
     diagnostics: Res<DiagnosticsStore>,
     mut status_text: Query<&mut Text, (With<StatusLineText>, Without<ChildrenStatsText>)>,
     mut children_stats: Query<&mut Text, (With<ChildrenStatsText>, Without<StatusLineText>)>,
@@ -410,6 +449,18 @@ fn update_status_text(
                 }
                 if let Some(entering) = &run.entering_label {
                     status = format!("{status} | ENTERING: {entering}");
+                }
+                if let RunEnvironment::Document { name, layout, .. } = &run.environment {
+                    status = format!("DOCUMENT: {name} | {status}");
+                    if layout.truncated {
+                        status = format!("{status} | truncated");
+                    }
+                    if let Some(heading) = layout.current_heading(run.sim.cell) {
+                        status = format!("{status} | {heading}");
+                    }
+                    if layout.lossy_utf8 {
+                        status = format!("{status} | lossy utf-8");
+                    }
                 }
                 status
             }
@@ -438,11 +489,14 @@ fn update_status_text(
         status = format!("FPS: {fps:>3.0} | {status}");
     }
 
-    if load_state.loading {
+    if load_state.loading || document_load.loading {
         status = format!("LOADING... | {status}");
     }
     if let Some(error) = &load_state.last_error {
         status = format!("ERROR: {error} | {status}");
+    }
+    if let Some(error) = &document_load.last_error {
+        status = format!("DOCUMENT ERROR: {error} | {status}");
     }
     if let Some(message) = &ui_notice.message {
         status = format!("ERROR: {message} | {status}");
@@ -517,6 +571,55 @@ fn update_selection_info(
         **text = content;
     }
     *visibility = Visibility::Visible;
+}
+
+fn update_folio_panel(
+    mode: Res<InteractionMode>,
+    lightcycle: Res<LightcycleState>,
+    mut panel: Query<&mut Node, With<FolioPanel>>,
+    mut text: Query<&mut Text, With<FolioPanelText>>,
+) {
+    let Ok(mut panel) = panel.single_mut() else {
+        return;
+    };
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+
+    let content = (*mode == InteractionMode::Lightcycle)
+        .then(|| lightcycle.run.as_ref())
+        .flatten()
+        .and_then(|run| match &run.environment {
+            RunEnvironment::Document {
+                layout,
+                focused_block,
+                name,
+                path,
+            } => focused_block.and_then(|index| {
+                layout.blocks.get(index).map(|block| {
+                    let kind = match block.kind {
+                        crate::document::DocBlockKind::Heading(level) => {
+                            format!("HEADING {level}")
+                        }
+                        crate::document::DocBlockKind::Paragraph => "PARAGRAPH".to_string(),
+                    };
+                    format!("{name}\n{}\n{kind}\n\n{}", path.display(), block.text)
+                })
+            }),
+            RunEnvironment::Directory { .. } => None,
+        });
+
+    if let Some(content) = content {
+        panel.display = Display::Flex;
+        if **text != content {
+            **text = content;
+        }
+    } else {
+        panel.display = Display::None;
+        if !text.is_empty() {
+            **text = String::new();
+        }
+    }
 }
 
 fn truncate_path_prefix(path: &str, max_length: usize) -> String {

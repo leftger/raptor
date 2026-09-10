@@ -91,8 +91,10 @@ the same directory grid.
 * `M` → Back to Explorer
 * `u` / `-` / breadcrumbs → Directory jumps (the run resets when the new folder loads)
 * Folders → Enter them and load the directory
-* Files, your own trail, and the arena walls → Crash
-* Pulsing gate → Go to the parent directory (inactive at `/`)
+* Markdown files → Enter a readable page arena
+* Other files, your own trail, and the arena walls → Crash
+* Pulsing gold gate → Go to the parent directory (inactive at `/`)
+* Folio gate (inside a document) → Close the file and restore the folder city
 
 The gate is a real opening in the wall, framed by two posts and a lintel that
 pulse while light bars sweep up through the gap, so it is easy to spot from
@@ -127,6 +129,25 @@ Every filesystem tower retains a clear 3×3 approach plaza, and the spawn area
 and full parent gate are joined to the road network. Static geometry is merged
 into material batches and architecture counts are capped, keeping large-folder
 cities navigable and renderable.
+
+Markdown files (`.md` / `.markdown`) are a fourth collision type: ride into
+their cream-colored tower to pause the city run and load a **page arena**. The
+navigator stays on the containing folder, so closing the document rebuilds that
+already-loaded city instead of scanning the disk again. Ordinary files still
+crash the cycle. Explorer still opens files with the system default app.
+
+A document arena is a connected reading spine, not a downtown skyline: warm
+page floor, ruled baselines, dark ink paragraph walls, heading arches with
+bitmap-glyph landmarks, and a folio-shaped close gate instead of the gold
+parent portal. Approach a heading or paragraph to highlight it and open a
+folio panel with the full Unicode text. Unsupported glyphs stay readable in
+that panel even when the 3D letters use a placeholder. Ride the folio gate or
+press `U` / `-` to close the file and return to the directory city. `R`
+restarts the page; `M` leaves Lightcycle entirely.
+
+Large files are capped (about 256 KiB / 256 blocks) so a huge markdown dump
+cannot stall a frame or spawn an unbounded mesh. Truncation is shown in the
+status line.
 
 ## Why Jurassic Park?
 
