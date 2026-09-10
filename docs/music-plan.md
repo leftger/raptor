@@ -259,9 +259,11 @@ Status: M0–M7 implemented.
      completes; rapid changes replace the incoming graph rather than stacking.
    - **Action flourish.** Action's bass and lead run through a tempo-synced
      `~pump` tremolo (`MUSIC_ACTION_PUMP_DEPTH` / `RATE`), so Lightcycle drives.
-   - **One-shot accents.** A shared `~accent` noise chain, silent until opened,
-     gets crash / transport / turn / portal hits via [`MusicAccent`], decayed on
-     the audio thread.
+   - **One-shot sound effects.** Each effect owns a dedicated chain
+     (`~sfx_crash` / `~sfx_turn` / `~sfx_beam` / `~sfx_portal`), silent until
+     triggered by a [`MusicSfx`] message. The audio thread advances the
+     envelope, so a crash thuds, a turn blips, and a beam rises rather than all
+     four sharing one noise decay. Retriggering an effect restarts it.
    - **Perf guards.** The control side reuses one parameter buffer and skips
      re-sending unchanged payloads.
 

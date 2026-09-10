@@ -11,7 +11,7 @@ use crate::lightcycle::logic::{
 };
 use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
-use crate::music::MusicAccent;
+use crate::music::MusicSfx;
 use crate::state::{
     DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
     OrbitCameraResource, TrailSceneRoot,
@@ -1706,7 +1706,7 @@ fn read_lightcycle_input(
     mut state: ResMut<LightcycleState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
-    mut accents: MessageWriter<MusicAccent>,
+    mut effects: MessageWriter<MusicSfx>,
 ) {
     let left = keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::ArrowLeft);
     let right = keys.just_pressed(KeyCode::KeyD) || keys.just_pressed(KeyCode::ArrowRight);
@@ -1720,7 +1720,7 @@ fn read_lightcycle_input(
 
     if run.sim.phase == RunPhase::Running && (left || right) {
         run.sim.queue_turn_input(left, right);
-        accents.write(MusicAccent::Turn);
+        effects.write(MusicSfx::Turn);
     }
 
     if restart {
@@ -1731,7 +1731,7 @@ fn read_lightcycle_input(
     }
 
     if go_up && !entering_tower {
-        accents.write(MusicAccent::Portal);
+        effects.write(MusicSfx::Portal);
         if run.is_document() {
             state.restore_directory = true;
         } else if let Some(parent) = navigator.0.begin_go_to_parent() {
@@ -1783,7 +1783,7 @@ fn step_lightcycle(
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
     mut documents: MessageWriter<DocumentRequested>,
-    mut accents: MessageWriter<MusicAccent>,
+    mut effects: MessageWriter<MusicSfx>,
 ) {
     let Some(mut run) = state.run.take() else {
         return;
@@ -1875,7 +1875,7 @@ fn step_lightcycle(
                 if let Some((name, path)) = details {
                     run.entering_label = Some(name);
                     run.crash_label = None;
-                    accents.write(MusicAccent::Entry);
+                    effects.write(MusicSfx::Beam);
                     state.entry_fx = Some(crate::lightcycle::EntryFx::new(
                         path,
                         config::LIGHTCYCLE_ENTRY_FX_DURATION,
@@ -1893,7 +1893,7 @@ fn step_lightcycle(
                 if let Some((name, path)) = details {
                     run.entering_label = Some(name);
                     run.crash_label = None;
-                    accents.write(MusicAccent::Entry);
+                    effects.write(MusicSfx::Beam);
                     documents.write(DocumentRequested { path });
                 } else {
                     run.sim.phase = RunPhase::Running;
@@ -1904,7 +1904,7 @@ fn step_lightcycle(
                 if let Some(parent) = navigator.0.begin_go_to_parent() {
                     run.entering_label = Some("parent directory".to_string());
                     run.crash_label = None;
-                    accents.write(MusicAccent::Portal);
+                    effects.write(MusicSfx::Portal);
                     requests.write(DirectoryRequested { path: parent });
                 } else {
                     run.sim.phase = RunPhase::Crashed;
@@ -1920,7 +1920,7 @@ fn step_lightcycle(
             state.crash_fx = Some(crate::lightcycle::CrashFx::new(
                 config::LIGHTCYCLE_CRASH_FX_DURATION,
             ));
-            accents.write(MusicAccent::Crash);
+            effects.write(MusicSfx::Crash);
         }
 
         if run.sim.phase != RunPhase::Running {

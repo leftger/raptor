@@ -16,7 +16,7 @@ use crate::load::DirectoryLoaded;
 use crate::music::engine::AudioHandle;
 use crate::music::proximity::{Listener, NodePoint};
 use crate::music::score::{arp_message, base_filter_message, voice_message};
-use crate::music::{ArpState, ModeProfile, MusicAccent, MusicTheme, VoiceMixer, full_code};
+use crate::music::{ArpState, ModeProfile, MusicSfx, MusicTheme, VoiceMixer, full_code};
 use crate::state::{InteractionMode, OrbitCameraResource};
 use bevy::prelude::*;
 use std::f32::consts::TAU;
@@ -71,11 +71,11 @@ impl MusicState {
 impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
         // `MusicState` is inserted by `main` so the CLI options can seed it.
-        app.add_message::<MusicAccent>().add_systems(
+        app.add_message::<MusicSfx>().add_systems(
             Update,
             (
                 report_audio_status,
-                play_accents,
+                play_sfx,
                 sync_profile_with_mode,
                 rebuild_for_directory,
                 update_proximity,
@@ -87,11 +87,11 @@ impl Plugin for MusicPlugin {
     }
 }
 
-/// Plays the one-shot gameplay accents (crash, transport, turn, portal).
-fn play_accents(mut accents: MessageReader<MusicAccent>, music: Res<MusicState>) {
-    for accent in accents.read() {
-        let (gain, cutoff) = accent.voice();
-        music.handle.accent(cutoff, gain);
+/// Plays the one-shot gameplay effects (crash, turn, beam, portal). The audio
+/// thread owns each effect's envelope, so this only forwards the trigger.
+fn play_sfx(mut effects: MessageReader<MusicSfx>, music: Res<MusicState>) {
+    for sfx in effects.read() {
+        music.handle.sfx(*sfx);
     }
 }
 
@@ -104,8 +104,10 @@ fn report_audio_status(mut reported: Local<bool>, music: Res<MusicState>) {
     let status = music.handle.status();
     if status.available {
         eprintln!(
-            "raptor music: {} Hz, {} channels",
-            status.sample_rate, status.channels
+            "raptor music: {} at {} Hz, {} channels",
+            status.device.as_deref().unwrap_or("unknown device"),
+            status.sample_rate,
+            status.channels
         );
         *reported = true;
     } else if let Some(message) = &status.message

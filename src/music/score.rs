@@ -20,6 +20,7 @@
 //! Voice chain node positions are fixed: `0` = oscillator, `1` = low-pass
 //! (param 0 cutoff), `2` = gain, `3` = pan. See [`voice_message`].
 
+use super::sfx::{MusicSfx, SfxVoice};
 use super::theme::{ModeProfile, MusicTheme};
 use crate::config;
 use std::fmt::Write;
@@ -65,25 +66,10 @@ pub fn base_voices(theme: &MusicTheme, profile: ModeProfile) -> String {
     let wave = theme.family.waveform();
     let mut code = String::new();
 
-    // Shared effects, all silent until triggered. Layout for each: 0 osc/noise,
-    // 1 low-pass (param 0 cutoff), 2 gain, 3 pan. See [`sfx_message`]. Glicol's
-    // `noise` node takes an integer seed, not a float.
-    let _ = writeln!(
-        code,
-        "~sfx_crash: noise 1 >> lpf 4000.0 0.7 >> mul 0.0 >> pan 0.0;"
-    );
-    let _ = writeln!(
-        code,
-        "~sfx_turn: squ 1200.0 >> lpf 3200.0 0.7 >> mul 0.0 >> pan -0.15;"
-    );
-    let _ = writeln!(
-        code,
-        "~sfx_beam: saw 180.0 >> lpf 600.0 0.7 >> mul 0.0 >> pan 0.0;"
-    );
-    let _ = writeln!(
-        code,
-        "~sfx_portal: tri 660.0 >> lpf 2500.0 0.7 >> mul 0.0 >> pan 0.1;"
-    );
+    // Shared effects, all silent until triggered. See [`MusicSfx::declaration`].
+    for sfx in MusicSfx::ALL {
+        let _ = writeln!(code, "{}", sfx.declaration());
+    }
 
     // Shared evolving melody, retriggered from the control side. Layout:
     // 0 osc, 1 low-pass, 2 gain, 3 pan. See [`arp_message`].
@@ -156,15 +142,10 @@ pub fn voice_bank(theme: &MusicTheme) -> String {
 /// the arpeggiator, and the whole bank.
 pub fn output_chain(profile: ModeProfile) -> String {
     let mut code = String::from("o: mix");
-    for chain in [
-        "~sfx_crash",
-        "~sfx_turn",
-        "~sfx_beam",
-        "~sfx_portal",
-        "~arp",
-    ] {
-        let _ = write!(code, " {chain}");
+    for sfx in MusicSfx::ALL {
+        let _ = write!(code, " {}", sfx.chain());
     }
+    code.push_str(" ~arp");
     for name in base_refs(profile) {
         let _ = write!(code, " {name}");
     }
@@ -192,10 +173,29 @@ pub fn voice_message(slot: usize, freq: f32, cutoff: f32, gain: f32, pan: f32) -
     )
 }
 
-/// A Glicol `send_msg` payload that opens the shared accent chain. Matches the
-/// layout produced by [`base_voices`]: 1 = low-pass cutoff, 2 = gain.
-pub fn accent_message(cutoff: f32, gain: f32) -> String {
-    format!("~accent,1,0,{cutoff:.1};~accent,2,0,{gain:.4};")
+/// A Glicol `send_msg` payload that drives one sound effect's chain. Matches the
+/// layout produced by [`base_voices`]: 0 = oscillator, 1 = low-pass cutoff,
+/// 2 = gain, 3 = pan.
+///
+/// The noise-based effects have no frequency to set, so their oscillator node is
+/// left alone (see [`MusicSfx::uses_pitch`]).
+pub fn sfx_message(sfx: MusicSfx, voice: SfxVoice) -> String {
+    let chain = sfx.chain();
+    let mut message = String::new();
+    if sfx.uses_pitch() {
+        let _ = write!(message, "{chain},0,0,{:.3};", voice.freq);
+    }
+    let _ = write!(
+        message,
+        "{chain},1,0,{:.3};{chain},2,0,{:.4};{chain},3,0,{:.3};",
+        voice.cutoff, voice.gain, voice.pan
+    );
+    message
+}
+
+/// A `send_msg` payload that closes a sound effect's chain once it has run out.
+pub fn sfx_silence_message(sfx: MusicSfx) -> String {
+    format!("{},2,0,0.0000;", sfx.chain())
 }
 
 /// A `send_msg` payload that plays one arpeggiator note. Layout: 0 oscillator,
@@ -257,15 +257,18 @@ mod tests {
     }
 
     #[test]
-    fn only_action_pumps_and_both_profiles_carry_the_accent() {
+    fn only_action_pumps_and_both_profiles_carry_the_shared_chains() {
         let calm = full_code(&theme(), ModeProfile::Calm);
         let action = full_code(&theme(), ModeProfile::Action);
         assert!(!calm.contains("~pump"));
         assert!(action.contains("~pump"));
-        assert!(calm.contains("~accent"));
-        assert!(action.contains("~accent"));
-        assert!(calm.contains("~arp"));
-        assert!(action.contains("~arp"));
+        for code in [&calm, &action] {
+            for sfx in MusicSfx::ALL {
+                let chain = sfx.chain();
+                assert!(code.contains(&format!("{chain}:")), "missing {chain}");
+            }
+            assert!(code.contains("~arp"));
+        }
     }
 
     #[test]
@@ -288,10 +291,40 @@ mod tests {
     }
 
     #[test]
-    fn accent_message_addresses_the_fixed_node_layout() {
-        let message = accent_message(1400.0, 0.375);
-        assert!(message.contains("~accent,1,0,1400.0;"));
-        assert!(message.contains("~accent,2,0,0.3750;"));
+    fn sfx_messages_address_the_fixed_node_layout() {
+        let voice = SfxVoice {
+            freq: 880.0,
+            cutoff: 1400.0,
+            gain: 0.375,
+            pan: -0.1,
+        };
+
+        let turn = sfx_message(MusicSfx::Turn, voice);
+        assert!(turn.contains("~sfx_turn,0,0,880.000;"));
+        assert!(turn.contains("~sfx_turn,1,0,1400.000;"));
+        assert!(turn.contains("~sfx_turn,2,0,0.3750;"));
+        assert!(turn.contains("~sfx_turn,3,0,-0.100;"));
+
+        // The crash's first node is noise, which has no frequency to set.
+        let crash = sfx_message(MusicSfx::Crash, voice);
+        assert!(!crash.contains("~sfx_crash,0,0,"));
+        assert!(crash.contains("~sfx_crash,2,0,0.3750;"));
+
+        assert_eq!(
+            sfx_silence_message(MusicSfx::Crash),
+            "~sfx_crash,2,0,0.0000;"
+        );
+    }
+
+    #[test]
+    fn every_sfx_chain_is_declared_and_mixed() {
+        let code = full_code(&theme(), ModeProfile::Calm);
+        let output = output_chain(ModeProfile::Calm);
+        for sfx in MusicSfx::ALL {
+            let chain = sfx.chain();
+            assert!(code.contains(&format!("{chain}:")), "{chain} not declared");
+            assert!(output.contains(chain), "{chain} not mixed into the output");
+        }
     }
 
     #[test]
@@ -321,6 +354,22 @@ mod tests {
                 "{profile:?} graph failed to compile: {:?}\n{code}",
                 rendered.err()
             );
+        }
+    }
+
+    /// The base voices carry the piece on their own, so a compiled graph that
+    /// renders silence means the mix is broken even though nothing errored.
+    #[test]
+    fn both_profiles_are_audible_before_any_parameter_is_sent() {
+        for profile in ModeProfile::ALL {
+            let code = full_code(&theme(), profile);
+            let channels = render_offline(&code, 64).expect("graph should compile");
+            let peak = crate::music::engine::peak(&channels);
+            assert!(
+                peak > 0.01,
+                "{profile:?} rendered near silence (peak {peak})\n{code}"
+            );
+            assert!(peak <= 1.0, "{profile:?} clipped (peak {peak})");
         }
     }
 }

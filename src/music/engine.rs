@@ -11,7 +11,8 @@
 //! output device exists the handle simply reports why and the rest of the app
 //! runs silently.
 
-use super::score::accent_message;
+use super::score::{sfx_message, sfx_silence_message};
+use super::sfx::MusicSfx;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -36,13 +37,16 @@ const PREBUFFER_BLOCKS: usize = 8;
 /// assuming the device stalled.
 const SEND_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Sample rate asked of the output device when it supports one.
+const PREFERRED_SAMPLE_RATE: u32 = 48_000;
+
+/// Below this the graph's filter cutoffs start crowding Nyquist and the mix
+/// sounds like a phone call, so such a configuration is only a last resort.
+const MIN_MUSIC_SAMPLE_RATE: u32 = 44_100;
+
 /// Per-block one-pole coefficient for master gain changes (~115 ms at 256
 /// samples / 44.1 kHz).
 const GAIN_SMOOTHING: f32 = 0.05;
-
-/// Per-block decay of an accent one-shot; reaches near silence in about a third
-/// of a second at 256 samples / 44.1 kHz.
-const ACCENT_DECAY: f32 = 0.86;
 
 /// Rare control messages. Per-frame voice parameters do **not** go through this
 /// channel: they use a coalescing mailbox so a fast frame loop cannot flood the
@@ -51,14 +55,17 @@ const ACCENT_DECAY: f32 = 0.86;
 enum EngineCommand {
     /// Replace the graph and tempo. Used on directory and profile changes.
     SetCode { code: String, bpm: f32 },
-    /// Open the shared accent chain briefly.
-    Accent { cutoff: f32, gain: f32 },
+    /// Trigger a one-shot sound effect.
+    Sfx(MusicSfx),
 }
 
 /// What the audio thread is doing, for UI and diagnostics.
 #[derive(Debug, Clone)]
 pub struct AudioStatus {
     pub available: bool,
+    /// Name of the output device in use. Worth reporting: the music goes to the
+    /// system default, which is not always the speakers the listener expects.
+    pub device: Option<String>,
     pub sample_rate: u32,
     pub channels: u16,
     pub message: Option<String>,
@@ -68,6 +75,7 @@ impl AudioStatus {
     fn unavailable(message: impl Into<String>) -> Self {
         Self {
             available: false,
+            device: None,
             sample_rate: 0,
             channels: 0,
             message: Some(message.into()),
@@ -98,6 +106,7 @@ impl AudioHandle {
         let enabled = Arc::new(AtomicBool::new(true));
         let status = Arc::new(Mutex::new(AudioStatus {
             available: false,
+            device: None,
             sample_rate: 0,
             channels: 0,
             message: Some("starting".to_string()),
@@ -160,10 +169,11 @@ impl AudioHandle {
         store_latest(&self.params, message);
     }
 
-    /// Triggers a short accent hit on the shared accent chain.
-    pub fn accent(&self, cutoff: f32, gain: f32) {
+    /// Triggers a one-shot sound effect. Retriggering an effect that is still
+    /// sounding restarts it from the top.
+    pub fn sfx(&self, sfx: MusicSfx) {
         if let Some(commands) = &self.commands {
-            let _ = commands.send(EngineCommand::Accent { cutoff, gain });
+            let _ = commands.send(EngineCommand::Sfx(sfx));
         }
     }
 
@@ -191,6 +201,12 @@ fn store_latest(slot: &Mutex<Option<String>>, message: &str) {
     }
 }
 
+/// A sound effect currently sounding, with how far it has run.
+struct ActiveSfx {
+    sfx: MusicSfx,
+    elapsed: f32,
+}
+
 /// Owns the Glicol engine and the cpal stream for the lifetime of the app.
 fn audio_thread(
     commands: Receiver<EngineCommand>,
@@ -208,6 +224,8 @@ fn audio_thread(
         *status.lock().expect("audio status mutex") = AudioStatus::unavailable("no output device");
         return;
     };
+
+    let device_name = device.to_string();
 
     let Some(supported) = pick_output_config(&device) else {
         *status.lock().expect("audio status mutex") =
@@ -274,6 +292,7 @@ fn audio_thread(
 
     *status.lock().expect("audio status mutex") = AudioStatus {
         available: true,
+        device: Some(device_name),
         sample_rate,
         channels,
         message: None,
@@ -290,9 +309,10 @@ fn audio_thread(
     let mut crossfade_age: u32 = 0;
     let mut last_params = String::new();
 
-    // Accent one-shots decay on the audio thread.
-    let mut accent_gain = 0.0_f32;
-    let mut accent_cutoff = 1800.0_f32;
+    // One-shot effects advance on the audio thread, so their envelopes are
+    // sample-accurate and independent of the frame rate.
+    let block_seconds = BLOCK_SIZE as f32 / sample_rate as f32;
+    let mut active_sfx: Vec<ActiveSfx> = Vec::new();
     // Reused scratch for the crossfade's incoming graph.
     let mut incoming_block = vec![0.0_f32; BLOCK_SIZE * channels as usize];
 
@@ -305,9 +325,11 @@ fn audio_thread(
                         crossfade_age = 0;
                     }
                 }
-                EngineCommand::Accent { cutoff, gain } => {
-                    accent_cutoff = cutoff;
-                    accent_gain = gain;
+                EngineCommand::Sfx(sfx) => {
+                    match active_sfx.iter_mut().find(|active| active.sfx == sfx) {
+                        Some(active) => active.elapsed = 0.0,
+                        None => active_sfx.push(ActiveSfx { sfx, elapsed: 0.0 }),
+                    }
                 }
             }
         }
@@ -323,14 +345,20 @@ fn audio_thread(
             last_params = message;
         }
 
-        if accent_gain > 0.0005 {
-            let message = accent_message(accent_cutoff, accent_gain);
+        active_sfx.retain_mut(|active| {
+            let progress = active.elapsed / active.sfx.duration();
+            let message = if progress >= 1.0 {
+                sfx_silence_message(active.sfx)
+            } else {
+                sfx_message(active.sfx, active.sfx.voice(progress))
+            };
             engine.send_msg(&message);
             if let Some(next) = incoming.as_mut() {
                 next.send_msg(&message);
             }
-            accent_gain *= ACCENT_DECAY;
-        }
+            active.elapsed += block_seconds;
+            progress < 1.0
+        });
 
         let target_gain = if enabled.load(Ordering::Relaxed) {
             f32::from_bits(master_gain.load(Ordering::Relaxed))
@@ -402,26 +430,53 @@ fn compile_engine(
     Some(engine)
 }
 
-/// Picks a stereo/mono f32 output configuration, preferring 48 kHz.
+/// Picks the best f32 output configuration the device offers.
+///
+/// Every supported range is considered, not just the first: a device can
+/// advertise a telephony mode ahead of its music mode (a Bluetooth headset
+/// offering 16 kHz mono *and* 44.1 kHz), and taking the first match leaves the
+/// music rendering at phone quality.
 fn pick_output_config(
     device: &impl cpal::traits::DeviceTrait,
 ) -> Option<cpal::SupportedStreamConfig> {
-    if let Ok(configs) = device.supported_output_configs() {
-        for config in configs {
-            if config.sample_format() == cpal::SampleFormat::F32 {
-                return Some(
-                    config
-                        .try_with_sample_rate(48_000)
-                        .unwrap_or_else(|| config.with_max_sample_rate()),
-                );
+    let mut best: Option<cpal::SupportedStreamConfig> = None;
+    if let Ok(ranges) = device.supported_output_configs() {
+        for range in ranges {
+            if range.sample_format() != cpal::SampleFormat::F32 {
+                continue;
+            }
+            let config = range
+                .try_with_sample_rate(PREFERRED_SAMPLE_RATE)
+                .unwrap_or_else(|| range.with_max_sample_rate());
+            if best
+                .as_ref()
+                .is_none_or(|current| config_rank(&config) > config_rank(current))
+            {
+                best = Some(config);
             }
         }
     }
 
-    device
-        .default_output_config()
-        .ok()
-        .filter(|config| config.sample_format() == cpal::SampleFormat::F32)
+    best.or_else(|| {
+        device
+            .default_output_config()
+            .ok()
+            .filter(|config| config.sample_format() == cpal::SampleFormat::F32)
+    })
+}
+
+/// Ranks an output configuration for music, highest wins: a music-grade sample
+/// rate first, then stereo over mono, then the rate nearest
+/// [`PREFERRED_SAMPLE_RATE`]. Rate leads because 44.1 kHz mono carries the piece
+/// better than 16 kHz stereo, and a low rate also drags the filter cutoffs down
+/// toward Nyquist.
+fn config_rank(config: &cpal::SupportedStreamConfig) -> (bool, u16, i64) {
+    let rate = config.sample_rate();
+    (
+        rate >= MIN_MUSIC_SAMPLE_RATE,
+        config.channels().min(2),
+        -i64::from(rate.abs_diff(PREFERRED_SAMPLE_RATE)),
+    )
 }
 
 /// Interleaves Glicol's stereo buffers into the device's channel layout and
@@ -533,6 +588,33 @@ mod tests {
             Some("second"),
             "the mailbox must keep only the newest payload"
         );
+    }
+
+    /// A Bluetooth headset can advertise its 16 kHz mono call mode before its
+    /// music mode, which is how the mix ended up at phone quality.
+    #[test]
+    fn a_music_rate_outranks_an_earlier_telephony_config() {
+        let telephony = cpal::SupportedStreamConfig::new(
+            1,
+            16_000,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::F32,
+        );
+        let music = cpal::SupportedStreamConfig::new(
+            1,
+            44_100,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::F32,
+        );
+        let stereo = cpal::SupportedStreamConfig::new(
+            2,
+            48_000,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::F32,
+        );
+
+        assert!(config_rank(&music) > config_rank(&telephony));
+        assert!(config_rank(&stereo) > config_rank(&music));
     }
 
     #[test]

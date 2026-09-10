@@ -31,6 +31,10 @@ pub struct SfxVoice {
 }
 
 impl MusicSfx {
+    /// Every effect, in graph order. The score walks this to declare and mix the
+    /// chains, so a new variant cannot be forgotten in the output.
+    pub const ALL: [Self; 4] = [Self::Crash, Self::Turn, Self::Beam, Self::Portal];
+
     /// Glicol reference chain this effect drives.
     pub fn chain(self) -> &'static str {
         match self {
@@ -38,6 +42,19 @@ impl MusicSfx {
             Self::Turn => "~sfx_turn",
             Self::Beam => "~sfx_beam",
             Self::Portal => "~sfx_portal",
+        }
+    }
+
+    /// The effect's Glicol chain definition, silent until it is triggered. Node
+    /// layout is fixed: 0 osc/noise, 1 low-pass, 2 gain, 3 pan. Glicol's `noise`
+    /// node takes an integer seed, not a float.
+    pub fn declaration(self) -> String {
+        let chain = self.chain();
+        match self {
+            Self::Crash => format!("{chain}: noise 1 >> lpf 4000.0 0.7 >> mul 0.0 >> pan 0.0;"),
+            Self::Turn => format!("{chain}: squ 1200.0 >> lpf 3200.0 0.7 >> mul 0.0 >> pan -0.15;"),
+            Self::Beam => format!("{chain}: saw 180.0 >> lpf 600.0 0.7 >> mul 0.0 >> pan 0.0;"),
+            Self::Portal => format!("{chain}: tri 660.0 >> lpf 2500.0 0.7 >> mul 0.0 >> pan 0.1;"),
         }
     }
 
@@ -95,16 +112,9 @@ impl MusicSfx {
 mod tests {
     use super::MusicSfx;
 
-    const ALL: [MusicSfx; 4] = [
-        MusicSfx::Crash,
-        MusicSfx::Turn,
-        MusicSfx::Beam,
-        MusicSfx::Portal,
-    ];
-
     #[test]
     fn every_effect_has_a_chain_duration_and_bounded_gain() {
-        for sfx in ALL {
+        for sfx in MusicSfx::ALL {
             assert!(sfx.chain().starts_with("~sfx_"), "{sfx:?}");
             assert!(sfx.duration() > 0.0, "{sfx:?}");
             for step in 0..=10 {
@@ -115,7 +125,11 @@ mod tests {
                     voice.gain
                 );
                 assert!(voice.cutoff >= 100.0, "{sfx:?} cutoff {}", voice.cutoff);
-                assert!((-1.0..=1.0).contains(&voice.pan), "{sfx:?} pan {}", voice.pan);
+                assert!(
+                    (-1.0..=1.0).contains(&voice.pan),
+                    "{sfx:?} pan {}",
+                    voice.pan
+                );
             }
         }
     }
