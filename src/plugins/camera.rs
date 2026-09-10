@@ -1,6 +1,8 @@
 use crate::config;
 use crate::state::{InteractionMode, OrbitCameraResource};
+use bevy::camera::Hdr;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::post_process::bloom::Bloom;
 use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 
@@ -10,7 +12,13 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(config::BACKGROUND_COLOR))
             .add_systems(Startup, setup_camera)
-            .add_systems(Update, update_camera.run_if(in_explorer_mode));
+            .add_systems(
+                Update,
+                (
+                    update_camera.run_if(in_explorer_mode),
+                    sync_lightcycle_bloom,
+                ),
+            );
     }
 }
 
@@ -43,6 +51,26 @@ fn setup_camera(mut commands: Commands) {
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.4, 0.6, 0.0)),
     ));
+}
+
+fn sync_lightcycle_bloom(
+    mode: Res<InteractionMode>,
+    camera: Single<(Entity, Has<Bloom>, Has<Hdr>), With<Camera3d>>,
+    mut commands: Commands,
+) {
+    let (entity, has_bloom, has_hdr) = *camera;
+    let enabled = *mode == InteractionMode::Lightcycle;
+    if enabled && (!has_bloom || !has_hdr) {
+        commands.entity(entity).insert((
+            Hdr,
+            Bloom {
+                intensity: 0.12,
+                ..Bloom::NATURAL
+            },
+        ));
+    } else if !enabled && (has_bloom || has_hdr) {
+        commands.entity(entity).remove::<(Bloom, Hdr)>();
+    }
 }
 
 fn update_camera(

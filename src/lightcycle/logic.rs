@@ -3,9 +3,7 @@
 //! This module deliberately contains no Bevy types so movement, collisions,
 //! spawn search, and parent-portal rules can be unit-tested on a plain thread.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 /// Grid-aligned heading on the X/Z ground plane.
@@ -135,14 +133,10 @@ impl GatePlacement {
     /// Derives a placement from a directory path.
     ///
     /// Hashing the path rather than drawing at random means every folder gets
-    /// its own door in its own wall, but that door stays put between visits, so
-    /// backtracking through a tree is learnable instead of a fresh search each
-    /// time. The hash only has to be stable within a single run of the program,
-    /// which `DefaultHasher` guarantees.
+    /// its own door in its own wall, but that door stays put between visits and
+    /// across Rust releases, so backtracking through a tree is learnable.
     pub fn for_path(path: &Path, width_cells: i32) -> Self {
-        let mut hasher = DefaultHasher::new();
-        path.hash(&mut hasher);
-        let hash = hasher.finish();
+        let hash = stable_path_seed(path);
 
         let wall = match hash % 4 {
             0 => Wall::NegZ,
@@ -220,6 +214,45 @@ impl ParentPortal {
     }
 }
 
+/// Visual family for one path-seeded TRON district.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CityTheme {
+    Cyan,
+    Magenta,
+    Violet,
+    Amber,
+}
+
+impl CityTheme {
+    fn from_seed(seed: u64) -> Self {
+        match seed % 4 {
+            0 => Self::Cyan,
+            1 => Self::Magenta,
+            2 => Self::Violet,
+            _ => Self::Amber,
+        }
+    }
+}
+
+/// Silhouette used to render one lethal architecture cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CityStructureKind {
+    Barrier,
+    GlassFin,
+    Pylon,
+}
+
+/// Bevy-free rendering metadata for a procedural structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CityStructure {
+    pub cell: (i32, i32),
+    pub kind: CityStructureKind,
+    pub along_x: bool,
+    pub height_tier: u8,
+    pub accent: u8,
+    pub pulse_phase: u8,
+}
+
 /// Rectangular playable arena on the grid.
 ///
 /// Grows an inclusive cell range to `span` cells, keeping its contents centered.
@@ -240,9 +273,12 @@ pub struct Arena {
     pub min: (i32, i32),
     pub max: (i32, i32),
     pub parent_portal: Option<ParentPortal>,
-    /// Path-seeded interior barriers. They are visual scenery and lethal
-    /// collision cells, but generation always carves routes to every landmark.
+    /// Connected arteries, plazas, and the perimeter boulevard.
+    pub roads: BTreeSet<(i32, i32)>,
+    /// Lethal footprints occupied by `structures`.
     pub street_walls: BTreeSet<(i32, i32)>,
+    pub structures: Vec<CityStructure>,
+    pub city_theme: CityTheme,
 }
 
 impl Arena {
@@ -291,7 +327,10 @@ impl Arena {
             min,
             max,
             parent_portal: parent_gate.map(|placement| ParentPortal::place(min, max, placement)),
+            roads: BTreeSet::new(),
             street_walls: BTreeSet::new(),
+            structures: Vec::new(),
+            city_theme: CityTheme::Cyan,
         }
     }
 
@@ -303,20 +342,22 @@ impl Arena {
         ((self.min.0 + self.max.0) / 2, (self.min.1 + self.max.1) / 2)
     }
 
-    /// Populates the arena with deterministic short wall runs, then carves an
-    /// asphalt network from the spawn area to every tower and the parent gate.
+    /// Builds a deterministic connected road lattice first, then places capped
+    /// runs of architecture in the remaining buildable cells.
     ///
-    /// `seed_chance` is a percentage of cells that begin a wall run, not the
-    /// final occupied percentage. A run extends 2–4 cells before protected
-    /// landmark space and carved routes are removed.
-    pub fn generate_street_walls(
+    /// Towers live on a `tower_stride` lattice. Arteries use a seeded offset
+    /// between lattice lines, which keeps every 3×3 tower plaza connected while
+    /// making directory paths produce different street plans.
+    pub fn generate_city(
         &mut self,
         path: &Path,
         occupied: impl IntoIterator<Item = (i32, i32)>,
         seed_chance: u8,
+        tower_stride: i32,
     ) {
         let occupied: HashSet<_> = occupied.into_iter().collect();
         let seed = stable_path_seed(path);
+        self.city_theme = CityTheme::from_seed(seed);
         let mut protected = HashSet::new();
 
         // A one-cell asphalt ring means every tower can be approached from any
@@ -347,51 +388,132 @@ impl Arena {
             }
         }
 
-        let chance = seed_chance.min(100) as u64;
-        let mut walls = BTreeSet::new();
+        let stride = tower_stride.max(4);
+        let x_offset = if seed & 1 == 0 { 2 } else { stride - 2 };
+        let z_offset = if seed & 2 == 0 { 2 } else { stride - 2 };
+        let mut roads = BTreeSet::new();
+
+        // A perimeter boulevard creates a loop and ties every arterial together.
+        for x in self.min.0..=self.max.0 {
+            roads.insert((x, self.min.1));
+            roads.insert((x, self.max.1));
+        }
+        for z in self.min.1..=self.max.1 {
+            roads.insert((self.min.0, z));
+            roads.insert((self.max.0, z));
+        }
+
+        // The regular lattice is cheap to generate even for huge directories,
+        // unlike running a full-arena BFS for every filesystem landmark.
         for x in self.min.0..=self.max.0 {
             for z in self.min.1..=self.max.1 {
-                let hash = cell_hash(seed, (x, z));
-                if hash % 100 >= chance {
-                    continue;
+                if x.rem_euclid(stride) == x_offset || z.rem_euclid(stride) == z_offset {
+                    roads.insert((x, z));
                 }
+            }
+        }
+        roads.extend(
+            protected
+                .iter()
+                .copied()
+                .filter(|cell| !occupied.contains(cell)),
+        );
 
-                let direction = if hash & 0x100 == 0 { (1, 0) } else { (0, 1) };
-                let length = 2 + ((hash >> 9) % 3) as i32;
-                for step in 0..length {
-                    let cell = (x + direction.0 * step, z + direction.1 * step);
-                    if self.contains(cell)
-                        && !occupied.contains(&cell)
-                        && !protected.contains(&cell)
-                    {
-                        walls.insert(cell);
-                    }
+        // Join the spawn plaza and gate to the arterial lattice. Tower plazas
+        // are already adjacent to a lattice line because stride is at least 4.
+        for target in std::iter::once(hub).chain(self.parent_gate_approach()) {
+            if let Some(route) = grid_path_to_any(self, target, &roads, &occupied, seed) {
+                roads.extend(route);
+            }
+        }
+        roads.retain(|cell| self.contains(*cell) && !occupied.contains(cell));
+
+        let chance = seed_chance.min(100) as u64;
+        let wall_budget = (occupied.len().saturating_mul(4)).clamp(48, 8_192).min(
+            (self.max.0 - self.min.0 + 1) as usize * (self.max.1 - self.min.1 + 1) as usize / 3,
+        );
+        let mut candidates = Vec::new();
+        for x in self.min.0..=self.max.0 {
+            for z in self.min.1..=self.max.1 {
+                let cell = (x, z);
+                let hash = cell_hash(seed, cell);
+                if hash % 100 < chance
+                    && !occupied.contains(&cell)
+                    && !protected.contains(&cell)
+                    && !roads.contains(&cell)
+                {
+                    candidates.push((hash, cell));
+                }
+            }
+        }
+        candidates.sort_unstable();
+
+        let mut walls = BTreeSet::new();
+        for (hash, origin) in candidates {
+            if walls.len() >= wall_budget {
+                break;
+            }
+            let direction = if hash & 0x100 == 0 { (1, 0) } else { (0, 1) };
+            let length = 2 + ((hash >> 9) % 3) as i32;
+            for step in 0..length {
+                let cell = (origin.0 + direction.0 * step, origin.1 + direction.1 * step);
+                if self.contains(cell)
+                    && !occupied.contains(&cell)
+                    && !protected.contains(&cell)
+                    && !roads.contains(&cell)
+                    && walls.len() < wall_budget
+                {
+                    walls.insert(cell);
                 }
             }
         }
 
-        // Connect one approach cell for each landmark to the central hub.
-        // Paths ignore generated walls while searching, then erase every wall
-        // they cross. Real tower cells remain impassable during the search.
-        let mut targets: Vec<_> = occupied
+        // Sparse rooms should still have a skyline even if no random run
+        // survived the protected plazas and road lattice.
+        let minimum = 6.min(wall_budget);
+        if walls.len() < minimum {
+            let mut fallback: Vec<_> = (self.min.0..=self.max.0)
+                .flat_map(|x| (self.min.1..=self.max.1).map(move |z| (x, z)))
+                .filter(|cell| {
+                    !occupied.contains(cell) && !protected.contains(cell) && !roads.contains(cell)
+                })
+                .collect();
+            fallback.sort_unstable_by_key(|cell| cell_hash(seed ^ 0xa11e_u64, *cell));
+            for cell in fallback {
+                walls.insert(cell);
+                if walls.len() >= minimum {
+                    break;
+                }
+            }
+        }
+
+        let mut structures: Vec<_> = walls
             .iter()
-            .filter_map(|&tower| nearest_approach(self, tower, hub, &occupied))
+            .copied()
+            .map(|cell| city_structure(seed, cell))
             .collect();
-        if let Some(target) = self.parent_gate_approach() {
-            targets.push(target);
-        }
-        targets.sort_unstable();
-        targets.dedup();
-
-        for target in targets {
-            if let Some(path) = grid_path(self, hub, target, &occupied, seed) {
-                for cell in path {
-                    walls.remove(&cell);
-                }
+        let mut prominent: Vec<_> = (0..structures.len()).collect();
+        prominent.sort_unstable_by_key(|&index| {
+            let cell = structures[index].cell;
+            ((cell.0 - hub.0).abs() + (cell.1 - hub.1).abs(), cell)
+        });
+        for (order, kind) in [
+            CityStructureKind::Pylon,
+            CityStructureKind::GlassFin,
+            CityStructureKind::Barrier,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Some(&index) = prominent.get(order) {
+                structures[index].kind = kind;
+                structures[index].height_tier = 2_u8.saturating_sub(order as u8);
+                structures[index].accent = (order & 1) as u8;
             }
         }
-
+        self.roads = roads;
         self.street_walls = walls;
+        self.structures = structures;
     }
 
     fn parent_gate_approach(&self) -> Option<(i32, i32)> {
@@ -473,6 +595,64 @@ fn cell_hash(seed: u64, cell: (i32, i32)) -> u64 {
     value ^ (value >> 31)
 }
 
+fn city_structure(seed: u64, cell: (i32, i32)) -> CityStructure {
+    let hash = cell_hash(seed ^ 0xc17c_1a7e_5eed_u64, cell);
+    let kind = match hash % 100 {
+        0..=49 => CityStructureKind::Barrier,
+        50..=79 => CityStructureKind::GlassFin,
+        _ => CityStructureKind::Pylon,
+    };
+    CityStructure {
+        cell,
+        kind,
+        along_x: hash & 0x100 == 0,
+        height_tier: ((hash >> 9) % 3) as u8,
+        accent: ((hash >> 11) & 1) as u8,
+        pulse_phase: ((hash >> 12) % 3) as u8,
+    }
+}
+
+/// Finds a deterministic shortest route from `start` to the existing road
+/// network while avoiding filesystem towers.
+fn grid_path_to_any(
+    arena: &Arena,
+    start: (i32, i32),
+    roads: &BTreeSet<(i32, i32)>,
+    occupied: &HashSet<(i32, i32)>,
+    seed: u64,
+) -> Option<Vec<(i32, i32)>> {
+    let directions = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+    let rotation = (cell_hash(seed, start) % directions.len() as u64) as usize;
+    let mut queue = VecDeque::from([start]);
+    let mut previous = HashMap::from([(start, start)]);
+    let mut target = None;
+
+    while let Some(cell) = queue.pop_front() {
+        if roads.contains(&cell) {
+            target = Some(cell);
+            break;
+        }
+        for index in 0..directions.len() {
+            let delta = directions[(index + rotation) % directions.len()];
+            let next = (cell.0 + delta.0, cell.1 + delta.1);
+            if arena.contains(next) && !occupied.contains(&next) && !previous.contains_key(&next) {
+                previous.insert(next, cell);
+                queue.push_back(next);
+            }
+        }
+    }
+
+    let mut cursor = target?;
+    let mut path = vec![cursor];
+    while cursor != start {
+        cursor = previous[&cursor];
+        path.push(cursor);
+    }
+    path.reverse();
+    Some(path)
+}
+
+#[cfg(test)]
 fn nearest_approach(
     arena: &Arena,
     tower: (i32, i32),
@@ -484,45 +664,6 @@ fn nearest_approach(
         .map(|delta| (tower.0 + delta.0, tower.1 + delta.1))
         .filter(|cell| arena.contains(*cell) && !occupied.contains(cell))
         .min_by_key(|cell| (cell.0 - hub.0).abs() + (cell.1 - hub.1).abs())
-}
-
-/// Shortest grid path that avoids real towers. Generated walls are intentionally
-/// ignored: callers carve the returned route through them.
-fn grid_path(
-    arena: &Arena,
-    start: (i32, i32),
-    target: (i32, i32),
-    occupied: &HashSet<(i32, i32)>,
-    seed: u64,
-) -> Option<Vec<(i32, i32)>> {
-    let directions = [(1, 0), (0, 1), (-1, 0), (0, -1)];
-    let rotation = (cell_hash(seed, target) % directions.len() as u64) as usize;
-    let mut queue = VecDeque::from([start]);
-    let mut previous = HashMap::from([(start, start)]);
-
-    while let Some(cell) = queue.pop_front() {
-        if cell == target {
-            let mut path = vec![target];
-            let mut cursor = target;
-            while cursor != start {
-                cursor = previous[&cursor];
-                path.push(cursor);
-            }
-            path.reverse();
-            return Some(path);
-        }
-
-        for index in 0..directions.len() {
-            let delta = directions[(index + rotation) % directions.len()];
-            let next = (cell.0 + delta.0, cell.1 + delta.1);
-            if arena.contains(next) && !occupied.contains(&next) && !previous.contains_key(&next) {
-                previous.insert(next, cell);
-                queue.push_back(next);
-            }
-        }
-    }
-
-    None
 }
 
 /// One run's mutable simulation state.
@@ -702,8 +843,8 @@ pub fn classify_next_content(
 #[cfg(test)]
 mod tests {
     use super::{
-        Arena, CellContent, CrashReason, EntryRequest, GatePlacement, Heading, LightcycleSim,
-        RunPhase, StepOutcome, Turn, Wall, classify_next_content,
+        Arena, CellContent, CityTheme, CrashReason, EntryRequest, GatePlacement, Heading,
+        LightcycleSim, RunPhase, StepOutcome, Turn, Wall, classify_next_content,
     };
     use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
     use std::path::PathBuf;
@@ -759,7 +900,10 @@ mod tests {
                     min: (-half, -half),
                     max: (half, half),
                     parent_portal: None,
+                    roads: BTreeSet::new(),
                     street_walls: BTreeSet::new(),
+                    structures: Vec::new(),
+                    city_theme: CityTheme::Cyan,
                 },
                 cells: HashMap::new(),
                 is_dir: Vec::new(),
@@ -1079,10 +1223,14 @@ mod tests {
     }
 
     fn generated_arena(path: &str) -> (Arena, HashSet<(i32, i32)>) {
-        let occupied: HashSet<_> = [(-6, -6), (0, 0), (6, 6)].into_iter().collect();
-        let mut arena =
-            Arena::from_nodes(occupied.iter().copied(), Some(centered_gate()), PADDING, 15);
-        arena.generate_street_walls(PathBuf::from(path).as_path(), occupied.iter().copied(), 35);
+        let occupied: HashSet<_> = [(-10, -10), (0, 0), (10, 10)].into_iter().collect();
+        let mut arena = Arena::from_nodes(occupied.iter().copied(), Some(centered_gate()), 2, 25);
+        arena.generate_city(
+            PathBuf::from(path).as_path(),
+            occupied.iter().copied(),
+            35,
+            5,
+        );
         (arena, occupied)
     }
 
@@ -1108,46 +1256,118 @@ mod tests {
         reached
     }
 
+    fn reachable_roads(arena: &Arena, start: (i32, i32)) -> HashSet<(i32, i32)> {
+        let mut reached = HashSet::from([start]);
+        let mut queue = VecDeque::from([start]);
+        while let Some(cell) = queue.pop_front() {
+            for delta in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let next = (cell.0 + delta.0, cell.1 + delta.1);
+                if arena.roads.contains(&next) && reached.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        reached
+    }
+
     #[test]
     fn generated_streets_are_stable_per_path() {
         let (first, _) = generated_arena("/projects/raptor");
         let (second, _) = generated_arena("/projects/raptor");
-        assert_eq!(first.street_walls, second.street_walls);
+        assert_eq!(first, second);
         assert!(!first.street_walls.is_empty());
     }
 
     #[test]
     fn a_two_file_room_still_gets_generated_scenery() {
-        let occupied = [(-3, -3), (0, -3)];
-        let mut arena = Arena::from_nodes(occupied, Some(centered_gate()), PADDING, 9);
-        arena.generate_street_walls(PathBuf::from("/two-files").as_path(), occupied, 9);
+        let occupied = [(-5, 0), (0, 0)];
+        let mut arena = Arena::from_nodes(occupied, Some(centered_gate()), 2, 13);
+        arena.generate_city(PathBuf::from("/two-files").as_path(), occupied, 18, 5);
         assert!(
             !arena.street_walls.is_empty(),
             "landmark protection and route carving erased every generated wall"
         );
+        for kind in [
+            super::CityStructureKind::Barrier,
+            super::CityStructureKind::GlassFin,
+            super::CityStructureKind::Pylon,
+        ] {
+            assert!(
+                arena
+                    .structures
+                    .iter()
+                    .any(|structure| structure.kind == kind)
+            );
+        }
     }
 
     #[test]
     fn different_paths_generate_different_streets() {
         let (first, _) = generated_arena("/projects/raptor");
         let (second, _) = generated_arena("/projects/another");
-        assert_ne!(first.street_walls, second.street_walls);
+        assert!(
+            first.street_walls != second.street_walls
+                || first.roads != second.roads
+                || first.city_theme != second.city_theme
+        );
     }
 
     #[test]
-    fn generation_keeps_asphalt_around_every_tower() {
+    fn generation_keeps_connected_road_plazas_around_every_tower() {
         let (arena, occupied) = generated_arena("/projects/raptor");
         for &(x, z) in &occupied {
             for dx in -1..=1 {
                 for dz in -1..=1 {
+                    let cell = (x + dx, z + dz);
                     assert!(
-                        !arena.street_walls.contains(&(x + dx, z + dz)),
+                        !arena.street_walls.contains(&cell),
                         "wall generated beside tower {:?}",
                         (x, z)
                     );
+                    if cell != (x, z) {
+                        assert!(arena.roads.contains(&cell));
+                    }
                 }
             }
         }
+    }
+
+    #[test]
+    fn arterial_network_is_connected_and_contains_loops() {
+        let (arena, _) = generated_arena("/projects/raptor");
+        let start = *arena.roads.iter().next().unwrap();
+        assert_eq!(reachable_roads(&arena, start).len(), arena.roads.len());
+
+        let edges = arena
+            .roads
+            .iter()
+            .map(|&(x, z)| {
+                usize::from(arena.roads.contains(&(x + 1, z)))
+                    + usize::from(arena.roads.contains(&(x, z + 1)))
+            })
+            .sum::<usize>();
+        assert!(
+            edges >= arena.roads.len(),
+            "connected road graph has no alternate-route cycle"
+        );
+    }
+
+    #[test]
+    fn roads_structures_and_towers_never_overlap() {
+        let (arena, occupied) = generated_arena("/projects/raptor");
+        assert!(arena.roads.is_disjoint(&arena.street_walls));
+        assert!(occupied.iter().all(|cell| !arena.roads.contains(cell)));
+        assert!(
+            occupied
+                .iter()
+                .all(|cell| !arena.street_walls.contains(cell))
+        );
+        let structure_cells: BTreeSet<_> = arena
+            .structures
+            .iter()
+            .map(|structure| structure.cell)
+            .collect();
+        assert_eq!(structure_cells, arena.street_walls);
     }
 
     #[test]
@@ -1175,7 +1395,56 @@ mod tests {
                 !arena.street_walls.contains(&approach),
                 "generated wall narrowed the parent gate at {approach:?}"
             );
+            assert!(
+                arena.roads.contains(&approach),
+                "gate approach is not part of the road network at {approach:?}"
+            );
         }
+    }
+
+    #[test]
+    fn dense_four_by_four_room_has_visible_architecture() {
+        let occupied: Vec<_> = (0..4)
+            .flat_map(|z| (0..4).map(move |x| (x * 5, z * 5)))
+            .collect();
+        let mut arena = Arena::from_nodes(occupied.iter().copied(), None, 2, 13);
+        arena.generate_city(
+            PathBuf::from("/dense-four-by-four").as_path(),
+            occupied.iter().copied(),
+            18,
+            5,
+        );
+        assert!(arena.structures.len() >= 6);
+        assert!(
+            arena
+                .structures
+                .iter()
+                .any(|structure| structure.kind == super::CityStructureKind::Pylon)
+        );
+    }
+
+    #[test]
+    fn empty_room_gets_a_connected_plaza_and_skyline() {
+        let mut arena = Arena::from_nodes([], None, 2, 13);
+        arena.generate_city(PathBuf::from("/empty").as_path(), [], 18, 5);
+        assert!(arena.structures.len() >= 6);
+        let start = *arena.roads.iter().next().unwrap();
+        assert_eq!(reachable_roads(&arena, start).len(), arena.roads.len());
+    }
+
+    #[test]
+    fn large_city_structure_count_is_bounded() {
+        let occupied: Vec<_> = (0..48)
+            .flat_map(|z| (0..64).map(move |x| (x * 5, z * 5)))
+            .collect();
+        let mut arena = Arena::from_nodes(occupied.iter().copied(), None, 2, 13);
+        arena.generate_city(
+            PathBuf::from("/large-city").as_path(),
+            occupied.iter().copied(),
+            100,
+            5,
+        );
+        assert!(arena.structures.len() <= 8_192);
     }
 
     #[test]
@@ -1345,7 +1614,10 @@ mod tests {
                 min: (-10, -10),
                 max: (10, 10),
                 parent_portal: None,
+                roads: BTreeSet::new(),
                 street_walls: BTreeSet::new(),
+                structures: Vec::new(),
+                city_theme: CityTheme::Cyan,
             },
             cells: HashMap::from([((4, 0), 0)]),
             is_dir: vec![false],

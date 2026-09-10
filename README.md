@@ -107,23 +107,26 @@ at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
 while riding, and are restored when you toggle back.
 
 In Lightcycle mode the directory entries are re-laid out as widely spaced
-"downtown" towers with empty streets between them, plus a visible neon street
-grid. Directory towers load the next arena; file towers are solid and crash the
-cycle. The cycle rounds intersections smoothly and leaves a liquid-glass wall
-that streams off its tail, thickening to full height a fraction of a cell
-behind the bike.
+"downtown" towers inside a path-seeded TRON district. Directory towers load the
+next arena; file towers are solid and crash the cycle. The cycle rounds
+intersections smoothly and leaves a liquid-glass wall that streams off its
+tail, thickening to full height a fraction of a cell behind the bike.
 
 Arenas are always square and never smaller than a fixed minimum, so a folder
 holding one or two entries still gives you room to turn around rather than a
 shallow corridor.
 
-Each directory path also seeds a stable network of short street barriers. The
-same folder keeps the same layout between visits, while different folders form
-different alleys and courtyards. Generation leaves an asphalt ring around every
-filesystem tower and carves routes from the spawn area to every tower and the
-full parent gate, so scenery cannot make a destination unreachable. Barrier
-density therefore tracks how much open street a folder has: sparse folders get
-alleyways, while a folder whose towers tile the whole arena gets few or none.
+The city generator lays connected arterial roads, tower plazas, perimeter
+boulevards, and alternate-route loops before it places any architecture. The
+remaining blocks become a skyline of low barriers, translucent glass fins, tall
+pylons, emissive caps, and animated beacons. Cyan, magenta, violet, and amber
+district themes are derived from the directory path, so the same folder keeps
+the same roads and identity across visits and Rust releases.
+
+Every filesystem tower retains a clear 3×3 approach plaza, and the spawn area
+and full parent gate are joined to the road network. Static geometry is merged
+into material batches and architecture counts are capped, keeping large-folder
+cities navigable and renderable.
 
 ## Why Jurassic Park?
 

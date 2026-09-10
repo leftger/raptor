@@ -1,8 +1,8 @@
 use crate::config;
 use crate::filesystem::FileNode;
 use crate::lightcycle::logic::{
-    Arena, CrashReason, GatePlacement, Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome,
-    Wall, classify_next_content,
+    Arena, CityStructure, CityStructureKind, CityTheme, CrashReason, GatePlacement, Heading,
+    LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall, classify_next_content,
 };
 use crate::lightcycle::{ActiveRun, LightcycleState};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
@@ -36,6 +36,7 @@ impl Plugin for LightcyclePlugin {
                     update_crash_effects.run_if(in_lightcycle_mode),
                     update_trail_mesh.run_if(in_lightcycle_mode),
                     animate_parent_gate.run_if(in_lightcycle_mode),
+                    animate_city_beacons.run_if(in_lightcycle_mode),
                     update_cycle_transform.run_if(in_lightcycle_mode),
                     update_chase_camera.run_if(in_lightcycle_mode),
                 )
@@ -51,12 +52,14 @@ struct LightcycleAssets {
     cycle_scene: Handle<WorldAsset>,
     trail_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
-    street_wall_material: Handle<StandardMaterial>,
+    city_floor_material: Handle<StandardMaterial>,
+    city_foundation_material: Handle<StandardMaterial>,
+    city_glass_material: Handle<StandardMaterial>,
+    city_accent_materials: [[Handle<StandardMaterial>; 2]; 4],
     portal_material: Handle<StandardMaterial>,
     portal_bar_material: Handle<StandardMaterial>,
     dir_tower_material: Handle<StandardMaterial>,
     file_tower_material: Handle<StandardMaterial>,
-    street_grid_material: Handle<StandardMaterial>,
     crash_material: Handle<StandardMaterial>,
 }
 
@@ -85,6 +88,12 @@ struct GateScanBar {
     travel: f32,
 }
 
+#[derive(Component)]
+struct CityBeacon {
+    base_height: f32,
+    phase: f32,
+}
+
 /// Direction the chase camera is currently following.
 ///
 /// This trails the cycle's own heading so a corner reads as the cycle swinging
@@ -101,6 +110,61 @@ fn unlit_material(color: Color) -> StandardMaterial {
         base_color: color,
         unlit: true,
         ..default()
+    }
+}
+
+fn neon_material(color: Color, emissive: LinearRgba) -> StandardMaterial {
+    StandardMaterial {
+        base_color: color,
+        emissive,
+        unlit: true,
+        ..default()
+    }
+}
+
+fn city_palette() -> [[(Color, LinearRgba); 2]; 4] {
+    [
+        [
+            (config::LIGHTCYCLE_CITY_CYAN, LinearRgba::rgb(0.0, 2.6, 3.4)),
+            (
+                config::LIGHTCYCLE_CITY_BLUE,
+                LinearRgba::rgb(0.15, 1.0, 3.0),
+            ),
+        ],
+        [
+            (
+                config::LIGHTCYCLE_CITY_MAGENTA,
+                LinearRgba::rgb(3.4, 0.03, 2.0),
+            ),
+            (config::LIGHTCYCLE_CITY_CYAN, LinearRgba::rgb(0.0, 2.4, 3.2)),
+        ],
+        [
+            (
+                config::LIGHTCYCLE_CITY_VIOLET,
+                LinearRgba::rgb(1.8, 0.18, 3.4),
+            ),
+            (config::LIGHTCYCLE_CITY_PINK, LinearRgba::rgb(3.4, 0.2, 1.2)),
+        ],
+        [
+            (
+                config::LIGHTCYCLE_CITY_AMBER,
+                LinearRgba::rgb(3.4, 1.1, 0.03),
+            ),
+            (config::LIGHTCYCLE_CITY_CYAN, LinearRgba::rgb(0.0, 2.4, 3.2)),
+        ],
+    ]
+}
+
+/// Lane markings use a district's primary accent, so ground seams use the
+/// secondary one to stay readable against them.
+const CITY_TRIM_ACCENT: usize = 1;
+
+fn city_theme_index(theme: CityTheme) -> usize {
+    match theme {
+        CityTheme::Cyan => 0,
+        CityTheme::Magenta => 1,
+        CityTheme::Violet => 2,
+        CityTheme::Amber => 3,
     }
 }
 
@@ -132,13 +196,40 @@ fn setup_lightcycle_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let palette = city_palette();
+    let city_accent_materials = std::array::from_fn(|theme| {
+        std::array::from_fn(|accent| {
+            let (color, emissive) = palette[theme][accent];
+            materials.add(neon_material(color, emissive))
+        })
+    });
     commands.insert_resource(LightcycleAssets {
         unit_cube: meshes.add(Cuboid::default()),
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
-        street_wall_material: materials.add(unlit_material(config::LIGHTCYCLE_STREET_WALL_COLOR)),
+        city_floor_material: materials.add(StandardMaterial {
+            base_color: config::LIGHTCYCLE_CITY_FLOOR_COLOR,
+            unlit: true,
+            ..default()
+        }),
+        city_foundation_material: materials.add(StandardMaterial {
+            base_color: config::LIGHTCYCLE_CITY_FOUNDATION_COLOR,
+            unlit: true,
+            ..default()
+        }),
+        city_glass_material: materials.add(StandardMaterial {
+            base_color: config::LIGHTCYCLE_CITY_GLASS_COLOR,
+            emissive: LinearRgba::rgb(0.02, 0.12, 0.25),
+            metallic: 0.18,
+            perceptual_roughness: 0.08,
+            alpha_mode: AlphaMode::Blend,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        }),
+        city_accent_materials,
         portal_material: materials.add(unlit_material(config::LIGHTCYCLE_PORTAL_COLOR)),
         portal_bar_material: materials.add(StandardMaterial {
             base_color: config::LIGHTCYCLE_PORTAL_COLOR
@@ -149,12 +240,6 @@ fn setup_lightcycle_assets(
         }),
         dir_tower_material: materials.add(unlit_material(config::DIR_COLOR)),
         file_tower_material: materials.add(unlit_material(config::FILE_COLOR)),
-        street_grid_material: materials.add(StandardMaterial {
-            base_color: config::GRID_COLOR.with_alpha(0.3),
-            unlit: true,
-            alpha_mode: AlphaMode::Blend,
-            ..default()
-        }),
         crash_material: materials.add(unlit_material(Color::srgb(1.0, 0.45, 0.1))),
     });
 }
@@ -200,10 +285,11 @@ fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
         config::LIGHTCYCLE_ARENA_PADDING,
         config::LIGHTCYCLE_MIN_ARENA_SPAN,
     );
-    arena.generate_street_walls(
+    arena.generate_city(
         path,
         cells.keys().copied(),
-        config::LIGHTCYCLE_STREET_WALL_SEED_CHANCE,
+        config::LIGHTCYCLE_CITY_STRUCTURE_SEED_CHANCE,
+        config::LIGHTCYCLE_TOWER_STRIDE,
     );
 
     let sim = spawn_sim(&arena, &cells);
@@ -302,10 +388,11 @@ fn spawn_run_entities(
         )],
     ));
 
+    spawn_city_floor(commands, assets, meshes, &run.arena);
+    spawn_road_markings(commands, assets, meshes, &run.arena);
+    spawn_city_structures(commands, assets, meshes, &run.arena);
     spawn_arena_walls(commands, assets, &run.arena);
-    spawn_street_walls(commands, assets, meshes, &run.arena);
     spawn_towers(commands, assets, meshes, run);
-    spawn_street_grid(commands, assets, meshes, &run.arena);
     spawn_trail_ribbon(commands, assets, meshes, run);
 }
 
@@ -323,42 +410,231 @@ fn spawn_trail_ribbon(
     ));
 }
 
-fn spawn_street_walls(
+fn spawn_city_floor(
     commands: &mut Commands,
     assets: &LightcycleAssets,
     meshes: &mut Assets<Mesh>,
     arena: &Arena,
 ) {
-    let cells: Vec<_> = arena.street_walls.iter().copied().collect();
-    for chunk in cells.chunks(config::MESH_CHUNK_SIZE) {
-        let Some(mesh) = build_street_wall_chunk_mesh(chunk) else {
-            continue;
-        };
+    let spacing = config::GRID_SPACING;
+    let span_x = (arena.max.0 - arena.min.0 + 1) as f32 * spacing;
+    let span_z = (arena.max.1 - arena.min.1 + 1) as f32 * spacing;
+    let center = Vec3::new(
+        (arena.min.0 + arena.max.0) as f32 * spacing * 0.5,
+        -0.08,
+        (arena.min.1 + arena.max.1) as f32 * spacing * 0.5,
+    );
+    let mesh = Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(center).with_scale(Vec3::new(span_x, 0.12, span_z)),
+    );
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(assets.city_floor_material.clone()),
+        Pickable::IGNORE,
+    ));
+}
+
+fn spawn_city_structures(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+) {
+    let all: Vec<_> = arena.structures.iter().collect();
+    spawn_structure_layer(
+        commands,
+        meshes,
+        &all,
+        assets.city_foundation_material.clone(),
+        city_foundation_mesh,
+    );
+
+    let glass: Vec<_> = arena
+        .structures
+        .iter()
+        .filter(|structure| structure.kind == CityStructureKind::GlassFin)
+        .collect();
+    spawn_structure_layer(
+        commands,
+        meshes,
+        &glass,
+        assets.city_glass_material.clone(),
+        city_body_mesh,
+    );
+
+    let theme = city_theme_index(arena.city_theme);
+    for accent in 0..2 {
+        let solid: Vec<_> = arena
+            .structures
+            .iter()
+            .filter(|structure| {
+                structure.accent as usize == accent && structure.kind != CityStructureKind::GlassFin
+            })
+            .collect();
+        spawn_structure_layer(
+            commands,
+            meshes,
+            &solid,
+            assets.city_foundation_material.clone(),
+            city_body_mesh,
+        );
+
+        let lit: Vec<_> = arena
+            .structures
+            .iter()
+            .filter(|structure| structure.accent as usize == accent)
+            .collect();
+        spawn_structure_layer(
+            commands,
+            meshes,
+            &lit,
+            assets.city_accent_materials[theme][accent].clone(),
+            city_cap_mesh,
+        );
+    }
+
+    // One color for every ground seam, distinct from the lane markings, so the
+    // edge you can crash into never reads as a stripe you can drive along.
+    spawn_structure_layer(
+        commands,
+        meshes,
+        &all,
+        assets.city_accent_materials[theme][CITY_TRIM_ACCENT].clone(),
+        city_base_trim_mesh,
+    );
+
+    for structure in arena
+        .structures
+        .iter()
+        .filter(|structure| structure.kind == CityStructureKind::Pylon)
+        .take(config::LIGHTCYCLE_CITY_BEACON_LIMIT)
+    {
+        let body_height = city_body_height(structure);
+        let (_, emissive) = city_palette()[theme][structure.accent as usize];
+        let phase = structure.pulse_phase as f32 / 3.0;
         commands.spawn((
             LightcycleSceneRoot,
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(assets.street_wall_material.clone()),
+            CityBeacon {
+                base_height: config::LIGHTCYCLE_CITY_FOUNDATION_HEIGHT + body_height + 0.32,
+                phase,
+            },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.city_accent_materials[theme][structure.accent as usize].clone()),
+            Transform::from_translation(
+                config::ground_position(structure.cell.0, structure.cell.1)
+                    + Vec3::Y * (config::LIGHTCYCLE_CITY_FOUNDATION_HEIGHT + body_height + 0.32),
+            )
+            .with_scale(Vec3::splat(0.22 + emissive.red.min(1.0) * 0.04)),
             Pickable::IGNORE,
         ));
     }
 }
 
-fn build_street_wall_chunk_mesh(cells: &[(i32, i32)]) -> Option<Mesh> {
-    let height = config::LIGHTCYCLE_STREET_WALL_HEIGHT;
-    let size = config::LIGHTCYCLE_STREET_WALL_SIZE;
-    let mut cells = cells.iter();
-    let mut mesh = street_wall_cube_mesh(*cells.next()?, height, size);
-    for &cell in cells {
-        mesh.merge(&street_wall_cube_mesh(cell, height, size))
-            .expect("street wall cuboid meshes must be merge-compatible");
+fn spawn_structure_layer(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    structures: &[&CityStructure],
+    material: Handle<StandardMaterial>,
+    build: fn(&CityStructure) -> Mesh,
+) {
+    for chunk in structures.chunks(config::MESH_CHUNK_SIZE) {
+        let mut chunk = chunk.iter();
+        let Some(first) = chunk.next() else {
+            continue;
+        };
+        let mut mesh = build(first);
+        for structure in chunk {
+            mesh.merge(&build(structure))
+                .expect("city structure meshes must be merge-compatible");
+        }
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(material.clone()),
+            Pickable::IGNORE,
+        ));
     }
-    Some(mesh)
 }
 
-fn street_wall_cube_mesh(cell: (i32, i32), height: f32, size: f32) -> Mesh {
+fn city_foundation_mesh(structure: &CityStructure) -> Mesh {
+    let height = config::LIGHTCYCLE_CITY_FOUNDATION_HEIGHT;
     Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(config::world_position(cell.0, cell.1, height))
-            .with_scale(Vec3::new(size, height, size)),
+        Transform::from_translation(config::world_position(
+            structure.cell.0,
+            structure.cell.1,
+            height,
+        ))
+        .with_scale(Vec3::new(
+            config::LIGHTCYCLE_CITY_STRUCTURE_SIZE,
+            height,
+            config::LIGHTCYCLE_CITY_STRUCTURE_SIZE,
+        )),
+    )
+}
+
+fn city_body_height(structure: &CityStructure) -> f32 {
+    let tier = structure.height_tier as f32;
+    match structure.kind {
+        CityStructureKind::Barrier => config::LIGHTCYCLE_CITY_BARRIER_HEIGHT + tier * 0.24,
+        CityStructureKind::GlassFin => config::LIGHTCYCLE_CITY_GLASS_HEIGHT + tier * 0.4,
+        CityStructureKind::Pylon => config::LIGHTCYCLE_CITY_PYLON_HEIGHT + tier * 0.7,
+    }
+}
+
+fn city_body_scale(structure: &CityStructure, height: f32) -> Vec3 {
+    let size = config::LIGHTCYCLE_CITY_STRUCTURE_SIZE;
+    match structure.kind {
+        CityStructureKind::Barrier => {
+            if structure.along_x {
+                Vec3::new(size, height, size * 0.42)
+            } else {
+                Vec3::new(size * 0.42, height, size)
+            }
+        }
+        CityStructureKind::GlassFin => {
+            if structure.along_x {
+                Vec3::new(size, height, config::LIGHTCYCLE_CITY_FIN_THICKNESS)
+            } else {
+                Vec3::new(config::LIGHTCYCLE_CITY_FIN_THICKNESS, height, size)
+            }
+        }
+        CityStructureKind::Pylon => Vec3::new(0.5, height, 0.5),
+    }
+}
+
+fn city_body_mesh(structure: &CityStructure) -> Mesh {
+    let height = city_body_height(structure);
+    let position = config::ground_position(structure.cell.0, structure.cell.1)
+        + Vec3::Y * (config::LIGHTCYCLE_CITY_FOUNDATION_HEIGHT + height * 0.5);
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(position).with_scale(city_body_scale(structure, height)),
+    )
+}
+
+fn city_cap_mesh(structure: &CityStructure) -> Mesh {
+    let body_height = city_body_height(structure);
+    let cap_height = config::LIGHTCYCLE_CITY_CAP_HEIGHT;
+    let mut scale = city_body_scale(structure, body_height);
+    scale.y = cap_height;
+    scale.x += 0.08;
+    scale.z += 0.08;
+    let position = config::ground_position(structure.cell.0, structure.cell.1)
+        + Vec3::Y * (config::LIGHTCYCLE_CITY_FOUNDATION_HEIGHT + body_height + cap_height * 0.5);
+    Mesh::from(Cuboid::default())
+        .transformed_by(Transform::from_translation(position).with_scale(scale))
+}
+
+/// Glowing skirt around a structure's footprint. It is wider than the
+/// foundation, so the visible part is a neon border tracing where the wall
+/// stops and the floor starts.
+fn city_base_trim_mesh(structure: &CityStructure) -> Mesh {
+    let height = config::LIGHTCYCLE_CITY_BASE_TRIM_HEIGHT;
+    let size = config::LIGHTCYCLE_CITY_STRUCTURE_SIZE + config::LIGHTCYCLE_CITY_BASE_TRIM_OVERHANG;
+    let position =
+        config::ground_position(structure.cell.0, structure.cell.1) + Vec3::Y * (height * 0.5);
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(position).with_scale(Vec3::new(size, height, size)),
     )
 }
 
@@ -417,66 +693,71 @@ fn tower_cube_mesh(node: &FileNode) -> Mesh {
     )
 }
 
-fn spawn_street_grid(
+fn spawn_road_markings(
     commands: &mut Commands,
     assets: &LightcycleAssets,
     meshes: &mut Assets<Mesh>,
     arena: &Arena,
 ) {
-    if let Some(mesh) = build_street_grid_mesh(arena) {
+    let mut cells: Vec<_> = arena.roads.iter().copied().collect();
+    let center = arena.center();
+    cells.sort_unstable_by_key(|cell| {
+        ((cell.0 - center.0).abs() + (cell.1 - center.1).abs(), *cell)
+    });
+    cells.truncate(config::LIGHTCYCLE_CITY_ROAD_RENDER_LIMIT);
+
+    let theme = city_theme_index(arena.city_theme);
+    for chunk in cells.chunks(config::MESH_CHUNK_SIZE) {
+        let mut chunk = chunk.iter();
+        let Some(&first) = chunk.next() else {
+            continue;
+        };
+        let mut mesh = road_marking_mesh(first, &arena.roads);
+        for &cell in chunk {
+            mesh.merge(&road_marking_mesh(cell, &arena.roads))
+                .expect("road marking meshes must be merge-compatible");
+        }
         commands.spawn((
             LightcycleSceneRoot,
             Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(assets.street_grid_material.clone()),
+            MeshMaterial3d(assets.city_accent_materials[theme][0].clone()),
             Pickable::IGNORE,
         ));
     }
 }
 
-fn build_street_grid_mesh(arena: &Arena) -> Option<Mesh> {
+fn road_marking_mesh(cell: (i32, i32), roads: &std::collections::BTreeSet<(i32, i32)>) -> Mesh {
     let spacing = config::GRID_SPACING;
-    let line_width = 0.05;
-    let min_x = (arena.min.0 as f32 - 0.5) * spacing;
-    let max_x = (arena.max.0 as f32 + 0.5) * spacing;
-    let min_z = (arena.min.1 as f32 - 0.5) * spacing;
-    let max_z = (arena.max.1 as f32 + 0.5) * spacing;
-    let mid_x = (min_x + max_x) * 0.5;
-    let mid_z = (min_z + max_z) * 0.5;
-    let width = max_x - min_x;
-    let depth = max_z - min_z;
+    let line_width = 0.075;
+    let line_height = 0.035;
+    let center = config::ground_position(cell.0, cell.1) + Vec3::Y * 0.025;
+    let mut mesh = Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(center).with_scale(Vec3::new(
+            line_width * 2.5,
+            line_height,
+            line_width * 2.5,
+        )),
+    );
 
-    let mut merged: Option<Mesh> = None;
-    let mut push = |mesh: Mesh| {
-        if let Some(existing) = &mut merged {
-            existing
-                .merge(&mesh)
-                .expect("street grid meshes must be merge-compatible");
-        } else {
-            merged = Some(mesh);
-        }
-    };
-
-    for x in arena.min.0..=arena.max.0 {
-        let center = Vec3::new(x as f32 * spacing, 0.01, mid_z);
-        push(street_grid_line_mesh(
-            center,
-            Vec3::new(line_width, 0.02, depth),
-        ));
+    if roads.contains(&(cell.0 + 1, cell.1)) {
+        let segment =
+            Mesh::from(Cuboid::default()).transformed_by(
+                Transform::from_translation(center + Vec3::X * spacing * 0.5)
+                    .with_scale(Vec3::new(spacing, line_height, line_width)),
+            );
+        mesh.merge(&segment)
+            .expect("road marking cuboids must be merge-compatible");
     }
-    for z in arena.min.1..=arena.max.1 {
-        let center = Vec3::new(mid_x, 0.01, z as f32 * spacing);
-        push(street_grid_line_mesh(
-            center,
-            Vec3::new(width, 0.02, line_width),
-        ));
+    if roads.contains(&(cell.0, cell.1 + 1)) {
+        let segment =
+            Mesh::from(Cuboid::default()).transformed_by(
+                Transform::from_translation(center + Vec3::Z * spacing * 0.5)
+                    .with_scale(Vec3::new(line_width, line_height, spacing)),
+            );
+        mesh.merge(&segment)
+            .expect("road marking cuboids must be merge-compatible");
     }
-
-    merged
-}
-
-fn street_grid_line_mesh(center: Vec3, scale: Vec3) -> Mesh {
-    Mesh::from(Cuboid::default())
-        .transformed_by(Transform::from_translation(center).with_scale(scale))
+    mesh
 }
 
 /// World-space plane each wall rail sits in, half a cell outside the playable area.
@@ -532,6 +813,11 @@ fn spawn_wall_rail(commands: &mut Commands, assets: &LightcycleAssets, arena: &A
         .filter(|portal| portal.wall == wall)
         .map(|portal| gate_world_span(&portal));
 
+    let trim_height = config::LIGHTCYCLE_CITY_BASE_TRIM_HEIGHT;
+    let trim_thickness = thickness + config::LIGHTCYCLE_CITY_BASE_TRIM_OVERHANG;
+    let accent =
+        assets.city_accent_materials[city_theme_index(arena.city_theme)][CITY_TRIM_ACCENT].clone();
+
     for (start, end) in rail_segments(min, max, gap) {
         let center = (start + end) * 0.5;
         let length = end - start;
@@ -551,6 +837,27 @@ fn spawn_wall_rail(commands: &mut Commands, assets: &LightcycleAssets, arena: &A
             Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.wall_material.clone()),
             Transform::from_translation(translation).with_scale(scale),
+            Pickable::IGNORE,
+        ));
+
+        // Same light-line the structures get, so the perimeter reads as a wall
+        // standing on the floor rather than the floor fading into darkness.
+        let (trim_translation, trim_scale) = match wall {
+            Wall::NegZ | Wall::PosZ => (
+                Vec3::new(center, trim_height * 0.5, plane),
+                Vec3::new(length, trim_height, trim_thickness),
+            ),
+            Wall::NegX | Wall::PosX => (
+                Vec3::new(plane, trim_height * 0.5, center),
+                Vec3::new(trim_thickness, trim_height, length),
+            ),
+        };
+
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(accent.clone()),
+            Transform::from_translation(trim_translation).with_scale(trim_scale),
             Pickable::IGNORE,
         ));
     }
@@ -673,6 +980,16 @@ fn animate_parent_gate(
 
     for (bar, mut transform) in &mut bars {
         transform.translation.y = gate_bar_height(bar, elapsed);
+    }
+}
+
+fn animate_city_beacons(time: Res<Time>, mut beacons: Query<(&CityBeacon, &mut Transform)>) {
+    let elapsed = time.elapsed_secs();
+    for (beacon, mut transform) in &mut beacons {
+        let wave = (elapsed * 2.4 + beacon.phase * std::f32::consts::TAU).sin();
+        transform.translation.y = beacon.base_height + wave * 0.18;
+        transform.scale = Vec3::splat(0.2 + (wave * 0.5 + 0.5) * 0.08);
+        transform.rotate_y(0.018);
     }
 }
 
@@ -1513,18 +1830,121 @@ fn update_chase_camera(
 #[cfg(test)]
 mod tests {
     use super::{
-        GateScanBar, arc_cell_pose, build_trail_mesh, cycle_cell_pose, gate_bar_height, gate_pulse,
-        pose_rotation, rail_segments, trail_centerline, trail_heights, trim_polyline_end,
+        CITY_TRIM_ACCENT, GateScanBar, arc_cell_pose, build_trail_mesh, city_base_trim_mesh,
+        city_body_height, city_body_mesh, city_cap_mesh, city_foundation_mesh, city_palette,
+        city_theme_index, cycle_cell_pose, gate_bar_height, gate_pulse, pose_rotation,
+        rail_segments, road_marking_mesh, trail_centerline, trail_heights, trim_polyline_end,
     };
     use crate::config;
-    use crate::lightcycle::logic::{Heading, LightcycleSim, Turn};
+    use crate::lightcycle::logic::{
+        CityStructure, CityStructureKind, CityTheme, Heading, LightcycleSim, Turn,
+    };
+    use bevy::camera::primitives::MeshAabb;
     use bevy::prelude::{Vec2, Vec3};
+    use std::collections::BTreeSet;
 
     const RADIUS: f32 = config::LIGHTCYCLE_TURN_RADIUS;
 
     /// A right turn at cell (1, 0): entering along +X, leaving along +Z.
     fn right_corner(u: f32) -> super::CyclePose {
         arc_cell_pose((1, 0), (1, 0), (0, 1), u, RADIUS)
+    }
+
+    fn city_structure(kind: CityStructureKind, along_x: bool, tier: u8) -> CityStructure {
+        CityStructure {
+            cell: (2, -3),
+            kind,
+            along_x,
+            height_tier: tier,
+            accent: 0,
+            pulse_phase: 0,
+        }
+    }
+
+    #[test]
+    fn every_city_structure_builds_all_visual_layers() {
+        for kind in [
+            CityStructureKind::Barrier,
+            CityStructureKind::GlassFin,
+            CityStructureKind::Pylon,
+        ] {
+            let structure = city_structure(kind, true, 1);
+            assert!(city_foundation_mesh(&structure).count_vertices() > 0);
+            assert!(city_body_mesh(&structure).count_vertices() > 0);
+            assert!(city_cap_mesh(&structure).count_vertices() > 0);
+        }
+    }
+
+    #[test]
+    fn city_height_tiers_and_silhouettes_are_distinct() {
+        for kind in [
+            CityStructureKind::Barrier,
+            CityStructureKind::GlassFin,
+            CityStructureKind::Pylon,
+        ] {
+            let low = city_structure(kind, true, 0);
+            let tall = city_structure(kind, false, 2);
+            assert!(city_body_height(&tall) > city_body_height(&low));
+        }
+    }
+
+    /// The skirt only delineates the wall/floor seam if it is wider than the
+    /// foundation it surrounds and sits flat on the ground.
+    #[test]
+    fn the_base_trim_outlines_the_footprint_at_ground_level() {
+        for kind in [
+            CityStructureKind::Barrier,
+            CityStructureKind::GlassFin,
+            CityStructureKind::Pylon,
+        ] {
+            let structure = city_structure(kind, true, 1);
+            let trim = city_base_trim_mesh(&structure).compute_aabb().unwrap();
+            let foundation = city_foundation_mesh(&structure).compute_aabb().unwrap();
+
+            assert!(trim.half_extents.x > foundation.half_extents.x);
+            assert!(trim.half_extents.z > foundation.half_extents.z);
+            assert!(
+                trim.max().y < foundation.max().y,
+                "trim should hug the floor, not cover the foundation"
+            );
+            assert!((trim.min().y).abs() < 1e-5, "trim must start at the ground");
+        }
+    }
+
+    #[test]
+    fn road_markings_join_neighboring_cells() {
+        let isolated = BTreeSet::from([(0, 0)]);
+        let connected = BTreeSet::from([(0, 0), (1, 0), (0, 1)]);
+        assert!(
+            road_marking_mesh((0, 0), &connected).count_vertices()
+                > road_marking_mesh((0, 0), &isolated).count_vertices()
+        );
+    }
+
+    /// Ground seams must never be drawn in the same color as a lane marking.
+    #[test]
+    fn ground_seams_contrast_with_lane_markings_in_every_theme() {
+        let palette = city_palette();
+        for theme in palette {
+            assert_ne!(theme[CITY_TRIM_ACCENT].0, theme[0].0);
+        }
+    }
+
+    #[test]
+    fn every_theme_maps_to_a_two_color_neon_palette() {
+        let palette = city_palette();
+        for (index, theme) in [
+            CityTheme::Cyan,
+            CityTheme::Magenta,
+            CityTheme::Violet,
+            CityTheme::Amber,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(city_theme_index(theme), index);
+            assert_ne!(palette[index][0].0, palette[index][1].0);
+        }
     }
 
     #[test]
