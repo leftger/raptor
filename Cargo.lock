@@ -2892,6 +2892,7 @@ dependencies = [
 [[package]]
 name = "glicol"
 version = "0.14.0-dev"
+source = "git+https://github.com/chaosprint/glicol.git?rev=0317db2e3f157b911bfc28c72ad5db90db963f24#0317db2e3f157b911bfc28c72ad5db90db963f24"
 dependencies = [
  "glicol_parser",
  "glicol_synth",
@@ -2904,6 +2905,7 @@ dependencies = [
 [[package]]
 name = "glicol_parser"
 version = "0.14.0-dev"
+source = "git+https://github.com/chaosprint/glicol.git?rev=0317db2e3f157b911bfc28c72ad5db90db963f24#0317db2e3f157b911bfc28c72ad5db90db963f24"
 dependencies = [
  "fasteval",
  "hashbrown 0.14.5",
@@ -2915,6 +2917,7 @@ dependencies = [
 [[package]]
 name = "glicol_synth"
 version = "0.14.0-dev"
+source = "git+https://github.com/chaosprint/glicol.git?rev=0317db2e3f157b911bfc28c72ad5db90db963f24#0317db2e3f157b911bfc28c72ad5db90db963f24"
 dependencies = [
  "dasp_interpolate",
  "dasp_ring_buffer",

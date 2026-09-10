@@ -185,7 +185,7 @@ existing `Command` handler). `Command` may be extended later for consistency.
 
 ```toml
 [dependencies]
-glicol = { path = "../music-stuff/glicol/rs/main" }   # then pin git rev
+glicol = { git = "https://github.com/chaosprint/glicol.git", rev = "0317db2e3f157b911bfc28c72ad5db90db963f24" }
 cpal = "0.18"
 crossbeam-channel = "0.5"   # commands to the audio thread + rendered sample queue
 ```
@@ -197,21 +197,19 @@ crossbeam-channel = "0.5"   # commands to the audio thread + rendered sample que
 - Glicol's `use-samples` / `use-meta` features arrive via its internal manifest;
   the synth-only graph needs no sample assets.
 
-### Glicol pin (must-fix before CI/release)
+### Glicol pin
 
-The `path` dependency only resolves in the local `open-source-repos` layout that
-holds both the `raptor` and `music-stuff` checkouts. It will not exist in CI or
-for anyone who only clones `raptor`. Before relying on CI, switch to a pinned git
-dependency (the local checkout is clean and its HEAD matches the source this was
-built against):
+Glicol 0.14.0-dev is unpublished, so the dependency is pinned to the exact
+revision `0317db2e3f157b911bfc28c72ad5db90db963f24`. This resolves without the
+local `music-stuff` checkout, so CI and raptor-only clones build normally.
+`Cargo.lock` records the git source for `glicol`, `glicol_parser`, and
+`glicol_synth`.
 
-```toml
-glicol = { git = "https://github.com/chaosprint/glicol.git", rev = "0317db2e3f157b911bfc28c72ad5db90db963f24" }
-```
+The voice bank relies on `Engine::send_msg` keying reference chains by their
+leading `~` (e.g. `~v0,2,0,0.4`). Re-verify that when bumping the pin: compile a
+graph and confirm `~v0` addresses resolve. Vendoring the three glicol crates is
+the alternative if a git dependency is ever undesirable.
 
-Confirm the rev resolves from a fresh clone (`cargo update -p glicol`) and that
-`Engine::send_msg` still keys reference chains with their leading `~`, which the
-voice bank relies on. Vendoring the three glicol crates is the alternative.
 
 ## 8. Milestones
 
