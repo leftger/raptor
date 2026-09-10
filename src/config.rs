@@ -72,7 +72,9 @@ pub const LIGHTCYCLE_TURN_RADIUS: f32 = 0.4;
 pub const LIGHTCYCLE_LEAN_ANGLE: f32 = 0.55;
 pub const LIGHTCYCLE_CRASH_FX_DURATION: f32 = 0.6;
 pub const LIGHTCYCLE_ARENA_PADDING: i32 = 1;
-pub const LIGHTCYCLE_EMPTY_ARENA_HALF: i32 = 2;
+/// Smallest arena side, in cells. Arenas are square, so a folder with one or two
+/// entries still gets room to turn around instead of a shallow corridor.
+pub const LIGHTCYCLE_MIN_ARENA_SPAN: i32 = 9;
 pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;
 /// Tower lattice spacing in cells. Each original grid row/column is multiplied
 /// by this stride, leaving empty street cells between directory/file towers.
@@ -89,8 +91,17 @@ pub const LIGHTCYCLE_MODEL_SCALE: f32 = 0.72;
 pub const LIGHTCYCLE_MODEL_YAW: f32 = std::f32::consts::PI;
 /// Rendered height of the scaled cycle model.
 pub const LIGHTCYCLE_CYCLE_HEIGHT: f32 = 1.0;
-pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.6;
-pub const LIGHTCYCLE_TRAIL_THICKNESS: f32 = 0.55;
+pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.85;
+/// Thin enough to read as a sheet of glass rather than a stack of bricks.
+pub const LIGHTCYCLE_TRAIL_THICKNESS: f32 = 0.14;
+/// How far behind the cycle origin the wall is born, in cells. Matches the
+/// scaled model's rear axle so the sheet appears to leave the tail, not the
+/// cell center.
+pub const LIGHTCYCLE_TRAIL_TAIL: f32 = 0.42;
+/// Distance along the ribbon, in cells, over which the wall grows from a
+/// meniscus at the tail to full height.
+pub const LIGHTCYCLE_TRAIL_EMANATE: f32 = 0.55;
+pub const LIGHTCYCLE_TRAIL_SPAWN_HEIGHT: f32 = 0.16;
 pub const LIGHTCYCLE_WALL_HEIGHT: f32 = 1.4;
 pub const LIGHTCYCLE_WALL_THICKNESS: f32 = 0.2;
 pub const LIGHTCYCLE_PORTAL_HEIGHT: f32 = 2.6;
@@ -108,7 +119,10 @@ pub const LIGHTCYCLE_PORTAL_BAR_SPEED: f32 = 0.45;
 pub const LIGHTCYCLE_PORTAL_BAR_HEIGHT: f32 = 0.18;
 pub const LIGHTCYCLE_PORTAL_BAR_ALPHA: f32 = 0.5;
 
-pub const LIGHTCYCLE_TRAIL_COLOR: Color = Color::srgba(0.0, 1.0, 1.0, 1.0);
+pub const LIGHTCYCLE_TRAIL_COLOR: Color = Color::srgba(0.55, 0.95, 1.0, 1.0);
+/// Tint of light passing through the trail, slightly greener than the surface
+/// so the sheet reads as thick glass rather than a cyan decal.
+pub const LIGHTCYCLE_TRAIL_ATTENUATION: Color = Color::srgba(0.35, 0.9, 0.85, 1.0);
 pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
 pub const LIGHTCYCLE_PORTAL_COLOR: Color = Color::srgba(1.0, 0.85, 0.1, 1.0);
 /// Trough of the gate frame's pulse.

@@ -10,6 +10,8 @@ use crate::state::{
     DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
     OrbitCameraResource, TrailSceneRoot,
 };
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
@@ -32,7 +34,7 @@ impl Plugin for LightcyclePlugin {
                     step_lightcycle.run_if(in_lightcycle_mode),
                     spawn_crash_effect.run_if(in_lightcycle_mode),
                     update_crash_effects.run_if(in_lightcycle_mode),
-                    rebuild_trail_mesh.run_if(in_lightcycle_mode),
+                    update_trail_mesh.run_if(in_lightcycle_mode),
                     animate_parent_gate.run_if(in_lightcycle_mode),
                     update_cycle_transform.run_if(in_lightcycle_mode),
                     update_chase_camera.run_if(in_lightcycle_mode),
@@ -101,6 +103,28 @@ fn unlit_material(color: Color) -> StandardMaterial {
     }
 }
 
+/// Lit transmissive sheet: the directional light and the arena behind it show
+/// through, with a cyan tint and a hard specular so it reads as glass rather
+/// than an unlit neon brick.
+fn trail_glass_material() -> StandardMaterial {
+    StandardMaterial {
+        base_color: config::LIGHTCYCLE_TRAIL_COLOR,
+        perceptual_roughness: 0.08,
+        metallic: 0.02,
+        specular_transmission: 0.92,
+        thickness: 0.28,
+        ior: 1.45,
+        attenuation_color: config::LIGHTCYCLE_TRAIL_ATTENUATION,
+        attenuation_distance: 0.8,
+        emissive: LinearRgba::rgb(0.05, 0.55, 0.7),
+        clearcoat: 1.0,
+        clearcoat_perceptual_roughness: 0.06,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    }
+}
+
 fn setup_lightcycle_assets(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -111,7 +135,7 @@ fn setup_lightcycle_assets(
         unit_cube: meshes.add(Cuboid::default()),
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
-        trail_material: materials.add(unlit_material(config::LIGHTCYCLE_TRAIL_COLOR)),
+        trail_material: materials.add(trail_glass_material()),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
         portal_material: materials.add(unlit_material(config::LIGHTCYCLE_PORTAL_COLOR)),
         portal_bar_material: materials.add(StandardMaterial {
@@ -167,7 +191,7 @@ fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
         nodes.iter().map(|node| tower_position(node.grid_pos)),
         parent_gate,
         config::LIGHTCYCLE_ARENA_PADDING,
-        config::LIGHTCYCLE_EMPTY_ARENA_HALF,
+        config::LIGHTCYCLE_MIN_ARENA_SPAN,
     );
 
     let cells: HashMap<_, _> = nodes
@@ -185,7 +209,6 @@ fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
         cells,
         crash_label: None,
         entering_label: None,
-        trail_dirty: false,
     }
 }
 
@@ -276,6 +299,21 @@ fn spawn_run_entities(
     spawn_arena_walls(commands, assets, &run.arena);
     spawn_towers(commands, assets, meshes, run);
     spawn_street_grid(commands, assets, meshes, &run.arena);
+    spawn_trail_ribbon(commands, assets, meshes, run);
+}
+
+fn spawn_trail_ribbon(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    run: &ActiveRun,
+) {
+    commands.spawn((
+        TrailSceneRoot,
+        Mesh3d(meshes.add(build_trail_mesh(&run.sim))),
+        MeshMaterial3d(assets.trail_material.clone()),
+        Pickable::IGNORE,
+    ));
 }
 
 fn spawn_towers(
@@ -675,7 +713,6 @@ fn restart_run(run: &mut ActiveRun) {
     run.sim = spawn_sim(&run.arena, &run.cells);
     run.crash_label = None;
     run.entering_label = None;
-    run.trail_dirty = true;
 }
 
 fn step_lightcycle(
@@ -706,7 +743,6 @@ fn step_lightcycle(
         state.clock -= fixed_step;
         substeps += 1;
 
-        let trail_before = run.sim.trail.len();
         let outcome = {
             let arena = run.arena.clone();
             let cells = &run.cells;
@@ -719,10 +755,6 @@ fn step_lightcycle(
                 },
             )
         };
-
-        if run.sim.trail.len() != trail_before {
-            run.trail_dirty = true;
-        }
 
         match outcome {
             StepOutcome::Moved => {}
@@ -859,58 +891,302 @@ fn update_crash_effects(
     }
 }
 
-fn rebuild_trail_mesh(
-    mut state: ResMut<LightcycleState>,
-    mut commands: Commands,
-    assets: Res<LightcycleAssets>,
+/// Rewrites the trail mesh every frame so the live end stays glued to the
+/// cycle's tail instead of snapping to the last cell center.
+fn update_trail_mesh(
+    state: Res<LightcycleState>,
     mut meshes: ResMut<Assets<Mesh>>,
-    old_trail: Query<Entity, With<TrailSceneRoot>>,
+    trail: Query<&Mesh3d, With<TrailSceneRoot>>,
 ) {
-    let Some(run) = state.run.as_mut() else {
+    let Some(run) = state.run.as_ref() else {
         return;
     };
-    if !run.trail_dirty {
+    let Ok(mesh3d) = trail.single() else {
         return;
-    }
-    run.trail_dirty = false;
-
-    for entity in &old_trail {
-        commands.entity(entity).despawn();
-    }
-
-    // Build a continuous wall ribbon through every cell the cycle has occupied,
-    // ending at the current head so the wall visibly trails behind the cycle.
-    // Corners are rounded with the same radius used by the rendered cycle path.
-    let mut path = run.sim.trail.clone();
-    path.push(run.sim.cell);
-
-    let segments = trail_ribbon_segments(&path);
-    for chunk in segments.chunks(config::MESH_CHUNK_SIZE) {
-        let Some(mesh) = build_trail_chunk_mesh(chunk) else {
-            continue;
-        };
-        commands.spawn((
-            TrailSceneRoot,
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(assets.trail_material.clone()),
-            Pickable::IGNORE,
-        ));
-    }
+    };
+    let Some(mut mesh) = meshes.get_mut(mesh3d.id()) else {
+        return;
+    };
+    *mesh = build_trail_mesh(&run.sim);
 }
 
-fn trail_ribbon_segments(path: &[(i32, i32)]) -> Vec<((f32, f32), (f32, f32))> {
-    let points = rounded_polyline(path);
-    points
-        .windows(2)
-        .filter_map(|pair| match pair {
-            [a, b] => {
-                let dx = b.0 - a.0;
-                let dz = b.1 - a.1;
-                (dx * dx + dz * dz > 0.0001).then_some((*a, *b))
+fn build_trail_mesh(sim: &LightcycleSim) -> Mesh {
+    let points = trail_centerline(sim);
+    let heights = trail_heights(&points);
+    trail_glass_mesh(&points, &heights)
+}
+
+/// Cell-space polyline of the wall: committed trail, the same corner arc the
+/// cycle is riding, then trimmed so the live end sits at the tail.
+fn trail_centerline(sim: &LightcycleSim) -> Vec<(f32, f32)> {
+    let mut points = if sim.trail.is_empty() {
+        vec![cell_to_point(sim.cell)]
+    } else {
+        rounded_polyline(&sim.trail)
+    };
+
+    if let Some(arc) = corner_arc(sim) {
+        if sim.queued_turn.is_some() {
+            points.push(cell_to_point(sim.cell));
+        }
+        let samples = ((arc.u * 10.0).ceil() as usize).max(2);
+        for step in 0..=samples {
+            let t = arc.u * step as f32 / samples as f32;
+            points.push(arc.sample(t).position);
+        }
+    } else {
+        let pose = cycle_cell_pose(sim);
+        points.push(pose.position);
+    }
+
+    let points = collapse_near_duplicates(points);
+    trim_polyline_end(points, config::LIGHTCYCLE_TRAIL_TAIL)
+}
+
+fn trail_heights(points: &[(f32, f32)]) -> Vec<f32> {
+    let from_end = distances_from_end(points);
+    let emanate = config::LIGHTCYCLE_TRAIL_EMANATE;
+    let full = config::LIGHTCYCLE_TRAIL_HEIGHT;
+    let spawn = config::LIGHTCYCLE_TRAIL_SPAWN_HEIGHT;
+
+    from_end
+        .into_iter()
+        .map(|distance| {
+            if distance >= emanate {
+                full
+            } else {
+                let t = (distance / emanate).clamp(0.0, 1.0);
+                let smooth = t * t * (3.0 - 2.0 * t);
+                spawn + (full - spawn) * smooth
             }
-            _ => None,
         })
         .collect()
+}
+
+fn distances_from_end(points: &[(f32, f32)]) -> Vec<f32> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+
+    let mut from_start = vec![0.0; points.len()];
+    for index in 1..points.len() {
+        from_start[index] =
+            from_start[index - 1] + point_distance(points[index - 1], points[index]);
+    }
+    let total = *from_start.last().unwrap_or(&0.0);
+    from_start.into_iter().map(|d| total - d).collect()
+}
+
+fn point_distance(a: (f32, f32), b: (f32, f32)) -> f32 {
+    let dx = b.0 - a.0;
+    let dz = b.1 - a.1;
+    (dx * dx + dz * dz).sqrt()
+}
+
+fn collapse_near_duplicates(points: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    let mut collapsed = Vec::with_capacity(points.len());
+    for point in points {
+        if collapsed
+            .last()
+            .is_none_or(|previous| point_distance(*previous, point) > 1e-4)
+        {
+            collapsed.push(point);
+        }
+    }
+    collapsed
+}
+
+/// Shortens the live end of a polyline by `trim` cells so the wall stops at
+/// the tail instead of the cycle's origin.
+fn trim_polyline_end(mut points: Vec<(f32, f32)>, trim: f32) -> Vec<(f32, f32)> {
+    let mut remaining = trim;
+    while points.len() >= 2 && remaining > 1e-4 {
+        let last = points.len() - 1;
+        let a = points[last - 1];
+        let b = points[last];
+        let length = point_distance(a, b);
+        if length <= 1e-4 {
+            points.pop();
+            continue;
+        }
+        if remaining >= length {
+            points.pop();
+            remaining -= length;
+        } else {
+            let t = 1.0 - remaining / length;
+            points[last] = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+            remaining = 0.0;
+        }
+    }
+    points
+}
+
+/// Extrudes a thin glass slab along `points`. Heights vary so the live end is
+/// a meniscus at the tail rather than a chopped cuboid.
+fn trail_glass_mesh(points: &[(f32, f32)], heights: &[f32]) -> Mesh {
+    if points.len() < 2 || heights.len() != points.len() {
+        return collapsed_trail_mesh(points.first().copied().unwrap_or_default());
+    }
+
+    let spacing = config::GRID_SPACING;
+    let half_thick = config::LIGHTCYCLE_TRAIL_THICKNESS * 0.5;
+    let stations: Vec<(Vec3, Vec3, f32)> = points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let origin = Vec3::new(point.0 * spacing, 0.0, point.1 * spacing);
+            let tangent = polyline_tangent(points, index);
+            let side = Vec3::Y.cross(tangent).normalize_or_zero() * half_thick;
+            (origin, side, heights[index])
+        })
+        .collect();
+
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+
+    for window in stations.windows(2) {
+        let (a_origin, a_side, a_height) = window[0];
+        let (b_origin, b_side, b_height) = window[1];
+
+        let a_left = a_origin - a_side;
+        let a_right = a_origin + a_side;
+        let b_left = b_origin - b_side;
+        let b_right = b_origin + b_side;
+        let a_left_top = a_left + Vec3::Y * a_height;
+        let a_right_top = a_right + Vec3::Y * a_height;
+        let b_left_top = b_left + Vec3::Y * b_height;
+        let b_right_top = b_right + Vec3::Y * b_height;
+
+        push_quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            a_left,
+            b_left,
+            b_left_top,
+            a_left_top,
+        );
+        push_quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            a_right,
+            a_right_top,
+            b_right_top,
+            b_right,
+        );
+        push_quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            a_left_top,
+            b_left_top,
+            b_right_top,
+            a_right_top,
+        );
+        push_quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            a_left,
+            a_right,
+            b_right,
+            b_left,
+        );
+    }
+
+    let (origin, side, height) = stations[0];
+    push_quad(
+        &mut positions,
+        &mut normals,
+        &mut indices,
+        origin - side,
+        origin - side + Vec3::Y * height,
+        origin + side + Vec3::Y * height,
+        origin + side,
+    );
+    let (origin, side, height) = stations[stations.len() - 1];
+    push_quad(
+        &mut positions,
+        &mut normals,
+        &mut indices,
+        origin - side,
+        origin + side,
+        origin + side + Vec3::Y * height,
+        origin - side + Vec3::Y * height,
+    );
+
+    trail_mesh_from(positions, normals, indices)
+}
+
+/// An invisible, zero-area quad standing in for a ribbon too short to draw.
+///
+/// The trail mesh must never be zero-vertex. Bevy's mesh allocator skips
+/// allocating a mesh with an empty vertex buffer but still runs the upload for
+/// it, which logs `Use-after-free: attempted to copy element data for an
+/// unallocated key` every frame. A run has no ribbon yet for the fraction of a
+/// cell it takes the tail to clear its spawn, and again after every restart and
+/// folder entry, so this is the common case rather than an edge case.
+fn collapsed_trail_mesh(anchor: (f32, f32)) -> Mesh {
+    let spacing = config::GRID_SPACING;
+    let point = Vec3::new(anchor.0 * spacing, 0.0, anchor.1 * spacing);
+
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+    push_quad(
+        &mut positions,
+        &mut normals,
+        &mut indices,
+        point,
+        point,
+        point,
+        point,
+    );
+    trail_mesh_from(positions, normals, indices)
+}
+
+fn trail_mesh_from(positions: Vec<[f32; 3]>, normals: Vec<[f32; 3]>, indices: Vec<u32>) -> Mesh {
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+fn polyline_tangent(points: &[(f32, f32)], index: usize) -> Vec3 {
+    let previous = if index == 0 {
+        points[0]
+    } else {
+        points[index - 1]
+    };
+    let next = if index + 1 == points.len() {
+        points[index]
+    } else {
+        points[index + 1]
+    };
+    Vec3::new(next.0 - previous.0, 0.0, next.1 - previous.1).normalize_or_zero()
+}
+
+fn push_quad(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    indices: &mut Vec<u32>,
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    d: Vec3,
+) {
+    let normal = (b - a).cross(d - a).normalize_or_zero();
+    let start = positions.len() as u32;
+    for vertex in [a, b, c, d] {
+        positions.push(vertex.to_array());
+        normals.push(normal.to_array());
+    }
+    indices.extend_from_slice(&[start, start + 1, start + 2, start, start + 2, start + 3]);
 }
 
 fn rounded_polyline(path: &[(i32, i32)]) -> Vec<(f32, f32)> {
@@ -928,7 +1204,7 @@ fn rounded_polyline(path: &[(i32, i32)]) -> Vec<(f32, f32)> {
             let arc_start = offset_cell_point(corner, incoming, -radius);
             points.push(arc_start);
 
-            let samples = 6;
+            let samples = 10;
             for step in 1..=samples {
                 let u = step as f32 / samples as f32;
                 points.push(arc_cell_pose(corner, incoming, outgoing, u, radius).position);
@@ -958,41 +1234,6 @@ fn offset_cell_point(cell: (i32, i32), direction: (i32, i32), distance: f32) -> 
     (
         cell.0 as f32 + direction.0 as f32 * distance,
         cell.1 as f32 + direction.1 as f32 * distance,
-    )
-}
-
-#[allow(clippy::type_complexity)]
-fn build_trail_chunk_mesh(segments: &[((f32, f32), (f32, f32))]) -> Option<Mesh> {
-    let first = *segments.first()?;
-    let mut mesh = trail_segment_mesh(first.0, first.1);
-    for &(a, b) in &segments[1..] {
-        mesh.merge(&trail_segment_mesh(a, b))
-            .expect("trail ribbon meshes must be merge-compatible");
-    }
-    Some(mesh)
-}
-
-fn trail_segment_mesh(a: (f32, f32), b: (f32, f32)) -> Mesh {
-    let spacing = config::GRID_SPACING;
-    let height = config::LIGHTCYCLE_TRAIL_HEIGHT;
-    let thickness = config::LIGHTCYCLE_TRAIL_THICKNESS;
-
-    let a_world = Vec3::new(a.0 * spacing, 0.0, a.1 * spacing);
-    let b_world = Vec3::new(b.0 * spacing, 0.0, b.1 * spacing);
-    let delta = b_world - a_world;
-    let length = delta.length();
-
-    let center = Vec3::new(
-        (a_world.x + b_world.x) * 0.5,
-        height * 0.5,
-        (a_world.z + b_world.z) * 0.5,
-    );
-    let rotation = Quat::from_rotation_arc(Vec3::X, delta.normalize_or_zero());
-
-    Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(center)
-            .with_rotation(rotation)
-            .with_scale(Vec3::new(length, height, thickness)),
     )
 }
 
@@ -1040,8 +1281,8 @@ fn cycle_world_position(sim: &LightcycleSim) -> Vec3 {
 /// intersection, taking its facing from the arc's tangent, so the cycle steers
 /// through the corner instead of sliding around it and rotating afterwards.
 fn cycle_cell_pose(sim: &LightcycleSim) -> CyclePose {
-    if let Some(pose) = cornering_pose(sim) {
-        return pose;
+    if let Some(arc) = corner_arc(sim) {
+        return arc.sample(arc.u);
     }
 
     let (dx, dz) = sim.heading.delta();
@@ -1055,7 +1296,23 @@ fn cycle_cell_pose(sim: &LightcycleSim) -> CyclePose {
     }
 }
 
-fn cornering_pose(sim: &LightcycleSim) -> Option<CyclePose> {
+/// The live corner the cycle is riding, if any.
+#[derive(Clone, Copy)]
+struct CornerArc {
+    corner: (i32, i32),
+    incoming: (i32, i32),
+    outgoing: (i32, i32),
+    u: f32,
+    radius: f32,
+}
+
+impl CornerArc {
+    fn sample(self, u: f32) -> CyclePose {
+        arc_cell_pose(self.corner, self.incoming, self.outgoing, u, self.radius)
+    }
+}
+
+fn corner_arc(sim: &LightcycleSim) -> Option<CornerArc> {
     let radius = config::LIGHTCYCLE_TURN_RADIUS;
 
     // Approaching a queued turn: the first half of the arc happens just before
@@ -1066,13 +1323,13 @@ fn cornering_pose(sim: &LightcycleSim) -> Option<CyclePose> {
         let incoming = sim.heading.delta();
         let outgoing = sim.heading.turn(turn).delta();
         let u = ((sim.cell_t - (1.0 - radius)) / radius) * 0.5;
-        return Some(arc_cell_pose(
-            sim.next_cell(),
+        return Some(CornerArc {
+            corner: sim.next_cell(),
             incoming,
             outgoing,
             u,
             radius,
-        ));
+        });
     }
 
     // Just applied a turn: render the second half of the arc after leaving the
@@ -1086,7 +1343,13 @@ fn cornering_pose(sim: &LightcycleSim) -> Option<CyclePose> {
         let is_turn = incoming.0 * outgoing.0 + incoming.1 * outgoing.1 == 0;
         if is_turn {
             let u = 0.5 + (sim.cell_t / radius) * 0.5;
-            return Some(arc_cell_pose(sim.cell, incoming, outgoing, u, radius));
+            return Some(CornerArc {
+                corner: sim.cell,
+                incoming,
+                outgoing,
+                u,
+                radius,
+            });
         }
     }
 
@@ -1200,8 +1463,8 @@ fn update_chase_camera(
 #[cfg(test)]
 mod tests {
     use super::{
-        GateScanBar, arc_cell_pose, cycle_cell_pose, gate_bar_height, gate_pulse, pose_rotation,
-        rail_segments,
+        GateScanBar, arc_cell_pose, build_trail_mesh, cycle_cell_pose, gate_bar_height, gate_pulse,
+        pose_rotation, rail_segments, trail_centerline, trail_heights, trim_polyline_end,
     };
     use crate::config;
     use crate::lightcycle::logic::{Heading, LightcycleSim, Turn};
@@ -1250,6 +1513,92 @@ mod tests {
         assert!((before.position.1 - after.position.1).abs() < 1e-5);
         assert!((before.direction - after.direction).length() < 1e-5);
         assert!((before.lean - after.lean).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_trail_stops_at_the_cycle_tail_not_the_cell_center() {
+        let mut sim = LightcycleSim::start((0, 0), Heading::PosX);
+        sim.cell_t = 0.7;
+        let pose = cycle_cell_pose(&sim);
+        let points = trail_centerline(&sim);
+        let tail = *points.last().unwrap();
+
+        let expected = (
+            pose.position.0 - pose.direction.x * config::LIGHTCYCLE_TRAIL_TAIL,
+            pose.position.1 - pose.direction.y * config::LIGHTCYCLE_TRAIL_TAIL,
+        );
+        assert!((tail.0 - expected.0).abs() < 1e-4);
+        assert!((tail.1 - expected.1).abs() < 1e-4);
+        assert!(
+            (tail.0 - pose.position.0).abs() > 0.2,
+            "trail still ends at the bike origin"
+        );
+    }
+
+    #[test]
+    fn the_live_trail_follows_the_same_arc_as_the_cycle() {
+        // Second half of a right turn: the tail has already entered the corner,
+        // so the ribbon itself must leave the incoming axis.
+        let mut sim = LightcycleSim::start((1, 0), Heading::PosZ);
+        sim.trail.push((0, 0));
+        sim.cell_t = 0.35;
+        let points = trail_centerline(&sim);
+
+        let leaves_axis = points.windows(2).any(|pair| {
+            let dx = (pair[1].0 - pair[0].0).abs();
+            let dz = (pair[1].1 - pair[0].1).abs();
+            dx > 1e-4 && dz > 1e-4
+        });
+        assert!(
+            leaves_axis,
+            "trail stayed axis-aligned through a corner: {points:?}"
+        );
+    }
+
+    #[test]
+    fn the_trail_is_a_meniscus_at_the_tail_and_full_height_behind_it() {
+        let points = vec![(0.0, 0.0), (2.0, 0.0)];
+        let heights = trail_heights(&points);
+        assert!(
+            heights[0] > heights[1],
+            "oldest point should be full height"
+        );
+        assert!((heights[0] - config::LIGHTCYCLE_TRAIL_HEIGHT).abs() < 1e-4);
+        assert!((heights[1] - config::LIGHTCYCLE_TRAIL_SPAWN_HEIGHT).abs() < 1e-4);
+    }
+
+    /// A zero-vertex mesh makes Bevy's allocator skip the allocation but still
+    /// run the upload, logging a use-after-free every frame.
+    #[test]
+    fn the_trail_mesh_always_has_vertices() {
+        let mut fresh = LightcycleSim::start((0, 0), Heading::PosX);
+        assert!(
+            build_trail_mesh(&fresh).count_vertices() > 0,
+            "a freshly spawned run has no ribbon yet"
+        );
+
+        // The whole stretch where the tail has not yet cleared its spawn cell.
+        for step in 0..20 {
+            fresh.cell_t = step as f32 / 20.0;
+            assert!(
+                build_trail_mesh(&fresh).count_vertices() > 0,
+                "empty mesh at cell_t {}",
+                fresh.cell_t
+            );
+        }
+
+        let mut riding = LightcycleSim::start((2, 0), Heading::PosX);
+        riding.trail.extend([(0, 0), (1, 0)]);
+        riding.cell_t = 0.5;
+        assert!(build_trail_mesh(&riding).count_vertices() > 0);
+    }
+
+    #[test]
+    fn trimming_the_polyline_end_shortens_it_by_the_asked_distance() {
+        let points = trim_polyline_end(vec![(0.0, 0.0), (1.0, 0.0)], 0.25);
+        assert_eq!(points.len(), 2);
+        assert!((points[1].0 - 0.75).abs() < 1e-5);
+        assert!(trim_polyline_end(vec![(0.0, 0.0), (0.1, 0.0)], 0.4).len() < 2);
     }
 
     #[test]

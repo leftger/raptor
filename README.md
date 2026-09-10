@@ -109,8 +109,13 @@ while riding, and are restored when you toggle back.
 In Lightcycle mode the directory entries are re-laid out as widely spaced
 "downtown" towers with empty streets between them, plus a visible neon street
 grid. Directory towers load the next arena; file towers are solid and crash the
-cycle. The cycle rounds intersections smoothly and leaves a continuous neon
-wall trail behind it, classic TRON style.
+cycle. The cycle rounds intersections smoothly and leaves a liquid-glass wall
+that streams off its tail, thickening to full height a fraction of a cell
+behind the bike.
+
+Arenas are always square and never smaller than a fixed minimum, so a folder
+holding one or two entries still gives you room to turn around rather than a
+shallow corridor.
 
 ## Why Jurassic Park?
 

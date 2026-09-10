@@ -222,6 +222,17 @@ impl ParentPortal {
 
 /// Rectangular playable arena on the grid.
 ///
+/// Grows an inclusive cell range to `span` cells, keeping its contents centered.
+/// Ranges already that long are left alone.
+fn expand_axis(min: i32, max: i32, span: i32) -> (i32, i32) {
+    let extra = span - (max - min + 1);
+    if extra <= 0 {
+        return (min, max);
+    }
+    let before = extra / 2;
+    (min - before, max + (extra - before))
+}
+
 /// `min`/`max` are inclusive cell coordinates inside the arena. Everything one
 /// step beyond those bounds is wall territory, including the parent gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,13 +245,15 @@ pub struct Arena {
 impl Arena {
     /// Builds an arena around file/folder grid positions.
     ///
-    /// Empty layouts get a small `empty_half`-centered playable square. Non-empty
-    /// layouts get a one-cell-thick padding ring around the occupied cells.
+    /// Non-empty layouts get a `padding`-thick ring around the occupied cells.
+    /// The result is then squared off and grown to at least `min_span` cells on
+    /// each side: a handful of entries lands in a wide, shallow bounding box,
+    /// and a corridor two or three cells deep has no room to take a corner.
     pub fn from_nodes(
         nodes: impl IntoIterator<Item = (i32, i32)>,
         parent_gate: Option<GatePlacement>,
         padding: i32,
-        empty_half: i32,
+        min_span: i32,
     ) -> Self {
         let mut min: Option<(i32, i32)> = None;
         let mut max: Option<(i32, i32)> = None;
@@ -261,8 +274,15 @@ impl Arena {
                 (min.0 - padding, min.1 - padding),
                 (max.0 + padding, max.1 + padding),
             ),
-            _ => ((-empty_half, -empty_half), (empty_half, empty_half)),
+            // An empty directory has nothing to build around, so the minimum
+            // span is the whole arena.
+            _ => ((0, 0), (0, 0)),
         };
+
+        let span = (max.0 - min.0 + 1).max(max.1 - min.1 + 1).max(min_span);
+        let (min_x, max_x) = expand_axis(min.0, max.0, span);
+        let (min_z, max_z) = expand_axis(min.1, max.1, span);
+        let (min, max) = ((min_x, min_z), (max_x, max_z));
 
         Self {
             min,
@@ -497,7 +517,9 @@ mod tests {
     use std::path::PathBuf;
 
     const PADDING: i32 = 1;
-    const EMPTY_HALF: i32 = 2;
+    /// Layout tests drive across known cells, so they opt out of the minimum
+    /// span and keep arenas hugging their content.
+    const MIN_SPAN: i32 = 0;
     const MAX_RADIUS: i32 = 1_000;
     const GATE_WIDTH: i32 = 3;
 
@@ -533,12 +555,7 @@ mod tests {
                 .map(|index| dirs.contains(&index))
                 .collect();
             Self {
-                arena: Arena::from_nodes(
-                    positions.iter().copied(),
-                    parent_gate,
-                    PADDING,
-                    EMPTY_HALF,
-                ),
+                arena: Arena::from_nodes(positions.iter().copied(), parent_gate, PADDING, MIN_SPAN),
                 cells,
                 is_dir,
             }
@@ -757,12 +774,7 @@ mod tests {
     #[test]
     fn parent_portal_cell_goes_to_parent() {
         // Arena covers z 0..=2; the portal sits just beyond the -Z wall.
-        let arena = Arena::from_nodes(
-            [(1, 1)].iter().copied(),
-            Some(centered_gate()),
-            1,
-            EMPTY_HALF,
-        );
+        let arena = Arena::from_nodes([(1, 1)].iter().copied(), Some(centered_gate()), 1, MIN_SPAN);
         let portal = arena.parent_portal.unwrap();
         assert_eq!(portal.from.1, arena.min.1 - 1);
 
@@ -780,12 +792,7 @@ mod tests {
 
     #[test]
     fn parent_gate_covers_the_configured_width() {
-        let arena = Arena::from_nodes(
-            [(1, 1)].iter().copied(),
-            Some(centered_gate()),
-            1,
-            EMPTY_HALF,
-        );
+        let arena = Arena::from_nodes([(1, 1)].iter().copied(), Some(centered_gate()), 1, MIN_SPAN);
         let portal = arena.parent_portal.unwrap();
         assert_eq!(portal.width_cells(), GATE_WIDTH);
 
@@ -811,7 +818,7 @@ mod tests {
                     ..centered_gate()
                 }),
                 PADDING,
-                EMPTY_HALF,
+                MIN_SPAN,
             );
             let portal = arena.parent_portal.unwrap();
 
@@ -888,7 +895,7 @@ mod tests {
                     ..centered_gate()
                 }),
                 PADDING,
-                EMPTY_HALF,
+                MIN_SPAN,
             );
             let portal = arena.parent_portal.unwrap();
             assert!(portal.from.0 >= arena.min.0 && portal.to.0 <= arena.max.0);
@@ -897,7 +904,7 @@ mod tests {
 
     #[test]
     fn root_has_no_active_portal_and_wall_crashes() {
-        let arena = Arena::from_nodes([(0, 0)].iter().copied(), None, 1, EMPTY_HALF);
+        let arena = Arena::from_nodes([(0, 0)].iter().copied(), None, 1, MIN_SPAN);
         assert!(arena.parent_portal.is_none());
 
         // Drive from the -Z edge into where the portal would be at a non-root dir.
@@ -924,7 +931,7 @@ mod tests {
             .enumerate()
             .map(|(index, p)| (*p, index))
             .collect();
-        let arena = Arena::from_nodes(positions.iter().copied(), None, PADDING, EMPTY_HALF);
+        let arena = Arena::from_nodes(positions.iter().copied(), None, PADDING, MIN_SPAN);
 
         let spawn = arena
             .nearest_empty_cell(|cell| cells.contains_key(&cell), MAX_RADIUS)
@@ -941,13 +948,61 @@ mod tests {
     }
 
     #[test]
-    fn empty_directory_spawns_in_small_arena() {
-        let arena = Arena::from_nodes(std::iter::empty::<(i32, i32)>(), None, PADDING, EMPTY_HALF);
+    fn empty_directory_spawns_centered_in_a_minimum_sized_arena() {
+        let arena = Arena::from_nodes(std::iter::empty::<(i32, i32)>(), None, PADDING, 9);
+        assert_eq!(arena_span(&arena), (9, 9));
+
         let spawn = arena
             .nearest_empty_cell(|_| false, MAX_RADIUS)
             .expect("empty arena has a spawn");
         assert_eq!(spawn, (0, 0));
         assert!(arena.contains(spawn));
+    }
+
+    fn arena_span(arena: &Arena) -> (i32, i32) {
+        (arena.max.0 - arena.min.0 + 1, arena.max.1 - arena.min.1 + 1)
+    }
+
+    /// Two entries sit side by side, so their bounding box is wide and shallow.
+    /// Squaring it is what gives the run room to take a corner.
+    #[test]
+    fn a_shallow_layout_is_squared_off() {
+        let arena = Arena::from_nodes([(-3, -3), (0, -3)].iter().copied(), None, PADDING, 0);
+
+        let (width, depth) = arena_span(&arena);
+        assert_eq!(width, depth, "arena was not square: {arena:?}");
+        assert!(depth >= 3, "a corridor this shallow cannot be turned in");
+    }
+
+    #[test]
+    fn a_tiny_layout_grows_to_the_minimum_span() {
+        for nodes in [vec![(0, 0)], vec![(-3, -3), (0, -3)], vec![]] {
+            let arena = Arena::from_nodes(nodes.iter().copied(), None, PADDING, 9);
+            assert_eq!(arena_span(&arena), (9, 9), "nodes {nodes:?}");
+        }
+    }
+
+    /// The minimum is a floor, not a resize: a layout already wider than the
+    /// minimum keeps its own size.
+    #[test]
+    fn a_large_layout_keeps_its_own_span() {
+        let nodes: Vec<_> = (-9..=9).map(|x| (x, 0)).collect();
+        let arena = Arena::from_nodes(nodes.iter().copied(), None, PADDING, 9);
+
+        let (width, depth) = arena_span(&arena);
+        assert_eq!(width, 21, "padded content span should be preserved");
+        assert_eq!(width, depth);
+    }
+
+    #[test]
+    fn squaring_keeps_the_layout_centered() {
+        let arena = Arena::from_nodes([(-3, -3), (0, -3)].iter().copied(), None, PADDING, 9);
+
+        // Content spans x -3..0 and z -3..-3, so its center is (-1.5, -3).
+        let center_x = (arena.min.0 + arena.max.0) as f32 / 2.0;
+        let center_z = (arena.min.1 + arena.max.1) as f32 / 2.0;
+        assert!((center_x - -1.5).abs() <= 0.5, "drifted in x: {arena:?}");
+        assert!((center_z - -3.0).abs() <= 0.5, "drifted in z: {arena:?}");
     }
 
     #[test]

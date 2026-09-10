@@ -19,8 +19,6 @@ pub struct ActiveRun {
     pub crash_label: Option<String>,
     /// Human-readable label shown while waiting for a folder/parent load.
     pub entering_label: Option<String>,
-    /// Set when trail geometry should be rebuilt.
-    pub trail_dirty: bool,
 }
 
 /// Bevy resource for lightcycle-only state.
