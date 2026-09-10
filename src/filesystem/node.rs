@@ -76,13 +76,30 @@ impl FileNode {
     }
 
     pub fn type_display(&self) -> &'static str {
-        match (self.is_symlink, self.is_dir) {
-            (true, true) => "SYMLINK DIR",
-            (true, false) => "SYMLINK",
-            (false, true) => "DIR",
-            (false, false) => "FILE",
+        match (self.is_symlink, self.is_dir, self.is_markdown()) {
+            (true, true, _) => "SYMLINK DIR",
+            (true, false, true) => "SYMLINK MARKDOWN",
+            (true, false, false) => "SYMLINK",
+            (false, true, _) => "DIR",
+            (false, false, true) => "MARKDOWN",
+            (false, false, false) => "FILE",
         }
     }
+
+    /// Regular markdown files are enterable in Lightcycle mode. Directories and
+    /// other files keep their existing enter/crash rules.
+    pub fn is_markdown(&self) -> bool {
+        !self.is_dir && is_markdown_path(&self.path)
+    }
+}
+
+/// True for `.md` and `.markdown` files, case-insensitive.
+pub fn is_markdown_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+        })
 }
 
 #[cfg(test)]
@@ -120,5 +137,17 @@ mod tests {
     fn zero_max_length_does_not_panic() {
         let node = node_with_name("hello");
         assert_eq!(node.display_name(0), "");
+    }
+
+    #[test]
+    fn markdown_extensions_are_detected_case_insensitively() {
+        assert!(node_with_name("README.md").is_markdown());
+        assert!(node_with_name("notes.markdown").is_markdown());
+        assert!(node_with_name("Notes.MD").is_markdown());
+        assert!(!node_with_name("readme.txt").is_markdown());
+        assert!(!node_with_name("md").is_markdown());
+        let mut directory = FileNode::new("docs.md".into(), PathBuf::from("docs.md"), true, 0, 0);
+        directory.is_dir = true;
+        assert!(!directory.is_markdown());
     }
 }

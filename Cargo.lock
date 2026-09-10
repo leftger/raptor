@@ -2477,6 +2477,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "font8x8"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
+
+[[package]]
 name = "fontique"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4150,6 +4156,7 @@ dependencies = [
  "bevy",
  "bytesize",
  "dirs",
+ "font8x8",
 ]
 
 [[package]]

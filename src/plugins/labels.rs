@@ -1,4 +1,5 @@
 use crate::config;
+use crate::lightcycle::LightcycleState;
 use crate::state::{InteractionMode, LabelsRoot, NavigatorResource, SelectionState, UiSettings};
 use bevy::prelude::*;
 use bevy::text::FontSize;
@@ -69,7 +70,7 @@ struct LabelCandidate {
     priority: u8,
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update_labels(
     mode: Res<InteractionMode>,
     window: Single<Ref<Window>, With<PrimaryWindow>>,
@@ -77,6 +78,7 @@ fn update_labels(
     navigator: Res<NavigatorResource>,
     ui_settings: Res<UiSettings>,
     selection: Res<SelectionState>,
+    lightcycle: Res<LightcycleState>,
     mut labels: Query<
         (
             &mut Node,
@@ -105,6 +107,13 @@ fn update_labels(
     }
 
     if !ui_settings.show_labels {
+        return;
+    }
+    if lightcycle
+        .run
+        .as_ref()
+        .is_some_and(crate::lightcycle::ActiveRun::is_document)
+    {
         return;
     }
 

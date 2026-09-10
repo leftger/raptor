@@ -10,6 +10,7 @@ authors = ["Erick Jesus <erick.jesus2060@gmail.com>"]
 bevy = { version = "0.19", default-features = false, features = ["3d", "ui"] }
 bytesize = "2.2.0"
 dirs = "6.0.0"
+font8x8 = "0.3"
 
 [features]
 default = []
