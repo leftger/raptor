@@ -2454,6 +2454,14 @@ mod tests {
 
     const RADIUS: f32 = config::LIGHTCYCLE_TURN_RADIUS;
 
+    /// Direction the cycle asset's nose points in its own model space.
+    ///
+    /// The glTF is Y-up with its length on X, and its canopy peaks near the
+    /// origin then slopes down to a point toward +X, so the nose is +X.
+    /// `LIGHTCYCLE_MODEL_YAW` has to rotate this onto the entity's forward
+    /// axis, and the heading test keeps the two in agreement.
+    const MODEL_NOSE_AXIS: Vec3 = Vec3::X;
+
     /// A right turn at cell (1, 0): entering along +X, leaving along +Z.
     fn right_corner(u: f32) -> super::CyclePose {
         arc_cell_pose((1, 0), (1, 0), (0, 1), u, RADIUS)
@@ -2758,6 +2766,36 @@ mod tests {
         let expected = travel / count as f32;
         for pair in heights.windows(2) {
             assert!((pair[1] - pair[0] - expected).abs() < 1e-4);
+        }
+    }
+
+    /// The rendered cycle must point along its travel direction and stay
+    /// upright in every heading, including the one antipodal to the model's
+    /// reference axis.
+    #[test]
+    fn cycle_faces_travel_direction_and_stays_upright_in_every_heading() {
+        for heading in [Heading::PosX, Heading::NegX, Heading::PosZ, Heading::NegZ] {
+            let (dx, dz) = heading.delta();
+            let pose = super::CyclePose {
+                position: (0.0, 0.0),
+                direction: Vec2::new(dx as f32, dz as f32),
+                lean: 0.0,
+            };
+            let rotation = pose_rotation(&pose);
+            let model_yaw = bevy::prelude::Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW);
+
+            let travel = super::pose_forward(&pose);
+            let nose = rotation * model_yaw * MODEL_NOSE_AXIS;
+            assert!(
+                nose.dot(travel) > 0.99,
+                "{heading:?}: nose {nose:?} should point along travel {travel:?}"
+            );
+
+            let up = rotation * model_yaw * Vec3::Y;
+            assert!(
+                up.y > 0.99,
+                "{heading:?}: cycle should stay upright, got {up:?}"
+            );
         }
     }
 

@@ -89,9 +89,9 @@ pub const LIGHTCYCLE_MODEL_ASSET: &str = "models/light_cycle/scene.gltf";
 /// Uniform scale for the cycle model. The source asset is 3.31 units long, so
 /// this renders the cycle just under one grid cell long.
 pub const LIGHTCYCLE_MODEL_SCALE: f32 = 0.72;
-/// The model's nose points down its local -X, while gameplay drives entities
-/// forward along +X.
-pub const LIGHTCYCLE_MODEL_YAW: f32 = std::f32::consts::PI;
+/// The model's nose already points down its local +X, which is also the axis
+/// gameplay rotates onto the direction of travel, so the mesh needs no spin.
+pub const LIGHTCYCLE_MODEL_YAW: f32 = 0.0;
 /// Rendered height of the scaled cycle model.
 pub const LIGHTCYCLE_CYCLE_HEIGHT: f32 = 1.0;
 pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.85;
