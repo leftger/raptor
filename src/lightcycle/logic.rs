@@ -4,6 +4,9 @@
 //! spawn search, and parent-portal rules can be unit-tested on a plain thread.
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::Path;
 
 /// Grid-aligned heading on the X/Z ground plane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,17 +109,126 @@ pub enum EntryRequest {
     Parent,
 }
 
+/// One of the four arena walls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wall {
+    NegX,
+    PosX,
+    NegZ,
+    PosZ,
+}
+
+/// Where to cut the parent gate into an arena wall.
+///
+/// The caller picks this so arena construction stays a pure function of its
+/// inputs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GatePlacement {
+    pub wall: Wall,
+    /// Position along the wall, from 0.0 at its start to 1.0 at its end.
+    pub fraction: f32,
+    /// How many wall cells the gate should cover.
+    pub width_cells: i32,
+}
+
+impl GatePlacement {
+    /// Derives a placement from a directory path.
+    ///
+    /// Hashing the path rather than drawing at random means every folder gets
+    /// its own door in its own wall, but that door stays put between visits, so
+    /// backtracking through a tree is learnable instead of a fresh search each
+    /// time. The hash only has to be stable within a single run of the program,
+    /// which `DefaultHasher` guarantees.
+    pub fn for_path(path: &Path, width_cells: i32) -> Self {
+        let mut hasher = DefaultHasher::new();
+        path.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let wall = match hash % 4 {
+            0 => Wall::NegZ,
+            1 => Wall::PosZ,
+            2 => Wall::NegX,
+            _ => Wall::PosX,
+        };
+
+        Self {
+            wall,
+            fraction: ((hash >> 8) as u16) as f32 / u16::MAX as f32,
+            width_cells,
+        }
+    }
+}
+
+/// Gate in an arena wall that leads back to the parent directory.
+///
+/// `from`/`to` are the inclusive range of wall cells the gate covers. Driving
+/// into any of them goes up a directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParentPortal {
+    pub wall: Wall,
+    pub from: (i32, i32),
+    pub to: (i32, i32),
+}
+
+impl ParentPortal {
+    /// Cuts a gate of `placement.width_cells` cells into the named wall of the
+    /// arena bounded by `min`/`max`, sliding it along the wall by
+    /// `placement.fraction`. Narrow arenas clamp the gate to the wall's length.
+    fn place(min: (i32, i32), max: (i32, i32), placement: GatePlacement) -> Self {
+        let (along_min, along_max) = match placement.wall {
+            Wall::NegZ | Wall::PosZ => (min.0, max.0),
+            Wall::NegX | Wall::PosX => (min.1, max.1),
+        };
+
+        let span = along_max - along_min + 1;
+        let width = placement.width_cells.clamp(1, span);
+        let slack = (span - width) as f32;
+        let start = along_min + (placement.fraction.clamp(0.0, 1.0) * slack).round() as i32;
+        let end = start + width - 1;
+
+        let (from, to) = match placement.wall {
+            Wall::NegZ => ((start, min.1 - 1), (end, min.1 - 1)),
+            Wall::PosZ => ((start, max.1 + 1), (end, max.1 + 1)),
+            Wall::NegX => ((min.0 - 1, start), (min.0 - 1, end)),
+            Wall::PosX => ((max.0 + 1, start), (max.0 + 1, end)),
+        };
+
+        Self {
+            wall: placement.wall,
+            from,
+            to,
+        }
+    }
+
+    pub fn contains(&self, cell: (i32, i32)) -> bool {
+        let within = |value: i32, a: i32, b: i32| value >= a.min(b) && value <= a.max(b);
+        within(cell.0, self.from.0, self.to.0) && within(cell.1, self.from.1, self.to.1)
+    }
+
+    /// Number of wall cells the gate covers.
+    pub fn width_cells(&self) -> i32 {
+        (self.to.0 - self.from.0).abs() + (self.to.1 - self.from.1).abs() + 1
+    }
+
+    /// Inclusive cell range the gate covers along its own wall, ascending.
+    pub fn along_span(&self) -> (i32, i32) {
+        let (from, to) = match self.wall {
+            Wall::NegZ | Wall::PosZ => (self.from.0, self.to.0),
+            Wall::NegX | Wall::PosX => (self.from.1, self.to.1),
+        };
+        (from.min(to), from.max(to))
+    }
+}
+
 /// Rectangular playable arena on the grid.
 ///
 /// `min`/`max` are inclusive cell coordinates inside the arena. Everything one
-/// step beyond those bounds is wall territory. A parent portal, when present,
-/// lives on the wall just beyond the `-Z` edge (the preferred wall from the
-/// design plan).
+/// step beyond those bounds is wall territory, including the parent gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arena {
     pub min: (i32, i32),
     pub max: (i32, i32),
-    pub parent_portal: Option<(i32, i32)>,
+    pub parent_portal: Option<ParentPortal>,
 }
 
 impl Arena {
@@ -126,7 +238,7 @@ impl Arena {
     /// layouts get a one-cell-thick padding ring around the occupied cells.
     pub fn from_nodes(
         nodes: impl IntoIterator<Item = (i32, i32)>,
-        has_parent: bool,
+        parent_gate: Option<GatePlacement>,
         padding: i32,
         empty_half: i32,
     ) -> Self {
@@ -152,13 +264,10 @@ impl Arena {
             _ => ((-empty_half, -empty_half), (empty_half, empty_half)),
         };
 
-        let center_x = (min.0 + max.0) / 2;
-        let parent_portal = has_parent.then_some((center_x, min.1 - 1));
-
         Self {
             min,
             max,
-            parent_portal,
+            parent_portal: parent_gate.map(|placement| ParentPortal::place(min, max, placement)),
         }
     }
 
@@ -356,7 +465,10 @@ pub fn classify_next_content(
     cells: &HashMap<(i32, i32), usize>,
     is_dir: impl Fn(usize) -> bool,
 ) -> CellContent {
-    if arena.parent_portal == Some(cell) {
+    if arena
+        .parent_portal
+        .is_some_and(|portal| portal.contains(cell))
+    {
         return CellContent::ParentPortal;
     }
     if !arena.contains(cell) {
@@ -378,14 +490,26 @@ pub fn classify_next_content(
 #[cfg(test)]
 mod tests {
     use super::{
-        Arena, CellContent, CrashReason, EntryRequest, Heading, LightcycleSim, RunPhase,
-        StepOutcome, Turn, classify_next_content,
+        Arena, CellContent, CrashReason, EntryRequest, GatePlacement, Heading, LightcycleSim,
+        RunPhase, StepOutcome, Turn, Wall, classify_next_content,
     };
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     const PADDING: i32 = 1;
     const EMPTY_HALF: i32 = 2;
     const MAX_RADIUS: i32 = 1_000;
+    const GATE_WIDTH: i32 = 3;
+
+    /// A gate centered on the `-Z` wall, matching the pre-randomization layout
+    /// so placement-independent tests stay readable.
+    fn centered_gate() -> GatePlacement {
+        GatePlacement {
+            wall: Wall::NegZ,
+            fraction: 0.5,
+            width_cells: GATE_WIDTH,
+        }
+    }
 
     /// A layout with `(x, z)` cells. Files and dirs share one index space.
     struct TestLayout {
@@ -395,7 +519,11 @@ mod tests {
     }
 
     impl TestLayout {
-        fn new(positions: &[(i32, i32)], dirs: &[usize], has_parent: bool) -> Self {
+        fn new(
+            positions: &[(i32, i32)],
+            dirs: &[usize],
+            parent_gate: Option<GatePlacement>,
+        ) -> Self {
             let cells = positions
                 .iter()
                 .enumerate()
@@ -407,7 +535,7 @@ mod tests {
             Self {
                 arena: Arena::from_nodes(
                     positions.iter().copied(),
-                    has_parent,
+                    parent_gate,
                     PADDING,
                     EMPTY_HALF,
                 ),
@@ -530,7 +658,7 @@ mod tests {
 
     #[test]
     fn next_cell_is_file_crashes() {
-        let layout = TestLayout::new(&[(1, 0)], &[], false);
+        let layout = TestLayout::new(&[(1, 0)], &[], None);
         let mut sim = LightcycleSim::start((0, 0), Heading::PosX);
         let outcome = sim.advance(1.0, layout.classify());
         assert_eq!(outcome, StepOutcome::Crashed(CrashReason::File));
@@ -542,7 +670,7 @@ mod tests {
 
     #[test]
     fn next_cell_is_dir_requests_directory_not_crash() {
-        let layout = TestLayout::new(&[(1, 0)], &[0], false);
+        let layout = TestLayout::new(&[(1, 0)], &[0], None);
         let mut sim = LightcycleSim::start((0, 0), Heading::PosX);
         let outcome = sim.advance(1.0, layout.classify());
         assert_eq!(outcome, StepOutcome::EnteringDir(0));
@@ -614,7 +742,7 @@ mod tests {
     #[test]
     fn arena_wall_crashes() {
         // One-cell arena at (0, 0); +X is immediately outside.
-        let arena = Arena::from_nodes([(0, 0)].iter().copied(), false, 0, 0);
+        let arena = Arena::from_nodes([(0, 0)].iter().copied(), None, 0, 0);
         let layout = TestLayout {
             arena,
             cells: HashMap::new(),
@@ -629,11 +757,16 @@ mod tests {
     #[test]
     fn parent_portal_cell_goes_to_parent() {
         // Arena covers z 0..=2; the portal sits just beyond the -Z wall.
-        let arena = Arena::from_nodes([(1, 1)].iter().copied(), true, 1, EMPTY_HALF);
+        let arena = Arena::from_nodes(
+            [(1, 1)].iter().copied(),
+            Some(centered_gate()),
+            1,
+            EMPTY_HALF,
+        );
         let portal = arena.parent_portal.unwrap();
-        assert_eq!(portal.1, arena.min.1 - 1);
+        assert_eq!(portal.from.1, arena.min.1 - 1);
 
-        let mut sim = LightcycleSim::start((portal.0, arena.min.1), Heading::NegZ);
+        let mut sim = LightcycleSim::start((portal.from.0, arena.min.1), Heading::NegZ);
         let layout = TestLayout {
             arena,
             cells: HashMap::new(),
@@ -646,8 +779,125 @@ mod tests {
     }
 
     #[test]
+    fn parent_gate_covers_the_configured_width() {
+        let arena = Arena::from_nodes(
+            [(1, 1)].iter().copied(),
+            Some(centered_gate()),
+            1,
+            EMPTY_HALF,
+        );
+        let portal = arena.parent_portal.unwrap();
+        assert_eq!(portal.width_cells(), GATE_WIDTH);
+
+        let wall_z = arena.min.1 - 1;
+        let covered = (arena.min.0..=arena.max.0)
+            .filter(|x| portal.contains((*x, wall_z)))
+            .count();
+        assert_eq!(covered, GATE_WIDTH as usize);
+
+        // Only the gate's own wall row accepts the cycle.
+        assert!(!portal.contains((portal.from.0, wall_z - 1)));
+    }
+
+    #[test]
+    fn parent_gate_slides_along_the_wall_without_leaving_it() {
+        // A wall nine cells long, so a three-cell gate has room to slide.
+        let nodes = [(-3, 0), (3, 0)];
+        for fraction in [0.0, 0.5, 1.0] {
+            let arena = Arena::from_nodes(
+                nodes.iter().copied(),
+                Some(GatePlacement {
+                    fraction,
+                    ..centered_gate()
+                }),
+                PADDING,
+                EMPTY_HALF,
+            );
+            let portal = arena.parent_portal.unwrap();
+
+            assert_eq!(portal.width_cells(), GATE_WIDTH);
+            assert!(portal.from.0 >= arena.min.0, "gate ran off the -X end");
+            assert!(portal.to.0 <= arena.max.0, "gate ran off the +X end");
+        }
+    }
+
+    #[test]
+    fn parent_gate_clamps_to_a_wall_shorter_than_the_gate() {
+        let arena = Arena::from_nodes([(0, 0)].iter().copied(), Some(centered_gate()), 0, 0);
+        let portal = arena.parent_portal.unwrap();
+
+        assert_eq!(portal.width_cells(), 1);
+        assert!(portal.contains((0, -1)));
+    }
+
+    #[test]
+    fn a_gate_on_any_wall_is_reachable_from_inside_the_arena() {
+        // Padding of one around a single node leaves a 3x3 arena, so a
+        // three-cell gate spans whichever wall it lands on.
+        for (wall, start, heading) in [
+            (Wall::NegZ, (0, -1), Heading::NegZ),
+            (Wall::PosZ, (0, 1), Heading::PosZ),
+            (Wall::NegX, (-1, 0), Heading::NegX),
+            (Wall::PosX, (1, 0), Heading::PosX),
+        ] {
+            let layout = TestLayout::new(
+                &[(0, 0)],
+                &[],
+                Some(GatePlacement {
+                    wall,
+                    ..centered_gate()
+                }),
+            );
+            let mut sim = LightcycleSim::start(start, heading);
+
+            let outcome = sim.advance(1.0, layout.classify());
+            assert_eq!(
+                outcome,
+                StepOutcome::GoToParent,
+                "gate on {wall:?} was not reachable"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_placement_is_stable_per_path_but_differs_between_paths() {
+        let path = PathBuf::from("/home/user/projects");
+        assert_eq!(
+            GatePlacement::for_path(&path, GATE_WIDTH),
+            GatePlacement::for_path(&path, GATE_WIDTH)
+        );
+
+        let walls: Vec<_> = (0..16)
+            .map(|index| {
+                GatePlacement::for_path(&PathBuf::from(format!("/dir{index}")), GATE_WIDTH).wall
+            })
+            .collect();
+        assert!(
+            walls.iter().any(|wall| *wall != walls[0]),
+            "every sample path landed on the same wall"
+        );
+    }
+
+    #[test]
+    fn gate_placement_survives_a_degenerate_fraction() {
+        for fraction in [-1.0, 2.0, f32::NAN] {
+            let arena = Arena::from_nodes(
+                [(1, 1)].iter().copied(),
+                Some(GatePlacement {
+                    fraction,
+                    ..centered_gate()
+                }),
+                PADDING,
+                EMPTY_HALF,
+            );
+            let portal = arena.parent_portal.unwrap();
+            assert!(portal.from.0 >= arena.min.0 && portal.to.0 <= arena.max.0);
+        }
+    }
+
+    #[test]
     fn root_has_no_active_portal_and_wall_crashes() {
-        let arena = Arena::from_nodes([(0, 0)].iter().copied(), false, 1, EMPTY_HALF);
+        let arena = Arena::from_nodes([(0, 0)].iter().copied(), None, 1, EMPTY_HALF);
         assert!(arena.parent_portal.is_none());
 
         // Drive from the -Z edge into where the portal would be at a non-root dir.
@@ -674,7 +924,7 @@ mod tests {
             .enumerate()
             .map(|(index, p)| (*p, index))
             .collect();
-        let arena = Arena::from_nodes(positions.iter().copied(), false, PADDING, EMPTY_HALF);
+        let arena = Arena::from_nodes(positions.iter().copied(), None, PADDING, EMPTY_HALF);
 
         let spawn = arena
             .nearest_empty_cell(|cell| cells.contains_key(&cell), MAX_RADIUS)
@@ -692,7 +942,7 @@ mod tests {
 
     #[test]
     fn empty_directory_spawns_in_small_arena() {
-        let arena = Arena::from_nodes(std::iter::empty::<(i32, i32)>(), false, PADDING, EMPTY_HALF);
+        let arena = Arena::from_nodes(std::iter::empty::<(i32, i32)>(), None, PADDING, EMPTY_HALF);
         let spawn = arena
             .nearest_empty_cell(|_| false, MAX_RADIUS)
             .expect("empty arena has a spawn");
@@ -708,7 +958,7 @@ mod tests {
         assert_eq!(sim.trail.len(), 3);
 
         // A new run in a new directory starts fresh.
-        let new_layout = TestLayout::new(&[(0, 0), (1, 0), (2, 0)], &[0, 1, 2], false);
+        let new_layout = TestLayout::new(&[(0, 0), (1, 0), (2, 0)], &[0, 1, 2], None);
         let spawn = new_layout
             .arena
             .nearest_empty_cell(|cell| new_layout.cells.contains_key(&cell), MAX_RADIUS)

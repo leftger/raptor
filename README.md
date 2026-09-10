@@ -92,7 +92,15 @@ the same directory grid.
 * `u` / `-` / breadcrumbs → Directory jumps (the run resets when the new folder loads)
 * Folders → Enter them and load the directory
 * Files, your own trail, and the arena walls → Crash
-* Glowing gate on the `-Z` wall → Go to the parent directory (inactive at `/`)
+* Pulsing gate → Go to the parent directory (inactive at `/`)
+
+The gate is a real opening in the wall, framed by two posts and a lintel that
+pulse while light bars sweep up through the gap, so it is easy to spot from
+across the arena.
+
+Every folder's gate is cut into a different wall at a different offset, so you
+have to go looking for it, but it is derived from the folder's path rather than
+drawn at random: the same folder always keeps the same door.
 
 The cycle moves continuously between cell centers; turns are queued and execute
 at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
@@ -168,6 +176,13 @@ Directory scans run in the background. RAPTOR displays at most 30,000 entries fr
 directory and caps eager child counts at 500 to keep unusually large trees responsive.
 Capped counts are marked with `+`. Symbolic links are shown and can be opened, but linked
 directories are not traversed just to calculate block height.
+
+## Credits
+
+The lightcycle model in `assets/models/light_cycle` is
+["Light Cycle - Tron (1982)"](https://sketchfab.com/3d-models/light-cycle-tron-1982-54fedda920094ef09d87a17d42b282af)
+by [arabinowitz](https://sketchfab.com/arabinowitz), used under the
+[Sketchfab Standard license](https://sketchfab.com/licenses).
 
 ## Future Ideas (aka InGen Phase 2)
 

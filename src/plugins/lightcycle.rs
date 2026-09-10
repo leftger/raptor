@@ -1,7 +1,8 @@
 use crate::config;
 use crate::filesystem::FileNode;
 use crate::lightcycle::logic::{
-    Arena, CrashReason, Heading, LightcycleSim, RunPhase, StepOutcome, classify_next_content,
+    Arena, CrashReason, GatePlacement, Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome,
+    Wall, classify_next_content,
 };
 use crate::lightcycle::{ActiveRun, LightcycleState};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
@@ -32,6 +33,7 @@ impl Plugin for LightcyclePlugin {
                     spawn_crash_effect.run_if(in_lightcycle_mode),
                     update_crash_effects.run_if(in_lightcycle_mode),
                     rebuild_trail_mesh.run_if(in_lightcycle_mode),
+                    animate_parent_gate.run_if(in_lightcycle_mode),
                     update_cycle_transform.run_if(in_lightcycle_mode),
                     update_chase_camera.run_if(in_lightcycle_mode),
                 )
@@ -44,10 +46,11 @@ impl Plugin for LightcyclePlugin {
 #[derive(Resource)]
 struct LightcycleAssets {
     unit_cube: Handle<Mesh>,
-    cycle_material: Handle<StandardMaterial>,
+    cycle_scene: Handle<WorldAsset>,
     trail_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
     portal_material: Handle<StandardMaterial>,
+    portal_bar_material: Handle<StandardMaterial>,
     dir_tower_material: Handle<StandardMaterial>,
     file_tower_material: Handle<StandardMaterial>,
     street_grid_material: Handle<StandardMaterial>,
@@ -66,14 +69,28 @@ struct CrashDebris {
     initial_scale: f32,
 }
 
-/// Smooth visual rotation state for the cycle. The simulation heading still
-/// changes at the cell boundary; this component eases the rendered yaw over a
-/// short duration so the player can see where the turn happened.
+/// A post or lintel of the parent gate.
 #[derive(Component)]
-struct CycleVisual {
-    from_rotation: Quat,
-    target_rotation: Quat,
-    progress: f32,
+struct GateFrame;
+
+/// A light bar sweeping up through the parent gate's opening.
+#[derive(Component)]
+struct GateScanBar {
+    /// Position in the sweep at startup, so the bars are evenly spaced.
+    offset: f32,
+    /// Height of the opening the bar travels up before wrapping.
+    travel: f32,
+}
+
+/// Direction the chase camera is currently following.
+///
+/// This trails the cycle's own heading so a corner reads as the cycle swinging
+/// across the frame. Locking the camera to the cycle instead makes the world
+/// appear to rotate around a stationary bike. It lives on the cycle so each run
+/// starts from the spawn heading.
+#[derive(Component)]
+struct ChaseCamera {
+    forward: Vec3,
 }
 
 fn unlit_material(color: Color) -> StandardMaterial {
@@ -86,15 +103,24 @@ fn unlit_material(color: Color) -> StandardMaterial {
 
 fn setup_lightcycle_assets(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.insert_resource(LightcycleAssets {
         unit_cube: meshes.add(Cuboid::default()),
-        cycle_material: materials.add(unlit_material(config::LIGHTCYCLE_CYCLE_COLOR)),
+        cycle_scene: asset_server
+            .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(unlit_material(config::LIGHTCYCLE_TRAIL_COLOR)),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
         portal_material: materials.add(unlit_material(config::LIGHTCYCLE_PORTAL_COLOR)),
+        portal_bar_material: materials.add(StandardMaterial {
+            base_color: config::LIGHTCYCLE_PORTAL_COLOR
+                .with_alpha(config::LIGHTCYCLE_PORTAL_BAR_ALPHA),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
         dir_tower_material: materials.add(unlit_material(config::DIR_COLOR)),
         file_tower_material: materials.add(unlit_material(config::FILE_COLOR)),
         street_grid_material: materials.add(StandardMaterial {
@@ -133,9 +159,13 @@ fn tower_position(grid_pos: (i32, i32)) -> (i32, i32) {
 }
 
 fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
+    let parent_gate = path
+        .parent()
+        .is_some()
+        .then(|| GatePlacement::for_path(path, config::LIGHTCYCLE_PORTAL_WIDTH_CELLS));
     let arena = Arena::from_nodes(
         nodes.iter().map(|node| tower_position(node.grid_pos)),
-        path.parent().is_some(),
+        parent_gate,
         config::LIGHTCYCLE_ARENA_PADDING,
         config::LIGHTCYCLE_EMPTY_ARENA_HALF,
     );
@@ -226,23 +256,21 @@ fn spawn_run_entities(
     meshes: &mut Assets<Mesh>,
     run: &ActiveRun,
 ) {
-    let position = cycle_world_position(&run.sim);
+    let pose = cycle_cell_pose(&run.sim);
     commands.spawn((
         LightcycleSceneRoot,
         CycleEntity,
-        Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(assets.cycle_material.clone()),
-        Transform::from_translation(position).with_scale(Vec3::new(
-            config::LIGHTCYCLE_CYCLE_SIZE,
-            config::LIGHTCYCLE_CYCLE_HEIGHT,
-            config::LIGHTCYCLE_CYCLE_SIZE,
-        )),
-        CycleVisual {
-            from_rotation: heading_rotation(run.sim.heading),
-            target_rotation: heading_rotation(run.sim.heading),
-            progress: 1.0,
+        Transform::from_translation(pose_world_position(&pose)).with_rotation(pose_rotation(&pose)),
+        Visibility::default(),
+        ChaseCamera {
+            forward: pose_forward(&pose),
         },
         Pickable::IGNORE,
+        children![(
+            WorldAssetRoot(assets.cycle_scene.clone()),
+            Transform::from_rotation(Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW))
+                .with_scale(Vec3::splat(config::LIGHTCYCLE_MODEL_SCALE)),
+        )],
     ));
 
     spawn_arena_walls(commands, assets, &run.arena);
@@ -367,20 +395,73 @@ fn street_grid_line_mesh(center: Vec3, scale: Vec3) -> Mesh {
         .transformed_by(Transform::from_translation(center).with_scale(scale))
 }
 
-fn spawn_arena_walls(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena) {
+/// World-space plane each wall rail sits in, half a cell outside the playable area.
+fn wall_plane(arena: &Arena, wall: Wall) -> f32 {
     let spacing = config::GRID_SPACING;
-    let min_x = (arena.min.0 as f32 - 0.5) * spacing;
-    let max_x = (arena.max.0 as f32 + 0.5) * spacing;
-    let min_z = (arena.min.1 as f32 - 0.5) * spacing;
-    let max_z = (arena.max.1 as f32 + 0.5) * spacing;
-    let mid_x = (min_x + max_x) * 0.5;
-    let mid_z = (min_z + max_z) * 0.5;
-    let width = max_x - min_x;
-    let depth = max_z - min_z;
-    let wall_height = config::LIGHTCYCLE_WALL_HEIGHT;
-    let wall_thickness = config::LIGHTCYCLE_WALL_THICKNESS;
+    match wall {
+        Wall::NegX => (arena.min.0 as f32 - 0.5) * spacing,
+        Wall::PosX => (arena.max.0 as f32 + 0.5) * spacing,
+        Wall::NegZ => (arena.min.1 as f32 - 0.5) * spacing,
+        Wall::PosZ => (arena.max.1 as f32 + 0.5) * spacing,
+    }
+}
 
-    let spawn_wall = |commands: &mut Commands, translation: Vec3, scale: Vec3| {
+/// World-space extent of a wall along its own axis, corner to corner.
+fn wall_extent(arena: &Arena, wall: Wall) -> (f32, f32) {
+    match wall {
+        Wall::NegZ | Wall::PosZ => (wall_plane(arena, Wall::NegX), wall_plane(arena, Wall::PosX)),
+        Wall::NegX | Wall::PosX => (wall_plane(arena, Wall::NegZ), wall_plane(arena, Wall::PosZ)),
+    }
+}
+
+/// Splits a rail's extent around an optional gap, dropping segments too short to
+/// be worth drawing.
+fn rail_segments(min: f32, max: f32, gap: Option<(f32, f32)>) -> Vec<(f32, f32)> {
+    let Some((gap_min, gap_max)) = gap else {
+        return vec![(min, max)];
+    };
+
+    [(min, gap_min.min(max)), (gap_max.max(min), max)]
+        .into_iter()
+        .filter(|(start, end)| end - start > 0.01)
+        .collect()
+}
+
+fn spawn_arena_walls(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena) {
+    for wall in [Wall::NegX, Wall::PosX, Wall::NegZ, Wall::PosZ] {
+        spawn_wall_rail(commands, assets, arena, wall);
+    }
+
+    spawn_parent_gate(commands, assets, arena);
+}
+
+/// Draws one arena wall, leaving a real opening where the parent gate cuts
+/// through it so the gate can be ridden through rather than looked at.
+fn spawn_wall_rail(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena, wall: Wall) {
+    let height = config::LIGHTCYCLE_WALL_HEIGHT;
+    let thickness = config::LIGHTCYCLE_WALL_THICKNESS;
+    let plane = wall_plane(arena, wall);
+    let (min, max) = wall_extent(arena, wall);
+
+    let gap = arena
+        .parent_portal
+        .filter(|portal| portal.wall == wall)
+        .map(|portal| gate_world_span(&portal));
+
+    for (start, end) in rail_segments(min, max, gap) {
+        let center = (start + end) * 0.5;
+        let length = end - start;
+        let (translation, scale) = match wall {
+            Wall::NegZ | Wall::PosZ => (
+                Vec3::new(center, height * 0.5, plane),
+                Vec3::new(length, height, thickness),
+            ),
+            Wall::NegX | Wall::PosX => (
+                Vec3::new(plane, height * 0.5, center),
+                Vec3::new(thickness, height, length),
+            ),
+        };
+
         commands.spawn((
             LightcycleSceneRoot,
             Mesh3d(assets.unit_cube.clone()),
@@ -388,49 +469,126 @@ fn spawn_arena_walls(commands: &mut Commands, assets: &LightcycleAssets, arena: 
             Transform::from_translation(translation).with_scale(scale),
             Pickable::IGNORE,
         ));
+    }
+}
+
+/// World-space extent of the gate along its wall, covering exactly the cells the
+/// simulation accepts.
+fn gate_world_span(portal: &ParentPortal) -> (f32, f32) {
+    let spacing = config::GRID_SPACING;
+    let (from, _) = portal.along_span();
+    let start = (from as f32 - 0.5) * spacing;
+    (start, start + portal.width_cells() as f32 * spacing)
+}
+
+/// Builds the animated parent gate: two posts, a lintel, and light bars that
+/// sweep up through the opening.
+///
+/// Everything is parented to a root whose rotation puts the wall's axis on local
+/// +X, so the pieces below are laid out once instead of per wall.
+fn spawn_parent_gate(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena) {
+    let Some(portal) = arena.parent_portal else {
+        return;
     };
 
-    // Two rails parallel to X.
-    spawn_wall(
-        commands,
-        Vec3::new(mid_x, wall_height * 0.5, min_z),
-        Vec3::new(width, wall_height, wall_thickness),
-    );
-    spawn_wall(
-        commands,
-        Vec3::new(mid_x, wall_height * 0.5, max_z),
-        Vec3::new(width, wall_height, wall_thickness),
-    );
-    // Two rails parallel to Z.
-    spawn_wall(
-        commands,
-        Vec3::new(min_x, wall_height * 0.5, mid_z),
-        Vec3::new(wall_thickness, wall_height, depth),
-    );
-    spawn_wall(
-        commands,
-        Vec3::new(max_x, wall_height * 0.5, mid_z),
-        Vec3::new(wall_thickness, wall_height, depth),
-    );
+    let height = config::LIGHTCYCLE_PORTAL_HEIGHT;
+    let frame = config::LIGHTCYCLE_PORTAL_FRAME_THICKNESS;
+    let depth = config::LIGHTCYCLE_WALL_THICKNESS * 3.0;
+    let (span_min, span_max) = gate_world_span(&portal);
+    let opening = span_max - span_min;
+    let center = (span_min + span_max) * 0.5;
+    let plane = wall_plane(arena, portal.wall);
 
-    // Parent gate on the -Z wall.
-    if let Some((portal_x, _)) = arena.parent_portal {
-        commands.spawn((
-            LightcycleSceneRoot,
-            Mesh3d(assets.unit_cube.clone()),
-            MeshMaterial3d(assets.portal_material.clone()),
-            Transform::from_translation(Vec3::new(
-                portal_x as f32 * spacing,
-                config::LIGHTCYCLE_PORTAL_HEIGHT * 0.5,
-                min_z,
-            ))
-            .with_scale(Vec3::new(
-                config::LIGHTCYCLE_PORTAL_WIDTH,
-                config::LIGHTCYCLE_PORTAL_HEIGHT,
-                wall_thickness * 3.0,
-            )),
-            Pickable::IGNORE,
-        ));
+    let (translation, rotation) = match portal.wall {
+        Wall::NegZ | Wall::PosZ => (Vec3::new(center, 0.0, plane), Quat::IDENTITY),
+        Wall::NegX | Wall::PosX => (
+            Vec3::new(plane, 0.0, center),
+            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+        ),
+    };
+
+    let half = opening * 0.5;
+    let mut gate = commands.spawn((
+        LightcycleSceneRoot,
+        Transform::from_translation(translation).with_rotation(rotation),
+        Visibility::default(),
+    ));
+
+    gate.with_children(|frames| {
+        let mut piece = |translation: Vec3, scale: Vec3| {
+            frames.spawn((
+                GateFrame,
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.portal_material.clone()),
+                Transform::from_translation(translation).with_scale(scale),
+                Pickable::IGNORE,
+            ));
+        };
+
+        // Posts on the cell boundaries the gate starts and ends at.
+        piece(
+            Vec3::new(-half, height * 0.5, 0.0),
+            Vec3::new(frame, height, depth),
+        );
+        piece(
+            Vec3::new(half, height * 0.5, 0.0),
+            Vec3::new(frame, height, depth),
+        );
+        // Lintel spanning them.
+        piece(
+            Vec3::new(0.0, height, 0.0),
+            Vec3::new(opening + frame, frame, depth),
+        );
+
+        let bars = config::LIGHTCYCLE_PORTAL_BAR_COUNT;
+        for index in 0..bars {
+            frames.spawn((
+                GateScanBar {
+                    offset: index as f32 / bars as f32,
+                    travel: height,
+                },
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.portal_bar_material.clone()),
+                Transform::from_scale(Vec3::new(
+                    opening - frame,
+                    config::LIGHTCYCLE_PORTAL_BAR_HEIGHT,
+                    depth * 0.5,
+                )),
+                Pickable::IGNORE,
+            ));
+        }
+    });
+}
+
+/// Brightness of the gate frame at `elapsed`, from 0 at the pulse's trough to 1
+/// at its peak.
+fn gate_pulse(elapsed: f32) -> f32 {
+    0.5 + 0.5 * (elapsed * config::LIGHTCYCLE_PORTAL_PULSE_SPEED).sin()
+}
+
+/// Height a bar has swept to within its opening, wrapping back to the ground
+/// once it reaches the lintel.
+fn gate_bar_height(bar: &GateScanBar, elapsed: f32) -> f32 {
+    (bar.offset + elapsed * config::LIGHTCYCLE_PORTAL_BAR_SPEED).fract() * bar.travel
+}
+
+/// Pulses the gate frame and sweeps its light bars upward, so a gate reads as
+/// live and is easy to pick out from the surrounding wall.
+fn animate_parent_gate(
+    time: Res<Time>,
+    assets: Res<LightcycleAssets>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut bars: Query<(&GateScanBar, &mut Transform)>,
+) {
+    let elapsed = time.elapsed_secs();
+
+    if let Some(mut material) = materials.get_mut(&assets.portal_material) {
+        material.base_color = config::LIGHTCYCLE_PORTAL_DIM_COLOR
+            .mix(&config::LIGHTCYCLE_PORTAL_COLOR, gate_pulse(elapsed));
+    }
+
+    for (bar, mut transform) in &mut bars {
+        transform.translation.y = gate_bar_height(bar, elapsed);
     }
 }
 
@@ -637,7 +795,7 @@ fn spawn_crash_effect(
     let Some(run) = state.run.as_ref() else {
         return;
     };
-    let origin = cycle_world_position(&run.sim);
+    let origin = cycle_world_position(&run.sim) + Vec3::Y * config::LIGHTCYCLE_CYCLE_HEIGHT * 0.5;
     let count = 18;
 
     for index in 0..count {
@@ -773,7 +931,7 @@ fn rounded_polyline(path: &[(i32, i32)]) -> Vec<(f32, f32)> {
             let samples = 6;
             for step in 1..=samples {
                 let u = step as f32 / samples as f32;
-                points.push(arc_cell_point(corner, incoming, outgoing, u, radius));
+                points.push(arc_cell_pose(corner, incoming, outgoing, u, radius).position);
             }
         } else {
             points.push(cell_to_point(corner));
@@ -838,50 +996,66 @@ fn trail_segment_mesh(a: (f32, f32), b: (f32, f32)) -> Mesh {
     )
 }
 
-fn heading_rotation(heading: Heading) -> Quat {
-    let (dx, dz) = heading.delta();
-    let direction = Vec3::new(dx as f32, 0.0, dz as f32).normalize_or_zero();
-    Quat::from_rotation_arc(Vec3::X, direction)
+/// Continuous render pose for the cycle, in cell coordinates.
+struct CyclePose {
+    position: (f32, f32),
+    /// Unit travel direction; the cycle's nose points along it.
+    direction: Vec2,
+    /// Bank angle about the travel direction, in radians. Zero outside corners.
+    lean: f32,
 }
 
-fn smoothstep(t: f32) -> f32 {
-    t * t * (3.0 - 2.0 * t)
+/// Ground-level world position of the pose; the model's wheels sit at its origin.
+fn pose_world_position(pose: &CyclePose) -> Vec3 {
+    Vec3::new(
+        pose.position.0 * config::GRID_SPACING,
+        0.0,
+        pose.position.1 * config::GRID_SPACING,
+    )
+}
+
+fn pose_forward(pose: &CyclePose) -> Vec3 {
+    Vec3::new(pose.direction.x, 0.0, pose.direction.y)
+}
+
+/// Yaw along the travel direction, then bank into the corner. The bank rotates
+/// about the cycle's own +X, which is its direction of travel, so it leaves the
+/// forward vector untouched.
+fn pose_rotation(pose: &CyclePose) -> Quat {
+    let yaw = match pose_forward(pose).try_normalize() {
+        Some(forward) => Quat::from_rotation_arc(Vec3::X, forward),
+        None => Quat::IDENTITY,
+    };
+    yaw * Quat::from_rotation_x(pose.lean)
 }
 
 fn cycle_world_position(sim: &LightcycleSim) -> Vec3 {
-    let height = config::LIGHTCYCLE_CYCLE_HEIGHT;
-    let base = config::ground_position(sim.cell.0, sim.cell.1);
-
-    if sim.phase != RunPhase::Running {
-        return Vec3::new(base.x, height * 0.5, base.z);
-    }
-
-    let (x, z) = cycle_cell_position(sim);
-    Vec3::new(
-        x * config::GRID_SPACING,
-        height * 0.5,
-        z * config::GRID_SPACING,
-    )
+    pose_world_position(&cycle_cell_pose(sim))
 }
 
-/// Continuous cell-space position for the rendered cycle.
+/// Continuous cell-space pose for the rendered cycle.
 ///
-/// Straight segments use the raw simulation position. Near queued/applied turns
-/// the path follows a rounded 90-degree arc around the intersection so the
-/// cycle visibly curves through corners instead of snapping an L-shape.
-fn cycle_cell_position(sim: &LightcycleSim) -> (f32, f32) {
-    if let Some((x, z)) = rounded_cell_position(sim) {
-        return (x, z);
+/// Straight segments use the raw simulation position and heading. Near
+/// queued/applied turns the pose follows a rounded 90-degree arc around the
+/// intersection, taking its facing from the arc's tangent, so the cycle steers
+/// through the corner instead of sliding around it and rotating afterwards.
+fn cycle_cell_pose(sim: &LightcycleSim) -> CyclePose {
+    if let Some(pose) = cornering_pose(sim) {
+        return pose;
     }
 
     let (dx, dz) = sim.heading.delta();
-    (
-        sim.cell.0 as f32 + dx as f32 * sim.cell_t,
-        sim.cell.1 as f32 + dz as f32 * sim.cell_t,
-    )
+    CyclePose {
+        position: (
+            sim.cell.0 as f32 + dx as f32 * sim.cell_t,
+            sim.cell.1 as f32 + dz as f32 * sim.cell_t,
+        ),
+        direction: Vec2::new(dx as f32, dz as f32),
+        lean: 0.0,
+    }
 }
 
-fn rounded_cell_position(sim: &LightcycleSim) -> Option<(f32, f32)> {
+fn cornering_pose(sim: &LightcycleSim) -> Option<CyclePose> {
     let radius = config::LIGHTCYCLE_TURN_RADIUS;
 
     // Approaching a queued turn: the first half of the arc happens just before
@@ -892,7 +1066,7 @@ fn rounded_cell_position(sim: &LightcycleSim) -> Option<(f32, f32)> {
         let incoming = sim.heading.delta();
         let outgoing = sim.heading.turn(turn).delta();
         let u = ((sim.cell_t - (1.0 - radius)) / radius) * 0.5;
-        return Some(arc_cell_point(
+        return Some(arc_cell_pose(
             sim.next_cell(),
             incoming,
             outgoing,
@@ -912,94 +1086,101 @@ fn rounded_cell_position(sim: &LightcycleSim) -> Option<(f32, f32)> {
         let is_turn = incoming.0 * outgoing.0 + incoming.1 * outgoing.1 == 0;
         if is_turn {
             let u = 0.5 + (sim.cell_t / radius) * 0.5;
-            return Some(arc_cell_point(sim.cell, incoming, outgoing, u, radius));
+            return Some(arc_cell_pose(sim.cell, incoming, outgoing, u, radius));
         }
     }
 
     None
 }
 
-fn arc_cell_point(
+/// Samples the rounded corner centered on `corner` at `u`, where 0 is the arc
+/// entry (`radius` before the corner, travelling along `incoming`) and 1 is the
+/// exit (`radius` past it, travelling along `outgoing`).
+fn arc_cell_pose(
     corner: (i32, i32),
     incoming: (i32, i32),
     outgoing: (i32, i32),
     u: f32,
     radius: f32,
-) -> (f32, f32) {
-    let corner_x = corner.0 as f32;
-    let corner_z = corner.1 as f32;
-    let center_x = corner_x - incoming.0 as f32 * radius + outgoing.0 as f32 * radius;
-    let center_z = corner_z - incoming.1 as f32 * radius + outgoing.1 as f32 * radius;
+) -> CyclePose {
+    let center_x = corner.0 as f32 - incoming.0 as f32 * radius + outgoing.0 as f32 * radius;
+    let center_z = corner.1 as f32 - incoming.1 as f32 * radius + outgoing.1 as f32 * radius;
 
-    let start_x = -outgoing.0 as f32;
-    let start_z = -outgoing.1 as f32;
-    let start_angle = start_z.atan2(start_x);
+    let start_angle = (-outgoing.1 as f32).atan2(-outgoing.0 as f32);
     let end_angle = (incoming.1 as f32).atan2(incoming.0 as f32);
 
-    let mut delta = end_angle - start_angle;
-    if delta > std::f32::consts::PI {
-        delta -= std::f32::consts::TAU;
-    } else if delta < -std::f32::consts::PI {
-        delta += std::f32::consts::TAU;
+    let mut sweep = end_angle - start_angle;
+    if sweep > std::f32::consts::PI {
+        sweep -= std::f32::consts::TAU;
+    } else if sweep < -std::f32::consts::PI {
+        sweep += std::f32::consts::TAU;
     }
 
-    let theta = start_angle + delta * u.clamp(0.0, 1.0);
-    (
-        center_x + radius * theta.cos(),
-        center_z + radius * theta.sin(),
-    )
+    // Positive sweep curves toward the cycle's right, which is also the
+    // direction it should bank.
+    let u = u.clamp(0.0, 1.0);
+    let theta = start_angle + sweep * u;
+    let turn_sign = sweep.signum();
+
+    CyclePose {
+        position: (
+            center_x + radius * theta.cos(),
+            center_z + radius * theta.sin(),
+        ),
+        direction: Vec2::new(-theta.sin(), theta.cos()) * turn_sign,
+        // Peaks mid-corner and returns upright by the exit.
+        lean: turn_sign * config::LIGHTCYCLE_LEAN_ANGLE * (std::f32::consts::PI * u).sin(),
+    }
 }
 
 fn update_cycle_transform(
-    time: Res<Time>,
     state: Res<LightcycleState>,
-    mut cycle: Query<(&mut Transform, &mut CycleVisual), With<CycleEntity>>,
+    mut cycle: Query<&mut Transform, With<CycleEntity>>,
 ) {
-    let Ok((mut transform, mut visual)) = cycle.single_mut() else {
+    let Ok(mut transform) = cycle.single_mut() else {
         return;
     };
     let Some(run) = state.run.as_ref() else {
         return;
     };
 
-    transform.translation = cycle_world_position(&run.sim);
+    let pose = cycle_cell_pose(&run.sim);
+    transform.translation = pose_world_position(&pose);
+    transform.rotation = pose_rotation(&pose);
+}
 
-    let target_rotation = heading_rotation(run.sim.heading);
-    if visual.target_rotation != target_rotation {
-        visual.from_rotation = transform.rotation;
-        visual.target_rotation = target_rotation;
-        visual.progress = 0.0;
-    }
-
-    if visual.progress < 1.0 {
-        visual.progress += time.delta_secs() / config::LIGHTCYCLE_TURN_DURATION;
-        if visual.progress >= 1.0 {
-            visual.progress = 1.0;
-        }
-        transform.rotation = visual
-            .from_rotation
-            .slerp(visual.target_rotation, smoothstep(visual.progress));
-    } else {
-        transform.rotation = target_rotation;
-    }
+/// Eases the camera's follow direction toward `target` with a frame-rate
+/// independent time constant.
+fn advance_chase_forward(current: Vec3, target: Vec3, delta: f32) -> Vec3 {
+    let blend = 1.0 - (-delta / config::LIGHTCYCLE_CAMERA_TURN_LAG).exp();
+    current
+        .lerp(target, blend.clamp(0.0, 1.0))
+        .try_normalize()
+        .unwrap_or(target)
 }
 
 fn update_chase_camera(
     state: Res<LightcycleState>,
     time: Res<Time>,
     mut camera: Single<&mut Transform, (With<Camera3d>, Without<CycleEntity>)>,
-    cycle: Query<&Transform, (With<CycleEntity>, Without<Camera3d>)>,
+    mut cycle: Query<(&Transform, &mut ChaseCamera), Without<Camera3d>>,
 ) {
-    let Ok(cycle) = cycle.single() else {
+    let Ok((cycle, mut chase)) = cycle.single_mut() else {
         return;
     };
     if state.run.is_none() {
         return;
     }
 
+    let travel = cycle.rotation * Vec3::X;
+    chase.forward = advance_chase_forward(
+        chase.forward,
+        Vec3::new(travel.x, 0.0, travel.z),
+        time.delta_secs(),
+    );
+
     let cycle_pos = cycle.translation;
-    let raw_forward = cycle.rotation * Vec3::X;
-    let forward = Vec3::new(raw_forward.x, 0.0, raw_forward.z).normalize_or_zero();
+    let forward = chase.forward;
     let look_target = cycle_pos + forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
     let mut camera_position = cycle_pos - forward * config::LIGHTCYCLE_CAMERA_DISTANCE
         + Vec3::Y * config::LIGHTCYCLE_CAMERA_HEIGHT;
@@ -1014,4 +1195,150 @@ fn update_chase_camera(
 
     camera.translation = camera_position;
     camera.look_at(look_target, Vec3::Y);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GateScanBar, arc_cell_pose, cycle_cell_pose, gate_bar_height, gate_pulse, pose_rotation,
+        rail_segments,
+    };
+    use crate::config;
+    use crate::lightcycle::logic::{Heading, LightcycleSim, Turn};
+    use bevy::prelude::{Vec2, Vec3};
+
+    const RADIUS: f32 = config::LIGHTCYCLE_TURN_RADIUS;
+
+    /// A right turn at cell (1, 0): entering along +X, leaving along +Z.
+    fn right_corner(u: f32) -> super::CyclePose {
+        arc_cell_pose((1, 0), (1, 0), (0, 1), u, RADIUS)
+    }
+
+    #[test]
+    fn corner_arc_runs_from_the_incoming_heading_to_the_outgoing_one() {
+        let entry = right_corner(0.0);
+        let exit = right_corner(1.0);
+
+        assert!((entry.direction - Vec2::new(1.0, 0.0)).length() < 1e-5);
+        assert!((exit.direction - Vec2::new(0.0, 1.0)).length() < 1e-5);
+
+        // The arc starts `RADIUS` short of the corner and ends `RADIUS` past it.
+        assert!((entry.position.0 - (1.0 - RADIUS)).abs() < 1e-5);
+        assert!(entry.position.1.abs() < 1e-5);
+        assert!((exit.position.0 - 1.0).abs() < 1e-5);
+        assert!((exit.position.1 - RADIUS).abs() < 1e-5);
+
+        // Upright at both ends so straight segments join without a pop.
+        assert!(entry.lean.abs() < 1e-5);
+        assert!(exit.lean.abs() < 1e-5);
+    }
+
+    #[test]
+    fn corner_pose_is_continuous_across_the_cell_boundary() {
+        let mut before = LightcycleSim::start((0, 0), Heading::PosX);
+        before.queue_turn(Turn::Right);
+        before.cell_t = 1.0;
+
+        // The simulation applies the turn at the boundary and starts the next cell.
+        let mut after = LightcycleSim::start((1, 0), Heading::PosZ);
+        after.trail.push((0, 0));
+
+        let before = cycle_cell_pose(&before);
+        let after = cycle_cell_pose(&after);
+
+        assert!((before.position.0 - after.position.0).abs() < 1e-5);
+        assert!((before.position.1 - after.position.1).abs() < 1e-5);
+        assert!((before.direction - after.direction).length() < 1e-5);
+        assert!((before.lean - after.lean).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_wall_without_a_gate_is_one_unbroken_rail() {
+        assert_eq!(rail_segments(-5.0, 5.0, None), vec![(-5.0, 5.0)]);
+    }
+
+    #[test]
+    fn a_gate_splits_its_wall_into_the_rails_on_either_side() {
+        assert_eq!(
+            rail_segments(-5.0, 5.0, Some((-1.0, 2.0))),
+            vec![(-5.0, -1.0), (2.0, 5.0)]
+        );
+    }
+
+    #[test]
+    fn a_gate_at_a_wall_corner_drops_the_empty_side() {
+        assert_eq!(
+            rail_segments(-5.0, 5.0, Some((-5.0, -2.0))),
+            vec![(-2.0, 5.0)]
+        );
+        assert_eq!(
+            rail_segments(-5.0, 5.0, Some((2.0, 5.0))),
+            vec![(-5.0, 2.0)]
+        );
+    }
+
+    #[test]
+    fn a_gate_spanning_the_whole_wall_leaves_no_rail() {
+        assert!(rail_segments(-5.0, 5.0, Some((-5.0, 5.0))).is_empty());
+    }
+
+    #[test]
+    fn gate_frame_pulses_between_its_trough_and_peak() {
+        let samples: Vec<_> = (0..64).map(|step| gate_pulse(step as f32 * 0.05)).collect();
+
+        assert!(samples.iter().all(|value| (0.0..=1.0).contains(value)));
+        assert!(samples.iter().any(|value| *value > 0.9), "never brightens");
+        assert!(samples.iter().any(|value| *value < 0.1), "never dims");
+    }
+
+    #[test]
+    fn gate_bars_sweep_up_the_opening_and_wrap_at_the_lintel() {
+        let travel = config::LIGHTCYCLE_PORTAL_HEIGHT;
+        let bar = GateScanBar {
+            offset: 0.0,
+            travel,
+        };
+
+        // Long enough to cover more than one full sweep of the opening.
+        let steps = (2.5 / config::LIGHTCYCLE_PORTAL_BAR_SPEED / 0.05) as usize;
+        let heights: Vec<_> = (0..steps)
+            .map(|step| gate_bar_height(&bar, step as f32 * 0.05))
+            .collect();
+
+        assert!(heights.iter().all(|height| (0.0..=travel).contains(height)));
+        assert!(heights[1] > heights[0], "bars should rise, not fall");
+        assert!(
+            heights.windows(2).any(|pair| pair[1] < pair[0]),
+            "bars should wrap back to the ground"
+        );
+    }
+
+    #[test]
+    fn gate_bars_stay_evenly_spaced_up_the_opening() {
+        let travel = config::LIGHTCYCLE_PORTAL_HEIGHT;
+        let count = config::LIGHTCYCLE_PORTAL_BAR_COUNT;
+        let bars: Vec<_> = (0..count)
+            .map(|index| GateScanBar {
+                offset: index as f32 / count as f32,
+                travel,
+            })
+            .collect();
+
+        let mut heights: Vec<_> = bars.iter().map(|bar| gate_bar_height(bar, 0.37)).collect();
+        heights.sort_by(f32::total_cmp);
+
+        let expected = travel / count as f32;
+        for pair in heights.windows(2) {
+            assert!((pair[1] - pair[0] - expected).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn cycle_banks_toward_the_inside_of_the_corner() {
+        let right_up = pose_rotation(&right_corner(0.5)) * Vec3::Y;
+        let left_up = pose_rotation(&arc_cell_pose((1, 0), (1, 0), (0, -1), 0.5, RADIUS)) * Vec3::Y;
+
+        assert!(right_up.z > 0.1, "a right turn should bank toward +Z");
+        assert!(left_up.z < -0.1, "a left turn should bank toward -Z");
+    }
 }

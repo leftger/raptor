@@ -46,14 +46,21 @@ fn main() {
         .insert_resource(OrbitCameraResource::default())
         .insert_resource(SelectionState::default())
         .insert_resource(ScanEffectResource::default())
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: WINDOW_TITLE.into(),
-                resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: WINDOW_TITLE.into(),
+                        resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(AssetPlugin {
+                    file_path: platform::asset_root().to_string_lossy().into_owned(),
+                    ..default()
+                }),
+        )
         .add_plugins(RaptorPlugins)
         .run();
 }

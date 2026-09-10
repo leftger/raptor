@@ -66,9 +66,10 @@ pub const SCANLINE_ALPHA: f32 = 0.1;
 pub const LIGHTCYCLE_CELLS_PER_SEC: f32 = 3.5;
 pub const LIGHTCYCLE_FIXED_STEP: f32 = 1.0 / 60.0;
 pub const LIGHTCYCLE_MAX_SUBSTEPS: usize = 4;
-pub const LIGHTCYCLE_TURN_DURATION: f32 = 0.22;
 /// How early (in cells) the rendered path begins curving before an intersection.
 pub const LIGHTCYCLE_TURN_RADIUS: f32 = 0.4;
+/// How far the cycle banks into a corner, in radians.
+pub const LIGHTCYCLE_LEAN_ANGLE: f32 = 0.55;
 pub const LIGHTCYCLE_CRASH_FX_DURATION: f32 = 0.6;
 pub const LIGHTCYCLE_ARENA_PADDING: i32 = 1;
 pub const LIGHTCYCLE_EMPTY_ARENA_HALF: i32 = 2;
@@ -78,23 +79,47 @@ pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;
 pub const LIGHTCYCLE_TOWER_STRIDE: i32 = 3;
 pub const LIGHTCYCLE_TOWER_SIZE: f32 = 2.2;
 
-pub const LIGHTCYCLE_CYCLE_HEIGHT: f32 = 0.8;
-pub const LIGHTCYCLE_CYCLE_SIZE: f32 = 0.7;
+/// glTF scene rendered as the player's cycle, relative to the `assets` directory.
+pub const LIGHTCYCLE_MODEL_ASSET: &str = "models/light_cycle/scene.gltf";
+/// Uniform scale for the cycle model. The source asset is 3.31 units long, so
+/// this renders the cycle just under one grid cell long.
+pub const LIGHTCYCLE_MODEL_SCALE: f32 = 0.72;
+/// The model's nose points down its local -X, while gameplay drives entities
+/// forward along +X.
+pub const LIGHTCYCLE_MODEL_YAW: f32 = std::f32::consts::PI;
+/// Rendered height of the scaled cycle model.
+pub const LIGHTCYCLE_CYCLE_HEIGHT: f32 = 1.0;
 pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.6;
 pub const LIGHTCYCLE_TRAIL_THICKNESS: f32 = 0.55;
 pub const LIGHTCYCLE_WALL_HEIGHT: f32 = 1.4;
 pub const LIGHTCYCLE_WALL_THICKNESS: f32 = 0.2;
 pub const LIGHTCYCLE_PORTAL_HEIGHT: f32 = 2.6;
-pub const LIGHTCYCLE_PORTAL_WIDTH: f32 = 1.6;
+/// How many wall cells the parent gate covers. Wide enough that reaching the
+/// parent directory does not need single-cell precision.
+pub const LIGHTCYCLE_PORTAL_WIDTH_CELLS: i32 = 3;
+/// Thickness of the gate's posts and lintel.
+pub const LIGHTCYCLE_PORTAL_FRAME_THICKNESS: f32 = 0.28;
+/// Radians per second of the gate frame's brightness pulse.
+pub const LIGHTCYCLE_PORTAL_PULSE_SPEED: f32 = 3.2;
+/// Light bars sweeping up through the gate's opening.
+pub const LIGHTCYCLE_PORTAL_BAR_COUNT: usize = 4;
+/// Full sweeps of the opening per second.
+pub const LIGHTCYCLE_PORTAL_BAR_SPEED: f32 = 0.45;
+pub const LIGHTCYCLE_PORTAL_BAR_HEIGHT: f32 = 0.18;
+pub const LIGHTCYCLE_PORTAL_BAR_ALPHA: f32 = 0.5;
 
-pub const LIGHTCYCLE_CYCLE_COLOR: Color = Color::srgba(1.0, 0.15, 0.9, 1.0);
 pub const LIGHTCYCLE_TRAIL_COLOR: Color = Color::srgba(0.0, 1.0, 1.0, 1.0);
 pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
 pub const LIGHTCYCLE_PORTAL_COLOR: Color = Color::srgba(1.0, 0.85, 0.1, 1.0);
+/// Trough of the gate frame's pulse.
+pub const LIGHTCYCLE_PORTAL_DIM_COLOR: Color = Color::srgba(0.32, 0.25, 0.03, 1.0);
 
 pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
 pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
 pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 4.0;
+/// Time constant for the chase camera easing onto a new heading, in seconds.
+/// Without this lag a corner looks like the world rotating around a still bike.
+pub const LIGHTCYCLE_CAMERA_TURN_LAG: f32 = 0.28;
 
 /// Convert a grid coordinate to a point on the ground plane.
 pub fn ground_position(x: i32, z: i32) -> Vec3 {
