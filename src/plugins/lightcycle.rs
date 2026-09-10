@@ -16,6 +16,7 @@ use crate::state::{
     OrbitCameraResource, TrailSceneRoot,
 };
 use bevy::asset::RenderAssetUsages;
+use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -56,6 +57,20 @@ impl Plugin for LightcyclePlugin {
                 )
                     .chain()
                     .after(crate::plugins::filesystem::apply_loaded),
+            )
+            .add_systems(
+                Update,
+                (
+                    cleanup_orphaned_entry_effect
+                        .after(read_lightcycle_input)
+                        .before(spawn_entry_effect),
+                    spawn_entry_effect.after(step_lightcycle),
+                    animate_entry_effect
+                        .after(spawn_entry_effect)
+                        .after(update_cycle_transform)
+                        .before(update_chase_camera),
+                )
+                    .run_if(in_lightcycle_mode),
             );
     }
 }
@@ -63,6 +78,8 @@ impl Plugin for LightcyclePlugin {
 #[derive(Resource)]
 struct LightcycleAssets {
     unit_cube: Handle<Mesh>,
+    entry_beam_mesh: Handle<Mesh>,
+    entry_halo_mesh: Handle<Mesh>,
     cycle_scene: Handle<WorldAsset>,
     trail_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
@@ -83,6 +100,8 @@ struct LightcycleAssets {
     document_folio_material: Handle<StandardMaterial>,
     document_focus_material: Handle<StandardMaterial>,
     crash_material: Handle<StandardMaterial>,
+    entry_beam_material: Handle<StandardMaterial>,
+    entry_halo_material: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -95,6 +114,18 @@ struct CrashDebris {
     life: f32,
     max_life: f32,
     initial_scale: f32,
+}
+
+/// Entity owned by the directory-tower transport effect.
+#[derive(Component)]
+struct EntryTransportEntity;
+
+#[derive(Component)]
+struct EntryBeam;
+
+#[derive(Component)]
+struct EntryHalo {
+    phase: f32,
 }
 
 /// A post or lintel of the parent gate.
@@ -128,6 +159,54 @@ struct DocumentFocusMarker;
 #[derive(Component)]
 struct ChaseCamera {
     forward: Vec3,
+    /// Right-drag free look, in radians: `x` swings the rig around the cycle and
+    /// `y` raises it above the default chase pitch. Held only while dragging;
+    /// releasing the button eases it back to zero.
+    look: Vec2,
+}
+
+impl ChaseCamera {
+    /// Folds one frame of right-drag mouse motion into the free-look offset.
+    ///
+    /// Both axes are negated to match the explorer's orbit camera, which
+    /// measures its own yaw and pitch in the opposite sense. Pitch is clamped
+    /// here rather than only at render time so holding a drag past the limit
+    /// cannot bank up rotation that the next drag has to spend undoing.
+    fn apply_look_drag(&mut self, delta: Vec2) {
+        let base_pitch = chase_base_pitch();
+        self.look.x = wrap_angle(self.look.x - delta.x * config::CAMERA_ROTATION_SPEED);
+        self.look.y = (self.look.y - delta.y * config::CAMERA_ROTATION_SPEED).clamp(
+            config::LIGHTCYCLE_CAMERA_MIN_PITCH - base_pitch,
+            config::LIGHTCYCLE_CAMERA_MAX_PITCH - base_pitch,
+        );
+    }
+
+    /// Eases free look back behind the cycle after the button is released, with
+    /// a frame-rate independent time constant.
+    fn recenter_look(&mut self, delta_seconds: f32) {
+        if self.look == Vec2::ZERO {
+            return;
+        }
+
+        let blend = 1.0 - (-delta_seconds / config::LIGHTCYCLE_CAMERA_LOOK_RECENTER).exp();
+        self.look = self.look.lerp(Vec2::ZERO, blend.clamp(0.0, 1.0));
+
+        // An exponential ease never quite arrives, so land it rather than
+        // leaving the camera drifting by fractions of a degree forever.
+        if self.look.length_squared() < LOOK_RECENTER_SNAP * LOOK_RECENTER_SNAP {
+            self.look = Vec2::ZERO;
+        }
+    }
+}
+
+/// Free-look offset below which recentering snaps home, in radians.
+const LOOK_RECENTER_SNAP: f32 = 1.0e-3;
+
+/// Wraps an angle into `[-PI, PI)` so recentering unwinds the short way round
+/// however many times a drag has spun the camera about the cycle.
+fn wrap_angle(angle: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    (angle + PI).rem_euclid(TAU) - PI
 }
 
 fn unlit_material(color: Color) -> StandardMaterial {
@@ -230,6 +309,14 @@ fn setup_lightcycle_assets(
     });
     commands.insert_resource(LightcycleAssets {
         unit_cube: meshes.add(Cuboid::default()),
+        entry_beam_mesh: meshes.add(Cylinder::new(
+            config::LIGHTCYCLE_ENTRY_BEAM_RADIUS,
+            config::LIGHTCYCLE_ENTRY_BEAM_HEIGHT,
+        )),
+        entry_halo_mesh: meshes.add(Torus::new(
+            config::LIGHTCYCLE_ENTRY_HALO_INNER_RADIUS,
+            config::LIGHTCYCLE_ENTRY_HALO_OUTER_RADIUS,
+        )),
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
@@ -283,6 +370,22 @@ fn setup_lightcycle_assets(
             LinearRgba::rgb(2.4, 0.9, 0.1),
         )),
         crash_material: materials.add(unlit_material(Color::srgb(1.0, 0.45, 0.1))),
+        entry_beam_material: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.25, 0.92, 1.0, 0.14),
+            emissive: LinearRgba::rgb(0.08, 1.8, 2.8),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        }),
+        entry_halo_material: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.7, 0.98, 1.0, 0.92),
+            emissive: LinearRgba::rgb(3.2, 5.0, 6.0),
+            alpha_mode: AlphaMode::Add,
+            unlit: true,
+            ..default()
+        }),
     });
 }
 
@@ -368,21 +471,23 @@ fn build_document_run(path: &Path, bytes: &[u8]) -> ActiveRun {
 }
 
 fn spawn_sim(arena: &Arena, cells: &HashMap<(i32, i32), usize>) -> LightcycleSim {
-    let Some(spawn) = arena.nearest_empty_cell(
-        |cell| cells.contains_key(&cell) || arena.street_walls.contains(&cell),
+    let blocked =
+        |cell: (i32, i32)| cells.contains_key(&cell) || arena.street_walls.contains(&cell);
+
+    if let Some((spawn, heading)) = arena.spawn_with_runway(
+        blocked,
         config::LIGHTCYCLE_SPAWN_SEARCH_RADIUS,
-    ) else {
-        return LightcycleSim::ready(arena.center(), Heading::PosX);
-    };
-
-    let heading = Heading::initial_heading(spawn, |cell| {
-        arena.contains(cell) && !cells.contains_key(&cell) && !arena.street_walls.contains(&cell)
-    });
-
-    match heading {
-        Some(heading) => LightcycleSim::start(spawn, heading),
-        None => LightcycleSim::ready(spawn, Heading::PosX),
+        config::LIGHTCYCLE_SPAWN_RUNWAY_CELLS,
+    ) {
+        return LightcycleSim::start(spawn, heading);
     }
+
+    // Nowhere to ride at all: hold the run until a restart or another folder
+    // replaces the map.
+    let cell = arena
+        .nearest_empty_cell(blocked, config::LIGHTCYCLE_SPAWN_SEARCH_RADIUS)
+        .unwrap_or_else(|| arena.center());
+    LightcycleSim::ready(cell, Heading::PosX)
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -405,6 +510,7 @@ fn toggle_mode(
     state.clock = 0.0;
     state.run = None;
     state.crash_fx = None;
+    state.entry_fx = None;
     state.restore_directory = false;
 
     if *mode == InteractionMode::Lightcycle {
@@ -443,6 +549,7 @@ fn spawn_run_entities(
         Visibility::default(),
         ChaseCamera {
             forward: pose_forward(&pose),
+            look: Vec2::ZERO,
         },
         Pickable::IGNORE,
         children![(
@@ -946,7 +1053,7 @@ fn document_glyph_line_mesh(
     let heading = matches!(block.kind, crate::document::DocBlockKind::Heading(_));
     let pixel = if heading { 0.09 } else { 0.055 };
     let height = if heading { 2.55 } else { 0.85 };
-    let forward = if block.along_x { Vec3::X } else { Vec3::Z };
+    let advance = document_line_advance(block.along_x);
     let max_chars = remaining.min(if heading {
         config::DOCUMENT_HEADING_GLYPHS
     } else {
@@ -958,25 +1065,13 @@ fn document_glyph_line_mesh(
     for (index, ch) in chars.iter().enumerate() {
         let glyph = glyph_pixels(*ch);
         used += 1;
-        let offset = forward * ((index as f32 - (chars.len() as f32 - 1.0) * 0.5) * pixel * 9.0);
+        let offset = glyph_char_offset(advance, index, chars.len(), pixel);
         for (row, row_bits) in glyph.iter().enumerate() {
             for col in 0..8 {
                 if row_bits & (1 << col) == 0 {
                     continue;
                 }
-                let local = Vec3::new(
-                    if block.along_x {
-                        (7 - col) as f32 * pixel
-                    } else {
-                        0.0
-                    },
-                    (7 - row) as f32 * pixel,
-                    if block.along_x {
-                        0.0
-                    } else {
-                        (7 - col) as f32 * pixel
-                    },
-                );
+                let local = glyph_pixel_offset(advance, col, row, pixel);
                 let cube = Mesh::from(Cuboid::default()).transformed_by(
                     Transform::from_translation(origin + Vec3::Y * height + offset + local)
                         .with_scale(Vec3::splat(pixel * 0.85)),
@@ -995,6 +1090,33 @@ fn document_glyph_line_mesh(
         mesh.unwrap_or_else(|| collapsed_document_glyph(origin)),
         used,
     )
+}
+
+/// Direction a block's text reads in, which is also the axis its glyph columns
+/// run along.
+///
+/// A paragraph walls off one side of its spine cells, so the reader always
+/// arrives from the other side: `+Z` for a row laid along X, `+X` for one laid
+/// along Z. Screen right for those two viewpoints is `+X` and `-Z`, and text has
+/// to read toward screen right.
+fn document_line_advance(along_x: bool) -> Vec3 {
+    if along_x { Vec3::X } else { Vec3::NEG_Z }
+}
+
+/// Offset of one character's origin from the middle of its line.
+fn glyph_char_offset(advance: Vec3, index: usize, count: usize, pixel: f32) -> Vec3 {
+    advance * ((index as f32 - (count as f32 - 1.0) * 0.5) * pixel * 9.0)
+}
+
+/// Offset of one glyph pixel from its own character's origin.
+///
+/// Columns run along the same `advance` the characters are placed along, so a
+/// letterform cannot end up mirrored against the order of the line it sits in.
+/// font8x8 packs each row least-significant bit first, making column 0 the
+/// letter's leftmost pixel, so it belongs at the near end of `advance`. Row 0 is
+/// the top of the glyph and belongs at the top of the line.
+fn glyph_pixel_offset(advance: Vec3, col: usize, row: usize, pixel: f32) -> Vec3 {
+    advance * (col as f32 * pixel) + Vec3::Y * ((7 - row) as f32 * pixel)
 }
 
 fn collapsed_document_glyph(origin: Vec3) -> Mesh {
@@ -1469,6 +1591,7 @@ fn reset_on_directory_loaded(
 
         state.clock = 0.0;
         state.crash_fx = None;
+        state.entry_fx = None;
         state.restore_directory = false;
         state.run = Some(run);
     }
@@ -1530,6 +1653,7 @@ fn reset_on_document_loaded(
         spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
         state.clock = 0.0;
         state.crash_fx = None;
+        state.entry_fx = None;
         state.restore_directory = false;
         state.run = Some(run);
     }
@@ -1538,6 +1662,8 @@ fn reset_on_document_loaded(
 fn apply_load_failure(
     mut failed: MessageReader<DirectoryLoadFailed>,
     mut state: ResMut<LightcycleState>,
+    mut commands: Commands,
+    effect_entities: Query<Entity, With<EntryTransportEntity>>,
 ) {
     if failed.read().next().is_none() {
         return;
@@ -1549,6 +1675,10 @@ fn apply_load_failure(
         run.sim.pending_request = None;
         run.entering_label = None;
         run.sim.phase = RunPhase::Running;
+    }
+    state.entry_fx = None;
+    for entity in &effect_entities {
+        commands.entity(entity).despawn();
     }
 }
 
@@ -1581,6 +1711,7 @@ fn read_lightcycle_input(
     let restart = keys.just_pressed(KeyCode::KeyR);
     let go_up = keys.just_pressed(KeyCode::KeyU) || keys.just_pressed(KeyCode::Minus);
 
+    let entering_tower = state.entry_fx.is_some();
     let Some(mut run) = state.run.take() else {
         return;
     };
@@ -1593,9 +1724,10 @@ fn read_lightcycle_input(
         restart_run(&mut run);
         state.clock = 0.0;
         state.crash_fx = None;
+        state.entry_fx = None;
     }
 
-    if go_up {
+    if go_up && !entering_tower {
         if run.is_document() {
             state.restore_directory = true;
         } else if let Some(parent) = navigator.0.begin_go_to_parent() {
@@ -1637,6 +1769,7 @@ fn restore_directory_arena(
     spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
     state.clock = 0.0;
     state.crash_fx = None;
+    state.entry_fx = None;
     state.run = Some(run);
 }
 
@@ -1735,10 +1868,12 @@ fn step_lightcycle(
                     .and_then(|nodes| nodes.get(index))
                     .map(|node| (node.name.clone(), node.path.clone()));
                 if let Some((name, path)) = details {
-                    navigator.0.begin_navigate_to(&path);
                     run.entering_label = Some(name);
                     run.crash_label = None;
-                    requests.write(DirectoryRequested { path });
+                    state.entry_fx = Some(crate::lightcycle::EntryFx::new(
+                        path,
+                        config::LIGHTCYCLE_ENTRY_FX_DURATION,
+                    ));
                 } else {
                     run.sim.phase = RunPhase::Crashed;
                     run.crash_label = Some("missing directory".to_string());
@@ -1864,6 +1999,139 @@ fn update_crash_effects(
         if fx.timer <= 0.0 {
             state.crash_fx = None;
         }
+    }
+}
+
+/// Removes transport geometry when a restart cancels the timeline before a new
+/// arena arrives. Normal directory loads remove it with the rest of the old
+/// lightcycle scene.
+fn cleanup_orphaned_entry_effect(
+    state: Res<LightcycleState>,
+    mut commands: Commands,
+    effects: Query<Entity, With<EntryTransportEntity>>,
+) {
+    if state.entry_fx.is_some() {
+        return;
+    }
+    for entity in &effects {
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Creates a translucent column and a stack of independent neon rings around
+/// the stopped cycle. Navigation is deliberately not started here: the update
+/// system below waits until the beam reaches its apex.
+fn spawn_entry_effect(
+    mut state: ResMut<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut commands: Commands,
+) {
+    let Some(fx) = state.entry_fx.as_mut() else {
+        return;
+    };
+    if fx.spawned {
+        return;
+    }
+    fx.spawned = true;
+
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+    let origin = cycle_world_position(&run.sim);
+    commands.spawn((
+        LightcycleSceneRoot,
+        EntryTransportEntity,
+        EntryBeam,
+        Mesh3d(assets.entry_beam_mesh.clone()),
+        MeshMaterial3d(assets.entry_beam_material.clone()),
+        Transform::from_translation(
+            origin + Vec3::Y * (config::LIGHTCYCLE_ENTRY_BEAM_HEIGHT * 0.5),
+        )
+        .with_scale(Vec3::new(0.02, 1.0, 0.02)),
+        Pickable::IGNORE,
+    ));
+
+    for index in 0..config::LIGHTCYCLE_ENTRY_HALO_COUNT {
+        let phase = index as f32 / config::LIGHTCYCLE_ENTRY_HALO_COUNT as f32;
+        commands.spawn((
+            LightcycleSceneRoot,
+            EntryTransportEntity,
+            EntryHalo { phase },
+            Mesh3d(assets.entry_halo_mesh.clone()),
+            MeshMaterial3d(assets.entry_halo_material.clone()),
+            Transform::from_translation(origin),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Brightness/size envelope for the whole transport. The quick rise makes the
+/// collision read as a capture; the tail collapses as the old arena disappears.
+fn entry_effect_envelope(progress: f32) -> f32 {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress < 0.18 {
+        smoothstep(progress / 0.18)
+    } else {
+        1.0 - smoothstep((progress - 0.18) / 0.82)
+    }
+}
+
+/// Height and scale of one halo in the repeating upward sweep.
+fn entry_halo_pose(progress: f32, phase: f32) -> (f32, f32) {
+    let sweep = (progress * 2.0 + phase).fract();
+    let height = 0.35 + sweep * config::LIGHTCYCLE_ENTRY_HALO_HEIGHT;
+    let ring_envelope = (std::f32::consts::PI * sweep).sin().max(0.0);
+    let scale = entry_effect_envelope(progress) * (0.35 + ring_envelope * 0.85);
+    (height, scale)
+}
+
+fn smoothstep(value: f32) -> f32 {
+    let value = value.clamp(0.0, 1.0);
+    value * value * (3.0 - 2.0 * value)
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn animate_entry_effect(
+    time: Res<Time>,
+    mut state: ResMut<LightcycleState>,
+    mut navigator: ResMut<NavigatorResource>,
+    mut requests: MessageWriter<DirectoryRequested>,
+    mut beam: Query<&mut Transform, (With<EntryBeam>, Without<EntryHalo>, Without<CycleEntity>)>,
+    mut halos: Query<(&EntryHalo, &mut Transform), (Without<EntryBeam>, Without<CycleEntity>)>,
+    mut cycle: Query<&mut Transform, (With<CycleEntity>, Without<EntryBeam>, Without<EntryHalo>)>,
+) {
+    let Some(fx) = state.entry_fx.as_mut() else {
+        return;
+    };
+    fx.elapsed += time.delta_secs();
+    let progress = fx.progress();
+    let envelope = entry_effect_envelope(progress);
+
+    if let Ok(mut transform) = beam.single_mut() {
+        let radius = 0.15 + envelope * 0.85;
+        transform.scale = Vec3::new(radius, 1.0, radius);
+    }
+    for (halo, mut transform) in &mut halos {
+        let (height, scale) = entry_halo_pose(progress, halo.phase);
+        transform.translation.y = height;
+        transform.scale = Vec3::splat(scale.max(0.001));
+        transform.rotate_y(time.delta_secs() * (1.8 + halo.phase));
+    }
+
+    // The cycle rises into the beam only after capture is established. Its base
+    // transform is restored by update_cycle_transform immediately before this
+    // system each frame, so this offset cannot accumulate.
+    if let Ok(mut transform) = cycle.single_mut() {
+        let lift = smoothstep((progress - 0.28) / 0.72);
+        transform.translation.y += lift * config::LIGHTCYCLE_ENTRY_HALO_HEIGHT * 0.72;
+        transform.scale = Vec3::splat(1.0 - lift * 0.72);
+    }
+
+    if !fx.requested && progress >= config::LIGHTCYCLE_ENTRY_FX_REQUEST_AT {
+        fx.requested = true;
+        let target = fx.target.clone();
+        navigator.0.begin_navigate_to(&target);
+        requests.write(DirectoryRequested { path: target });
     }
 }
 
@@ -2398,9 +2666,44 @@ fn advance_chase_forward(current: Vec3, target: Vec3, delta: f32) -> Vec3 {
         .unwrap_or(target)
 }
 
+/// Places the chase rig around the cycle for a follow direction and free-look
+/// offset, returning the camera's offset from the cycle and the direction it
+/// views along.
+///
+/// A zero `look` reproduces the fixed rig: [`config::LIGHTCYCLE_CAMERA_DISTANCE`]
+/// behind the direction of travel and [`config::LIGHTCYCLE_CAMERA_HEIGHT`] above
+/// it. Free look orbits that same radius so dragging never pushes the camera
+/// through the floor or into the cycle.
+fn chase_camera_rig(forward: Vec3, look: Vec2) -> (Vec3, Vec3) {
+    let view_forward = Quat::from_rotation_y(look.x) * forward;
+    let pitch = (chase_base_pitch() + look.y).clamp(
+        config::LIGHTCYCLE_CAMERA_MIN_PITCH,
+        config::LIGHTCYCLE_CAMERA_MAX_PITCH,
+    );
+    let radius = chase_rig_radius();
+    let offset = Vec3::Y * (radius * pitch.sin()) - view_forward * (radius * pitch.cos());
+    (offset, view_forward)
+}
+
+/// Pitch of the default chase rig above the cycle, in radians.
+fn chase_base_pitch() -> f32 {
+    config::LIGHTCYCLE_CAMERA_HEIGHT.atan2(config::LIGHTCYCLE_CAMERA_DISTANCE)
+}
+
+/// Distance from the cycle to the default chase rig.
+fn chase_rig_radius() -> f32 {
+    Vec2::new(
+        config::LIGHTCYCLE_CAMERA_DISTANCE,
+        config::LIGHTCYCLE_CAMERA_HEIGHT,
+    )
+    .length()
+}
+
 fn update_chase_camera(
     state: Res<LightcycleState>,
     time: Res<Time>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
     mut camera: Single<&mut Transform, (With<Camera3d>, Without<CycleEntity>)>,
     mut cycle: Query<(&Transform, &mut ChaseCamera), Without<Camera3d>>,
 ) {
@@ -2418,11 +2721,18 @@ fn update_chase_camera(
         time.delta_secs(),
     );
 
+    if mouse_buttons.pressed(MouseButton::Right) {
+        if mouse_motion.delta != Vec2::ZERO {
+            chase.apply_look_drag(mouse_motion.delta);
+        }
+    } else {
+        chase.recenter_look(time.delta_secs());
+    }
+
     let cycle_pos = cycle.translation;
-    let forward = chase.forward;
-    let look_target = cycle_pos + forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
-    let mut camera_position = cycle_pos - forward * config::LIGHTCYCLE_CAMERA_DISTANCE
-        + Vec3::Y * config::LIGHTCYCLE_CAMERA_HEIGHT;
+    let (offset, view_forward) = chase_camera_rig(chase.forward, chase.look);
+    let look_target = cycle_pos + view_forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
+    let mut camera_position = cycle_pos + offset;
 
     if let Some(fx) = state.crash_fx.as_ref() {
         let intensity = (fx.timer / fx.duration).clamp(0.0, 1.0);
@@ -2439,10 +2749,12 @@ fn update_chase_camera(
 #[cfg(test)]
 mod tests {
     use super::{
-        CITY_TRIM_ACCENT, GateScanBar, arc_cell_pose, build_trail_mesh, city_base_trim_mesh,
-        city_body_height, city_body_mesh, city_cap_mesh, city_foundation_mesh, city_palette,
-        city_theme_index, cycle_cell_pose, gate_bar_height, gate_pulse, pose_rotation,
-        rail_segments, road_marking_mesh, trail_centerline, trail_heights, trim_polyline_end,
+        CITY_TRIM_ACCENT, ChaseCamera, GateScanBar, arc_cell_pose, build_trail_mesh,
+        chase_camera_rig, chase_rig_radius, city_base_trim_mesh, city_body_height, city_body_mesh,
+        city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
+        document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
+        glyph_char_offset, glyph_pixel_offset, glyph_pixels, pose_rotation, rail_segments,
+        road_marking_mesh, trail_centerline, trail_heights, trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
@@ -2453,6 +2765,14 @@ mod tests {
     use std::collections::BTreeSet;
 
     const RADIUS: f32 = config::LIGHTCYCLE_TURN_RADIUS;
+
+    /// Direction the cycle asset's nose points in its own model space.
+    ///
+    /// The glTF is Y-up with its length on X, and its canopy peaks near the
+    /// origin then slopes down to a point toward +X, so the nose is +X.
+    /// `LIGHTCYCLE_MODEL_YAW` has to rotate this onto the entity's forward
+    /// axis, and the heading test keeps the two in agreement.
+    const MODEL_NOSE_AXIS: Vec3 = Vec3::X;
 
     /// A right turn at cell (1, 0): entering along +X, leaving along +Z.
     fn right_corner(u: f32) -> super::CyclePose {
@@ -2761,6 +3081,36 @@ mod tests {
         }
     }
 
+    /// The rendered cycle must point along its travel direction and stay
+    /// upright in every heading, including the one antipodal to the model's
+    /// reference axis.
+    #[test]
+    fn cycle_faces_travel_direction_and_stays_upright_in_every_heading() {
+        for heading in [Heading::PosX, Heading::NegX, Heading::PosZ, Heading::NegZ] {
+            let (dx, dz) = heading.delta();
+            let pose = super::CyclePose {
+                position: (0.0, 0.0),
+                direction: Vec2::new(dx as f32, dz as f32),
+                lean: 0.0,
+            };
+            let rotation = pose_rotation(&pose);
+            let model_yaw = bevy::prelude::Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW);
+
+            let travel = super::pose_forward(&pose);
+            let nose = rotation * model_yaw * MODEL_NOSE_AXIS;
+            assert!(
+                nose.dot(travel) > 0.99,
+                "{heading:?}: nose {nose:?} should point along travel {travel:?}"
+            );
+
+            let up = rotation * model_yaw * Vec3::Y;
+            assert!(
+                up.y > 0.99,
+                "{heading:?}: cycle should stay upright, got {up:?}"
+            );
+        }
+    }
+
     #[test]
     fn cycle_banks_toward_the_inside_of_the_corner() {
         let right_up = pose_rotation(&right_corner(0.5)) * Vec3::Y;
@@ -2824,6 +3174,62 @@ mod tests {
             .unwrap();
         assert!(along_x.half_extents.x > along_x.half_extents.z);
         assert!(along_z.half_extents.z > along_z.half_extents.x);
+    }
+
+    /// A glyph's columns and its line's characters have to run the same way. When
+    /// they disagreed the text rendered mirrored from one side of the page and in
+    /// reverse character order from the other.
+    #[test]
+    fn glyph_columns_read_the_same_way_as_the_characters() {
+        for along_x in [true, false] {
+            let advance = document_line_advance(along_x);
+            let pixel = 0.09;
+
+            let next_char =
+                glyph_char_offset(advance, 1, 3, pixel) - glyph_char_offset(advance, 0, 3, pixel);
+            let next_column =
+                glyph_pixel_offset(advance, 7, 0, pixel) - glyph_pixel_offset(advance, 0, 0, pixel);
+            assert!(next_char.dot(advance) > 0.0, "characters must read forward");
+            assert!(next_column.dot(advance) > 0.0, "columns must read forward");
+            assert!(
+                next_char.dot(advance) > next_column.dot(advance),
+                "one character has to advance further than one glyph is wide"
+            );
+
+            // Row 0 is the top of the glyph, so it must sit highest.
+            let top = glyph_pixel_offset(advance, 0, 0, pixel);
+            let bottom = glyph_pixel_offset(advance, 0, 7, pixel);
+            assert!(top.y > bottom.y);
+        }
+    }
+
+    /// Text reads toward screen right for a reader standing on the open side of a
+    /// paragraph's ink wall: `+X` seen from `+Z`, and `-Z` seen from `+X`.
+    #[test]
+    fn text_reads_from_the_side_its_wall_leaves_open() {
+        for (along_x, viewer_forward, expected) in [
+            (true, Vec3::NEG_Z, Vec3::X),
+            (false, Vec3::NEG_X, Vec3::NEG_Z),
+        ] {
+            let advance = document_line_advance(along_x);
+            assert_eq!(advance, expected);
+            assert!(
+                viewer_forward.cross(Vec3::Y).abs_diff_eq(advance, 1e-6),
+                "reading direction must be screen right for that viewpoint"
+            );
+        }
+    }
+
+    /// [`glyph_pixel_offset`] maps column 0 to the left of the letter, which only
+    /// holds while font8x8 packs rows least-significant bit first. 'F' pins the
+    /// order down: its top bar runs from the left edge and stops short of the
+    /// right, so bit 0 is set and bit 7 is not. Under the opposite convention
+    /// both would flip and every glyph would render mirrored.
+    #[test]
+    fn font_rows_pack_the_leftmost_pixel_in_the_lowest_bit() {
+        let top_bar = glyph_pixels('F')[0];
+        assert!(top_bar & 1 != 0, "the top bar must start at bit 0");
+        assert!(top_bar & (1 << 7) == 0, "and stop short of bit 7");
     }
 
     #[test]
@@ -2891,5 +3297,171 @@ mod tests {
         );
         let restored = super::build_active_run(&path, nodes);
         assert_eq!(restored.arena, directory.arena);
+    }
+
+    #[test]
+    fn an_unrotated_chase_rig_sits_behind_and_above_the_cycle() {
+        let (offset, view_forward) = chase_camera_rig(Vec3::X, Vec2::ZERO);
+        assert!(view_forward.abs_diff_eq(Vec3::X, 1e-5));
+        assert!(
+            offset.abs_diff_eq(
+                Vec3::new(
+                    -config::LIGHTCYCLE_CAMERA_DISTANCE,
+                    config::LIGHTCYCLE_CAMERA_HEIGHT,
+                    0.0
+                ),
+                1e-4
+            ),
+            "free look at rest must reproduce the fixed rig, got {offset}"
+        );
+    }
+
+    #[test]
+    fn free_look_yaw_orbits_the_cycle_at_a_constant_radius_and_height() {
+        let (rest, _) = chase_camera_rig(Vec3::X, Vec2::ZERO);
+        for steps in 1..8 {
+            let yaw = steps as f32 * 0.7;
+            let (offset, view_forward) = chase_camera_rig(Vec3::X, Vec2::new(yaw, 0.0));
+            assert!((offset.length() - chase_rig_radius()).abs() < 1e-3);
+            assert!(
+                (offset.y - rest.y).abs() < 1e-4,
+                "yaw must not change height"
+            );
+            assert!((view_forward.length() - 1.0).abs() < 1e-4);
+        }
+    }
+
+    /// A drag that runs past the pitch limits must leave the camera above the
+    /// arena floor and still looking at the cycle rather than straight down it.
+    #[test]
+    fn free_look_pitch_stays_within_its_limits() {
+        let mut chase = ChaseCamera {
+            forward: Vec3::X,
+            look: Vec2::ZERO,
+        };
+
+        for _ in 0..200 {
+            chase.apply_look_drag(Vec2::new(0.0, -50.0));
+        }
+        let (up, _) = chase_camera_rig(chase.forward, chase.look);
+        assert!(up.y > 0.0 && up.y < chase_rig_radius());
+
+        for _ in 0..400 {
+            chase.apply_look_drag(Vec2::new(0.0, 50.0));
+        }
+        let (down, _) = chase_camera_rig(chase.forward, chase.look);
+        assert!(down.y > 0.0, "the camera must not drop below the floor");
+
+        // One frame back the other way has to move the camera immediately, not
+        // spend itself unwinding rotation banked up past the limit.
+        chase.apply_look_drag(Vec2::new(0.0, -20.0));
+        let (recovered, _) = chase_camera_rig(chase.forward, chase.look);
+        assert!(recovered.y > down.y);
+    }
+
+    #[test]
+    fn releasing_the_button_settles_free_look_back_behind_the_cycle() {
+        let mut chase = ChaseCamera {
+            forward: Vec3::X,
+            look: Vec2::ZERO,
+        };
+        chase.apply_look_drag(Vec2::new(-90.0, -40.0));
+        let dragged = chase.look;
+        assert_ne!(dragged, Vec2::ZERO);
+
+        // Both axes have to ease toward the default rig, not just shrink overall.
+        chase.recenter_look(1.0 / 60.0);
+        assert!(chase.look.x.abs() < dragged.x.abs());
+        assert!(chase.look.y.abs() < dragged.y.abs());
+
+        // The ease has to land exactly home rather than trail an ever-smaller
+        // remainder, and it has to get there in a settling time a rider would
+        // read as prompt.
+        let mut frames = 1;
+        while chase.look != Vec2::ZERO {
+            assert!(frames < 60 * 4, "free look never settled");
+            chase.recenter_look(1.0 / 60.0);
+            frames += 1;
+        }
+        let (offset, view_forward) = chase_camera_rig(chase.forward, chase.look);
+        assert!(view_forward.abs_diff_eq(Vec3::X, 1e-5));
+        assert!(offset.abs_diff_eq(
+            Vec3::new(
+                -config::LIGHTCYCLE_CAMERA_DISTANCE,
+                config::LIGHTCYCLE_CAMERA_HEIGHT,
+                0.0
+            ),
+            1e-4
+        ));
+    }
+
+    /// Spinning the camera several turns must still unwind the short way, rather
+    /// than rewinding every revolution the drag wound on.
+    #[test]
+    fn free_look_yaw_wraps_instead_of_accumulating_revolutions() {
+        let mut chase = ChaseCamera {
+            forward: Vec3::X,
+            look: Vec2::ZERO,
+        };
+        for _ in 0..300 {
+            chase.apply_look_drag(Vec2::new(-25.0, 0.0));
+        }
+        assert!(chase.look.x.abs() <= std::f32::consts::PI);
+
+        for angle in [-9.0, -3.5, 0.0, 3.5, 9.0] {
+            let wrapped = wrap_angle(angle);
+            assert!((-std::f32::consts::PI..std::f32::consts::PI).contains(&wrapped));
+            let turns = (angle - wrapped) / std::f32::consts::TAU;
+            assert!(
+                (turns - turns.round()).abs() < 1e-5,
+                "wrapping must only remove whole turns"
+            );
+        }
+    }
+
+    #[test]
+    fn entry_beam_rises_brightly_then_collapses() {
+        assert_eq!(entry_effect_envelope(0.0), 0.0);
+        assert_eq!(entry_effect_envelope(1.0), 0.0);
+        assert!(entry_effect_envelope(0.18) > 0.99);
+        assert!(entry_effect_envelope(0.08) < entry_effect_envelope(0.18));
+        assert!(entry_effect_envelope(0.7) < entry_effect_envelope(0.35));
+    }
+
+    #[test]
+    fn entry_halos_sweep_up_the_beam_at_staggered_heights() {
+        let progress = 0.25;
+        let poses: Vec<_> = (0..config::LIGHTCYCLE_ENTRY_HALO_COUNT)
+            .map(|index| {
+                entry_halo_pose(
+                    progress,
+                    index as f32 / config::LIGHTCYCLE_ENTRY_HALO_COUNT as f32,
+                )
+            })
+            .collect();
+
+        assert!(poses.iter().all(|(height, scale)| {
+            *height >= 0.35
+                && *height <= config::LIGHTCYCLE_ENTRY_HALO_HEIGHT + 0.35
+                && *scale > 0.0
+        }));
+        assert!(
+            poses
+                .windows(2)
+                .any(|pair| (pair[0].0 - pair[1].0).abs() > 0.5),
+            "halos should not collapse into one ring"
+        );
+    }
+
+    #[test]
+    fn directory_request_waits_until_near_the_transport_apex() {
+        let mut fx = crate::lightcycle::EntryFx::new(
+            std::path::PathBuf::from("/next"),
+            config::LIGHTCYCLE_ENTRY_FX_DURATION,
+        );
+        fx.elapsed = fx.duration * 0.5;
+        assert!(fx.progress() < config::LIGHTCYCLE_ENTRY_FX_REQUEST_AT);
+        fx.elapsed = fx.duration * 0.9;
+        assert!(fx.progress() >= config::LIGHTCYCLE_ENTRY_FX_REQUEST_AT);
     }
 }

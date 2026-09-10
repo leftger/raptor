@@ -403,7 +403,7 @@ fn update_footer_text(
     } else {
         (
             "LIGHTCYCLE  |  A/D: Turn  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  Files/trail/wall: crash  |  Gate: parent/close",
-            "MOUSE: disabled  |  u/-: Parent directory or close document  |  Breadcrumb: jump to folder  |  Approach text for the folio panel",
+            "MOUSE: Hold right-drag to look around  |  u/-: Parent directory or close document  |  Breadcrumb: jump to folder  |  Approach text for the folio panel",
         )
     };
 

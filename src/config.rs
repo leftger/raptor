@@ -71,6 +71,18 @@ pub const LIGHTCYCLE_TURN_RADIUS: f32 = 0.4;
 /// How far the cycle banks into a corner, in radians.
 pub const LIGHTCYCLE_LEAN_ANGLE: f32 = 0.55;
 pub const LIGHTCYCLE_CRASH_FX_DURATION: f32 = 0.6;
+/// Duration of the Recognizer-style directory transport. The filesystem load
+/// starts at the apex so the animation remains visible even for cached folders.
+pub const LIGHTCYCLE_ENTRY_FX_DURATION: f32 = 1.15;
+pub const LIGHTCYCLE_ENTRY_FX_REQUEST_AT: f32 = 0.82;
+pub const LIGHTCYCLE_ENTRY_BEAM_HEIGHT: f32 = 15.0;
+pub const LIGHTCYCLE_ENTRY_BEAM_RADIUS: f32 = 1.45;
+pub const LIGHTCYCLE_ENTRY_HALO_COUNT: usize = 7;
+pub const LIGHTCYCLE_ENTRY_HALO_HEIGHT: f32 = 10.5;
+// Wider than a directory tower so the rings remain visible while the bike is
+// still inside the tower mesh at the beginning of the transport.
+pub const LIGHTCYCLE_ENTRY_HALO_INNER_RADIUS: f32 = 1.25;
+pub const LIGHTCYCLE_ENTRY_HALO_OUTER_RADIUS: f32 = 1.5;
 pub const LIGHTCYCLE_ARENA_PADDING: i32 = 2;
 /// Smallest arena side, in cells. Arenas are square, so a folder with one or two
 /// entries still gets a plaza, streets, and room to turn around.
@@ -78,6 +90,11 @@ pub const LIGHTCYCLE_MIN_ARENA_SPAN: i32 = 13;
 /// Percentage of buildable cells that seed a short architecture run.
 pub const LIGHTCYCLE_CITY_STRUCTURE_SEED_CHANCE: u8 = 18;
 pub const LIGHTCYCLE_SPAWN_SEARCH_RADIUS: i32 = 4096;
+/// Clear cells the spawn search tries to leave straight ahead of the cycle. At
+/// `LIGHTCYCLE_CELLS_PER_SEC` this is over a second and a half of runway, so
+/// landing in an unfamiliar folder leaves time to read the streets and pick a
+/// turn instead of reacting to whatever sits in the next cell.
+pub const LIGHTCYCLE_SPAWN_RUNWAY_CELLS: i32 = 6;
 /// Tower lattice spacing in cells. Each original grid row/column is multiplied
 /// by this stride, leaving plazas and a two-cell development strip between
 /// neighboring filesystem landmarks.
@@ -89,9 +106,9 @@ pub const LIGHTCYCLE_MODEL_ASSET: &str = "models/light_cycle/scene.gltf";
 /// Uniform scale for the cycle model. The source asset is 3.31 units long, so
 /// this renders the cycle just under one grid cell long.
 pub const LIGHTCYCLE_MODEL_SCALE: f32 = 0.72;
-/// The model's nose points down its local -X, while gameplay drives entities
-/// forward along +X.
-pub const LIGHTCYCLE_MODEL_YAW: f32 = std::f32::consts::PI;
+/// The model's nose already points down its local +X, which is also the axis
+/// gameplay rotates onto the direction of travel, so the mesh needs no spin.
+pub const LIGHTCYCLE_MODEL_YAW: f32 = 0.0;
 /// Rendered height of the scaled cycle model.
 pub const LIGHTCYCLE_CYCLE_HEIGHT: f32 = 1.0;
 pub const LIGHTCYCLE_TRAIL_HEIGHT: f32 = 1.85;
@@ -181,6 +198,14 @@ pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 4.0;
 /// Time constant for the chase camera easing onto a new heading, in seconds.
 /// Without this lag a corner looks like the world rotating around a still bike.
 pub const LIGHTCYCLE_CAMERA_TURN_LAG: f32 = 0.28;
+/// Pitch limits for right-drag free look, in radians. The floor keeps the
+/// camera above the arena floor and the ceiling stops short of straight down.
+pub const LIGHTCYCLE_CAMERA_MIN_PITCH: f32 = 0.08;
+pub const LIGHTCYCLE_CAMERA_MAX_PITCH: f32 = 1.45;
+/// Time constant for free look easing back behind the cycle once the right
+/// mouse button is released, in seconds. Slower than the turn lag so letting go
+/// reads as the camera settling rather than snapping.
+pub const LIGHTCYCLE_CAMERA_LOOK_RECENTER: f32 = 0.45;
 
 /// Convert a grid coordinate to a point on the ground plane.
 pub fn ground_position(x: i32, z: i32) -> Vec3 {
