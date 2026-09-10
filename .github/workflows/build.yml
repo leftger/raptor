@@ -1,9 +1,10 @@
-name: Release
+name: CI
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main, feat/bevy-port]
+    tags: ["v*"]
+  pull_request:
   workflow_dispatch:
     inputs:
       create_release:
@@ -13,6 +14,53 @@ on:
         default: false
 
 jobs:
+  quality:
+    name: Format / Clippy / Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+          components: rustfmt, clippy
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libxcb-randr0-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked
+
+  platform-check:
+    name: Check ${{ matrix.os_label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_label: Linux
+          - os: windows-latest
+            os_label: Windows
+          - os: macos-latest
+            os_label: macOS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libxcb-randr0-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
+
   create-release:
     name: Prepare and Get Version
     permissions:
@@ -20,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.get-version.outputs.version }}
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' || startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'workflow_dispatch' && inputs.create_release) || startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +78,7 @@ jobs:
         run: |
           VERSION=""
           if [[ $GITHUB_REF == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v} 
+            VERSION=${GITHUB_REF#refs/tags/v}
           else
             VERSION="0.0.0-manual-$(date +%s)"
           fi
@@ -38,16 +86,13 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create Draft Release
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.get-version.outputs.version }}
-          name: Draft Release v${{ steps.get-version.outputs.version }}
+          name: Release v${{ steps.get-version.outputs.version }}
           body: |
-            ## Draft Release
-
-            Binaries generated via manual run.
-          draft: true
+            Cross-platform RAPTOR packages.
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -55,6 +100,7 @@ jobs:
   build:
     name: Build and Package ${{ matrix.os_label }}
     needs: create-release
+    if: (github.event_name == 'workflow_dispatch' && inputs.create_release) || startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     strategy:
@@ -74,15 +120,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
 
       - name: Install cargo-bundle
-        run: cargo install cargo-bundle
+        run: cargo install cargo-bundle --version 0.11.0 --locked
 
-      - name: Install Linux dependencies (for macroquad)
+      - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev libfontconfig1-dev libxcb-randr0-dev
+          sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libxcb-randr0-dev
 
       - name: Install WiX Toolset (for MSI bundle)
         if: matrix.os == 'windows-latest'
@@ -90,17 +138,12 @@ jobs:
           choco install wix-toolset -y
 
       - name: Bundle and Package
-        run: cargo bundle --release
-
-      - name: Bundle and Package
-        run: cargo bundle --release
+        run: cargo bundle --profile dist
 
       - name: Upload Packages to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.create-release.outputs.version }}
-          files: target/release/bundle/**/*.*
-          draft: false
-        if: startsWith(github.ref, 'refs/tags/v')
+          files: target/dist/bundle/**/*.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

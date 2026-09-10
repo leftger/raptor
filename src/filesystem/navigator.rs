@@ -1,98 +1,82 @@
-use super::{loader, node::FileNode};
-use std::path::PathBuf;
+use super::node::FileNode;
+use std::path::{Path, PathBuf};
 
 pub struct Navigator {
     pub current_path: PathBuf,
     pub entries: Vec<FileNode>,
     pub grid_width: i32,
+    pub entries_truncated: bool,
     pub history: Vec<PathBuf>,
     pub show_hidden: bool,
 }
 
 impl Navigator {
-    pub fn new(initial_path: PathBuf) -> Self {
-        let mut nav = Self {
-            current_path: initial_path.clone(),
+    /// Creates a navigator positioned at `initial_path` without performing a filesystem scan.
+    ///
+    /// The Bevy port intentionally drives loads through the background-loading event
+    /// pipeline so huge directories do not stall startup or the frame loop.
+    pub fn empty(initial_path: PathBuf, show_hidden: bool) -> Self {
+        Self {
+            current_path: initial_path,
             entries: vec![],
             grid_width: 1,
+            entries_truncated: false,
             history: vec![],
-            show_hidden: false,
-        };
-        nav.load(&initial_path);
-        nav
-    }
-
-    pub fn load(&mut self, path: &PathBuf) {
-        self.current_path = path.clone();
-        self.entries.clear();
-
-        if let Ok(contents) = loader::load_directory(path, self.show_hidden) {
-            self.entries = contents.nodes;
-            self.grid_width = contents.grid_width;
+            show_hidden,
         }
     }
 
-    pub fn navigate_to(&mut self, path: &PathBuf) {
+    /// Starts a navigation to `path` without scanning; the caller is responsible for
+    /// emitting a [`crate::load::DirectoryRequested`] for `path`.
+    pub fn begin_navigate_to(&mut self, path: &Path) {
         self.history.push(self.current_path.clone());
-        self.load(path);
+        self.current_path = path.to_path_buf();
     }
 
-    pub fn go_back(&mut self) -> bool {
+    /// Starts a back/history navigation without scanning; returns the path to load if any.
+    pub fn begin_go_back(&mut self) -> Option<PathBuf> {
         if let Some(prev_path) = self.history.pop() {
-            self.load(&prev_path);
-            true
-        } else if let Some(parent) = self.current_path.parent() {
-            self.load(&parent.to_path_buf());
-            true
+            self.current_path = prev_path.clone();
+            Some(prev_path)
+        } else if let Some(parent_path) = self.current_path.parent().map(Path::to_path_buf) {
+            self.current_path = parent_path.clone();
+            Some(parent_path)
         } else {
-            false
+            None
         }
     }
 
-    pub fn go_to_parent(&mut self) -> bool {
-        if let Some(parent) = self.current_path.parent() {
-            self.navigate_to(&parent.to_path_buf());
-            true
+    /// Starts a parent navigation without scanning; returns the path to load if any.
+    pub fn begin_go_to_parent(&mut self) -> Option<PathBuf> {
+        if let Some(parent_path) = self.current_path.parent().map(Path::to_path_buf) {
+            self.history.push(self.current_path.clone());
+            self.current_path = parent_path.clone();
+            Some(parent_path)
         } else {
-            false
+            None
         }
     }
 
-    pub fn go_to_root(&mut self) {
-        self.navigate_to(&PathBuf::from("/"));
+    /// Starts a root navigation without scanning.
+    pub fn begin_go_to_root(&mut self) -> PathBuf {
+        let root = filesystem_root(&self.current_path);
+        self.history.push(self.current_path.clone());
+        self.current_path = root.clone();
+        root
     }
 
-    pub fn go_home(&mut self) {
+    /// Starts a home navigation without scanning; returns the home path to load.
+    pub fn begin_go_home(&mut self) -> PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        self.load(&home);
+        self.current_path = home.clone();
         self.history.clear();
-    }
-
-    pub fn enter_directory(&mut self, index: usize) -> bool {
-        if let Some(node) = self.entries.get(index)
-            && node.is_dir
-        {
-            let path = node.path.clone();
-            self.navigate_to(&path);
-            return true;
-        }
-        false
-    }
-
-    pub fn get_path_components(&self) -> Vec<(String, PathBuf)> {
-        loader::get_path_components(&self.current_path)
+        home
     }
 
     pub fn count_by_type(&self) -> (usize, usize) {
-        loader::count_by_type(&self.entries)
-    }
-
-    pub fn has_parent(&self) -> bool {
-        self.current_path.parent().is_some()
-    }
-
-    pub fn find_node_at_grid_pos(&self, pos: (i32, i32)) -> Option<usize> {
-        self.entries.iter().position(|n| n.grid_pos == pos)
+        let dirs = self.entries.iter().filter(|node| node.is_dir).count();
+        let files = self.entries.len() - dirs;
+        (dirs, files)
     }
 
     pub fn grid_height(&self) -> i32 {
@@ -101,5 +85,84 @@ impl Navigator {
         } else {
             (self.entries.len() as f32 / self.grid_width as f32).ceil() as i32
         }
+    }
+}
+
+pub fn filesystem_root(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find(|ancestor| ancestor.parent().is_none() && !ancestor.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|cwd| cwd.ancestors().last().map(Path::to_path_buf))
+        })
+        .unwrap_or_else(|| PathBuf::from(std::path::MAIN_SEPARATOR.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Navigator, filesystem_root};
+    use std::path::PathBuf;
+
+    #[test]
+    fn begin_navigate_pushes_history_and_sets_path() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a"), false);
+        navigator.begin_navigate_to(&PathBuf::from("/a/b"));
+        assert_eq!(navigator.current_path, PathBuf::from("/a/b"));
+        assert_eq!(navigator.history, vec![PathBuf::from("/a")]);
+    }
+
+    #[test]
+    fn begin_go_back_pops_history() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a"), false);
+        navigator.begin_navigate_to(&PathBuf::from("/a/b"));
+        let path = navigator.begin_go_back().unwrap();
+        assert_eq!(path, PathBuf::from("/a"));
+        assert_eq!(navigator.current_path, PathBuf::from("/a"));
+        assert!(navigator.history.is_empty());
+    }
+
+    #[test]
+    fn go_back_without_history_goes_to_parent() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a/b"), false);
+        let path = navigator.begin_go_back().unwrap();
+        assert_eq!(path, PathBuf::from("/a"));
+        assert_eq!(navigator.current_path, PathBuf::from("/a"));
+    }
+
+    #[test]
+    fn toggle_hidden_is_a_navigator_field_not_a_global() {
+        let mut navigator = Navigator::empty(PathBuf::from("/a"), false);
+        assert!(!navigator.show_hidden);
+        navigator.show_hidden = true;
+        assert!(navigator.show_hidden);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_navigation_uses_the_current_filesystem_root() {
+        let mut navigator = Navigator::empty(PathBuf::from("/tmp/example"), false);
+        assert_eq!(navigator.begin_go_to_root(), PathBuf::from("/"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn root_navigation_preserves_the_current_drive() {
+        let mut navigator = Navigator::empty(PathBuf::from(r"C:\Users\example"), false);
+        assert_eq!(navigator.begin_go_to_root(), PathBuf::from(r"C:\"));
+        assert_eq!(
+            filesystem_root(&PathBuf::from(r"\\server\share\folder")),
+            PathBuf::from(r"\\server\share\")
+        );
+    }
+
+    #[test]
+    fn filesystem_root_is_not_empty_for_relative_paths() {
+        assert!(
+            !filesystem_root(&PathBuf::from("relative/path"))
+                .as_os_str()
+                .is_empty()
+        );
     }
 }

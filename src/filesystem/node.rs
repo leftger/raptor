@@ -6,8 +6,10 @@ pub struct FileNode {
     pub name: String,
     pub path: PathBuf,
     pub is_dir: bool,
+    pub is_symlink: bool,
     pub size: u64,
     pub children_count: usize,
+    pub children_count_capped: bool,
     pub grid_pos: (i32, i32),
 }
 
@@ -23,8 +25,10 @@ impl FileNode {
             name,
             path,
             is_dir,
+            is_symlink: false,
             size,
             children_count,
+            children_count_capped: false,
             grid_pos: (0, 0),
         }
     }
@@ -39,32 +43,82 @@ impl FileNode {
         }
     }
 
-    pub fn world_position(&self) -> macroquad::prelude::Vec3 {
-        let height = self.calculate_height();
-        macroquad::prelude::Vec3::new(
-            self.grid_pos.0 as f32 * config::GRID_SPACING,
-            height / 2.0,
-            self.grid_pos.1 as f32 * config::GRID_SPACING,
-        )
-    }
-
     pub fn display_name(&self, max_length: usize) -> String {
-        if self.name.len() > max_length {
-            format!("{}...", &self.name[..max_length.saturating_sub(3)])
-        } else {
-            self.name.clone()
+        if self.name.len() <= max_length {
+            return self.name.clone();
         }
+
+        let available = max_length.saturating_sub(3);
+        if available == 0 {
+            return self.name.chars().take(max_length).collect();
+        }
+
+        let mut end = available;
+        while end > 0 && !self.name.is_char_boundary(end) {
+            end -= 1;
+        }
+
+        format!("{}...", &self.name[..end])
     }
 
     pub fn size_display(&self) -> String {
         if self.is_dir {
-            format!("{} items", self.children_count)
+            if self.is_symlink {
+                "linked directory".to_string()
+            } else if self.children_count_capped {
+                format!("{}+ items", self.children_count)
+            } else {
+                format!("{} items", self.children_count)
+            }
         } else {
             bytesize::ByteSize(self.size).to_string()
         }
     }
 
     pub fn type_display(&self) -> &'static str {
-        if self.is_dir { "DIR" } else { "FILE" }
+        match (self.is_symlink, self.is_dir) {
+            (true, true) => "SYMLINK DIR",
+            (true, false) => "SYMLINK",
+            (false, true) => "DIR",
+            (false, false) => "FILE",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileNode;
+    use std::path::PathBuf;
+
+    fn node_with_name(name: &str) -> FileNode {
+        FileNode::new(name.to_string(), PathBuf::from(name), false, 0, 0)
+    }
+
+    #[test]
+    fn short_names_are_returned_unchanged() {
+        let node = node_with_name("hello.rs");
+        assert_eq!(node.display_name(12), "hello.rs");
+    }
+
+    #[test]
+    fn long_ascii_names_get_an_ellipsis() {
+        let node = node_with_name("this-name-is-much-too-long.rs");
+        assert_eq!(node.display_name(12), "this-name...");
+    }
+
+    #[test]
+    fn multibyte_names_do_not_panic_or_split_characters() {
+        // Each "é" is 2 bytes, so a byte-only cutoff can land in the middle of a char.
+        let node = node_with_name("éééééééééé");
+        let display = node.display_name(12);
+        assert!(!display.contains('\u{FFFD}'));
+        assert!(display.ends_with("..."));
+        assert!(display.len() <= 12);
+    }
+
+    #[test]
+    fn zero_max_length_does_not_panic() {
+        let node = node_with_name("hello");
+        assert_eq!(node.display_name(0), "");
     }
 }

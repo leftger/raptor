@@ -12,7 +12,7 @@
 
 ## What Is This?
 
-**RAPTOR** is a 3D filesystem navigator built with **Rust + macroquad**, designed to make browsing your folders feel like hacking the mainframe *inside* Jurassic Park.
+**RAPTOR** is a 3D filesystem navigator built with **Rust + Bevy**, designed to make browsing your folders feel like hacking the mainframe *inside* Jurassic Park.
 
 Remember that overly dramatic scene where a kid exclaims
 
@@ -31,9 +31,13 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **3D Blocks** for every file and directory
 * **Orbiting Camera** (right-click drag + scroll zoom)
 * **Navigation**:
-  `h j k l` to move, `o/Enter` to open, `u/-` to go up
+  `h j k l` to move, `o/Enter` to open/enter, `u/-` to go up
+* **Open files** with your system's default application
+* **Reveal in file manager** (`F`, works on macOS, Windows, and Linux)
 * **Automatic Directory Grid Layout**
-*  **Selection, Hover, and Glow Effects**
+* **Clickable breadcrumbs** for jumping back through parent folders
+* **Reload current directory** (`r`)
+* **Selection, Hover, and Glow Effects**
 * **Raycast Block Picking**
 * **Dynamic Block Heights** (file size / children count)
 * **Scanning Intro Line** (because retro sci-fi vibes)
@@ -41,7 +45,8 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Labels Toggle** (Tab)
 * **Interactive UI Panels** with live stats
 * **Smooth camera tweening**
-*  **Cool glowing wireframes because aesthetics**
+* **Cool glowing wireframes because aesthetics**
+* **TRON-style Lightcycle Mode** (press `M` in the 3D view)
 
 ## Navigation
 
@@ -56,7 +61,9 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * `j` → Down
 * `k` → Up
 * `l` → Right
-* `o` or `Enter` → Enter directory
+* `o` or `Enter` → Open directory / open file with default app
+* `r` → Reload current directory
+* `f` → Reveal selected item in file manager
 * `u` or `-` → Go to parent
 * `/` → Go to root
 * `Home` → Go to home directory
@@ -66,12 +73,44 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 
 * Hover → Highlight block
 * Click → Select
-* Double click → Enter directory
+* Click selected block again → Enter directory / open file
+* Click breadcrumb path segment → Jump to that directory
 
 ### **UI**
 * `.`   → Toggle hidden files
 * `Tab` → Toggle labels
 
+## Lightcycle Mode (TRON-style)
+
+Press **`M`** to toggle between the classic explorer and a lightcycle run over
+the same directory grid.
+
+* `A` / `Left`  → Queue a left turn (applied at the next cell boundary)
+* `D` / `Right` → Queue a right turn
+* `R` → Restart the run in the current directory
+* `M` → Back to Explorer
+* `u` / `-` / breadcrumbs → Directory jumps (the run resets when the new folder loads)
+* Folders → Enter them and load the directory
+* Files, your own trail, and the arena walls → Crash
+* Pulsing gate → Go to the parent directory (inactive at `/`)
+
+The gate is a real opening in the wall, framed by two posts and a lintel that
+pulse while light bars sweep up through the gap, so it is easy to spot from
+across the arena.
+
+Every folder's gate is cut into a different wall at a different offset, so you
+have to go looking for it, but it is derived from the folder's path rather than
+drawn at random: the same folder always keeps the same door.
+
+The cycle moves continuously between cell centers; turns are queued and execute
+at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
+while riding, and are restored when you toggle back.
+
+In Lightcycle mode the directory entries are re-laid out as widely spaced
+"downtown" towers with empty streets between them, plus a visible neon street
+grid. Directory towers load the next arena; file towers are solid and crash the
+cycle. The cycle rounds intersections smoothly and leaves a continuous neon
+wall trail behind it, classic TRON style.
 
 ## Why Jurassic Park?
 
@@ -87,9 +126,17 @@ And I thought:
 And boom — **RAPTOR** hatched.
 
 No dinosaurs were harmed in the making of this filesystem explorer.
-(Except maybe your CPU when opening a directory with 30k files.)
+(Except maybe your GPU when opening a directory with 30k files.)
 
 ## Running
+
+For the fastest edit/build cycle, use Bevy's dynamic library:
+
+```bash
+cargo run --features dev
+```
+
+For normal optimized use:
 
 ```bash
 cargo run --release
@@ -97,12 +144,45 @@ cargo run --release
 
 RAPTOR will open in all its neon glory.
 
+Distribution builds keep the slower size-focused LTO settings:
+
+```bash
+cargo build --profile dist
+```
+
+### Command-line options
+
+```bash
+# Start in a specific directory
+cargo run --release -- /path/to/folder
+
+# Show hidden files, hide labels, and hide the FPS counter
+cargo run --release -- --hidden --no-labels --no-fps
+
+# See all options
+cargo run --release -- --help
+```
+
 ## Dependencies
 
-RAPTOR is built using **macroquad**, a Rust game framework that works on Linux, macOS and Windows with minimal setup.
+RAPTOR is built using **Bevy 0.19**, a modern Rust game engine that works on Linux, macOS and Windows.
 
-Macroquad repo (installation notes & troubleshooting):
-https://github.com/not-fl3/macroquad
+Bevy repo (installation notes & troubleshooting):
+https://github.com/bevyengine/bevy
+
+The filesystem, CLI, and OS-integration modules remain plain Rust so they can be unit-tested without a GPU.
+
+Directory scans run in the background. RAPTOR displays at most 30,000 entries from one
+directory and caps eager child counts at 500 to keep unusually large trees responsive.
+Capped counts are marked with `+`. Symbolic links are shown and can be opened, but linked
+directories are not traversed just to calculate block height.
+
+## Credits
+
+The lightcycle model in `assets/models/light_cycle` is
+["Light Cycle - Tron (1982)"](https://sketchfab.com/3d-models/light-cycle-tron-1982-54fedda920094ef09d87a17d42b282af)
+by [arabinowitz](https://sketchfab.com/arabinowitz), used under the
+[Sketchfab Standard license](https://sketchfab.com/licenses).
 
 ## Future Ideas (aka InGen Phase 2)
 

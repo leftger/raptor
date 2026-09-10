@@ -1,0 +1,1344 @@
+use crate::config;
+use crate::filesystem::FileNode;
+use crate::lightcycle::logic::{
+    Arena, CrashReason, GatePlacement, Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome,
+    Wall, classify_next_content,
+};
+use crate::lightcycle::{ActiveRun, LightcycleState};
+use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
+use crate::state::{
+    DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
+    OrbitCameraResource, TrailSceneRoot,
+};
+use bevy::prelude::*;
+use std::collections::HashMap;
+use std::path::Path;
+
+pub struct LightcyclePlugin;
+
+impl Plugin for LightcyclePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<InteractionMode>()
+            .init_resource::<LightcycleState>()
+            .add_systems(Startup, setup_lightcycle_assets)
+            .add_systems(
+                Update,
+                (
+                    toggle_mode,
+                    reset_on_directory_loaded,
+                    apply_load_failure,
+                    sync_directory_scene_visibility,
+                    read_lightcycle_input.run_if(in_lightcycle_mode),
+                    step_lightcycle.run_if(in_lightcycle_mode),
+                    spawn_crash_effect.run_if(in_lightcycle_mode),
+                    update_crash_effects.run_if(in_lightcycle_mode),
+                    rebuild_trail_mesh.run_if(in_lightcycle_mode),
+                    animate_parent_gate.run_if(in_lightcycle_mode),
+                    update_cycle_transform.run_if(in_lightcycle_mode),
+                    update_chase_camera.run_if(in_lightcycle_mode),
+                )
+                    .chain()
+                    .after(crate::plugins::filesystem::apply_loaded),
+            );
+    }
+}
+
+#[derive(Resource)]
+struct LightcycleAssets {
+    unit_cube: Handle<Mesh>,
+    cycle_scene: Handle<WorldAsset>,
+    trail_material: Handle<StandardMaterial>,
+    wall_material: Handle<StandardMaterial>,
+    portal_material: Handle<StandardMaterial>,
+    portal_bar_material: Handle<StandardMaterial>,
+    dir_tower_material: Handle<StandardMaterial>,
+    file_tower_material: Handle<StandardMaterial>,
+    street_grid_material: Handle<StandardMaterial>,
+    crash_material: Handle<StandardMaterial>,
+}
+
+#[derive(Component)]
+struct CycleEntity;
+
+/// Small mesh burst emitted at the crash point.
+#[derive(Component)]
+struct CrashDebris {
+    velocity: Vec3,
+    life: f32,
+    max_life: f32,
+    initial_scale: f32,
+}
+
+/// A post or lintel of the parent gate.
+#[derive(Component)]
+struct GateFrame;
+
+/// A light bar sweeping up through the parent gate's opening.
+#[derive(Component)]
+struct GateScanBar {
+    /// Position in the sweep at startup, so the bars are evenly spaced.
+    offset: f32,
+    /// Height of the opening the bar travels up before wrapping.
+    travel: f32,
+}
+
+/// Direction the chase camera is currently following.
+///
+/// This trails the cycle's own heading so a corner reads as the cycle swinging
+/// across the frame. Locking the camera to the cycle instead makes the world
+/// appear to rotate around a stationary bike. It lives on the cycle so each run
+/// starts from the spawn heading.
+#[derive(Component)]
+struct ChaseCamera {
+    forward: Vec3,
+}
+
+fn unlit_material(color: Color) -> StandardMaterial {
+    StandardMaterial {
+        base_color: color,
+        unlit: true,
+        ..default()
+    }
+}
+
+fn setup_lightcycle_assets(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    commands.insert_resource(LightcycleAssets {
+        unit_cube: meshes.add(Cuboid::default()),
+        cycle_scene: asset_server
+            .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
+        trail_material: materials.add(unlit_material(config::LIGHTCYCLE_TRAIL_COLOR)),
+        wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
+        portal_material: materials.add(unlit_material(config::LIGHTCYCLE_PORTAL_COLOR)),
+        portal_bar_material: materials.add(StandardMaterial {
+            base_color: config::LIGHTCYCLE_PORTAL_COLOR
+                .with_alpha(config::LIGHTCYCLE_PORTAL_BAR_ALPHA),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
+        dir_tower_material: materials.add(unlit_material(config::DIR_COLOR)),
+        file_tower_material: materials.add(unlit_material(config::FILE_COLOR)),
+        street_grid_material: materials.add(StandardMaterial {
+            base_color: config::GRID_COLOR.with_alpha(0.3),
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
+        crash_material: materials.add(unlit_material(Color::srgb(1.0, 0.45, 0.1))),
+    });
+}
+
+fn in_lightcycle_mode(mode: Res<InteractionMode>) -> bool {
+    *mode == InteractionMode::Lightcycle
+}
+
+fn sync_directory_scene_visibility(
+    mode: Res<InteractionMode>,
+    mut directory_scene: Query<&mut Visibility, With<DirectorySceneRoot>>,
+) {
+    let visible = *mode == InteractionMode::Explorer;
+    for mut visibility in &mut directory_scene {
+        *visibility = if visible {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+fn tower_position(grid_pos: (i32, i32)) -> (i32, i32) {
+    (
+        grid_pos.0 * config::LIGHTCYCLE_TOWER_STRIDE,
+        grid_pos.1 * config::LIGHTCYCLE_TOWER_STRIDE,
+    )
+}
+
+fn build_active_run(path: &Path, nodes: Vec<FileNode>) -> ActiveRun {
+    let parent_gate = path
+        .parent()
+        .is_some()
+        .then(|| GatePlacement::for_path(path, config::LIGHTCYCLE_PORTAL_WIDTH_CELLS));
+    let arena = Arena::from_nodes(
+        nodes.iter().map(|node| tower_position(node.grid_pos)),
+        parent_gate,
+        config::LIGHTCYCLE_ARENA_PADDING,
+        config::LIGHTCYCLE_EMPTY_ARENA_HALF,
+    );
+
+    let cells: HashMap<_, _> = nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (tower_position(node.grid_pos), index))
+        .collect();
+
+    let sim = spawn_sim(&arena, &cells);
+
+    ActiveRun {
+        sim,
+        arena,
+        nodes,
+        cells,
+        crash_label: None,
+        entering_label: None,
+        trail_dirty: false,
+    }
+}
+
+fn spawn_sim(arena: &Arena, cells: &HashMap<(i32, i32), usize>) -> LightcycleSim {
+    let Some(spawn) = arena.nearest_empty_cell(
+        |cell| cells.contains_key(&cell),
+        config::LIGHTCYCLE_SPAWN_SEARCH_RADIUS,
+    ) else {
+        return LightcycleSim::ready(arena.center(), Heading::PosX);
+    };
+
+    let heading = Heading::initial_heading(spawn, |cell| {
+        arena.contains(cell) && !cells.contains_key(&cell)
+    });
+
+    match heading {
+        Some(heading) => LightcycleSim::start(spawn, heading),
+        None => LightcycleSim::ready(spawn, Heading::PosX),
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn toggle_mode(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut mode: ResMut<InteractionMode>,
+    mut state: ResMut<LightcycleState>,
+    navigator: Res<NavigatorResource>,
+    mut orbit: ResMut<OrbitCameraResource>,
+    assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+    old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
+) {
+    if !keys.just_pressed(KeyCode::KeyM) {
+        return;
+    }
+
+    despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
+    state.clock = 0.0;
+    state.run = None;
+    state.crash_fx = None;
+
+    if *mode == InteractionMode::Lightcycle {
+        *mode = InteractionMode::Explorer;
+        orbit.reset_target();
+        return;
+    }
+
+    let run = build_active_run(&navigator.0.current_path, navigator.0.entries.clone());
+    spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+    state.run = Some(run);
+    *mode = InteractionMode::Lightcycle;
+}
+
+#[allow(clippy::type_complexity)]
+fn despawn_lightcycle_entities(
+    commands: &mut Commands,
+    old_lightcycle_entities: &Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
+) {
+    for entity in old_lightcycle_entities {
+        commands.entity(entity).despawn();
+    }
+}
+
+fn spawn_run_entities(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    run: &ActiveRun,
+) {
+    let pose = cycle_cell_pose(&run.sim);
+    commands.spawn((
+        LightcycleSceneRoot,
+        CycleEntity,
+        Transform::from_translation(pose_world_position(&pose)).with_rotation(pose_rotation(&pose)),
+        Visibility::default(),
+        ChaseCamera {
+            forward: pose_forward(&pose),
+        },
+        Pickable::IGNORE,
+        children![(
+            WorldAssetRoot(assets.cycle_scene.clone()),
+            Transform::from_rotation(Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW))
+                .with_scale(Vec3::splat(config::LIGHTCYCLE_MODEL_SCALE)),
+        )],
+    ));
+
+    spawn_arena_walls(commands, assets, &run.arena);
+    spawn_towers(commands, assets, meshes, run);
+    spawn_street_grid(commands, assets, meshes, &run.arena);
+}
+
+fn spawn_towers(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    run: &ActiveRun,
+) {
+    for is_dir in [true, false] {
+        let material = if is_dir {
+            assets.dir_tower_material.clone()
+        } else {
+            assets.file_tower_material.clone()
+        };
+        let matching: Vec<&FileNode> = run
+            .nodes
+            .iter()
+            .filter(|node| node.is_dir == is_dir)
+            .collect();
+
+        for chunk in matching.chunks(config::MESH_CHUNK_SIZE) {
+            let Some(mesh) = build_tower_chunk_mesh(chunk) else {
+                continue;
+            };
+            commands.spawn((
+                LightcycleSceneRoot,
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(material.clone()),
+                Pickable::IGNORE,
+            ));
+        }
+    }
+}
+
+fn build_tower_chunk_mesh(nodes: &[&FileNode]) -> Option<Mesh> {
+    let mut nodes = nodes.iter();
+    let first = tower_cube_mesh(nodes.next()?);
+    let mut mesh = first;
+    for node in nodes {
+        mesh.merge(&tower_cube_mesh(node))
+            .expect("tower cuboid meshes must be merge-compatible");
+    }
+    Some(mesh)
+}
+
+fn tower_cube_mesh(node: &FileNode) -> Mesh {
+    let (x, z) = tower_position(node.grid_pos);
+    let height = node.calculate_height();
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(config::world_position(x, z, height)).with_scale(Vec3::new(
+            config::LIGHTCYCLE_TOWER_SIZE,
+            height,
+            config::LIGHTCYCLE_TOWER_SIZE,
+        )),
+    )
+}
+
+fn spawn_street_grid(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+) {
+    if let Some(mesh) = build_street_grid_mesh(arena) {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.street_grid_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn build_street_grid_mesh(arena: &Arena) -> Option<Mesh> {
+    let spacing = config::GRID_SPACING;
+    let line_width = 0.05;
+    let min_x = (arena.min.0 as f32 - 0.5) * spacing;
+    let max_x = (arena.max.0 as f32 + 0.5) * spacing;
+    let min_z = (arena.min.1 as f32 - 0.5) * spacing;
+    let max_z = (arena.max.1 as f32 + 0.5) * spacing;
+    let mid_x = (min_x + max_x) * 0.5;
+    let mid_z = (min_z + max_z) * 0.5;
+    let width = max_x - min_x;
+    let depth = max_z - min_z;
+
+    let mut merged: Option<Mesh> = None;
+    let mut push = |mesh: Mesh| {
+        if let Some(existing) = &mut merged {
+            existing
+                .merge(&mesh)
+                .expect("street grid meshes must be merge-compatible");
+        } else {
+            merged = Some(mesh);
+        }
+    };
+
+    for x in arena.min.0..=arena.max.0 {
+        let center = Vec3::new(x as f32 * spacing, 0.01, mid_z);
+        push(street_grid_line_mesh(
+            center,
+            Vec3::new(line_width, 0.02, depth),
+        ));
+    }
+    for z in arena.min.1..=arena.max.1 {
+        let center = Vec3::new(mid_x, 0.01, z as f32 * spacing);
+        push(street_grid_line_mesh(
+            center,
+            Vec3::new(width, 0.02, line_width),
+        ));
+    }
+
+    merged
+}
+
+fn street_grid_line_mesh(center: Vec3, scale: Vec3) -> Mesh {
+    Mesh::from(Cuboid::default())
+        .transformed_by(Transform::from_translation(center).with_scale(scale))
+}
+
+/// World-space plane each wall rail sits in, half a cell outside the playable area.
+fn wall_plane(arena: &Arena, wall: Wall) -> f32 {
+    let spacing = config::GRID_SPACING;
+    match wall {
+        Wall::NegX => (arena.min.0 as f32 - 0.5) * spacing,
+        Wall::PosX => (arena.max.0 as f32 + 0.5) * spacing,
+        Wall::NegZ => (arena.min.1 as f32 - 0.5) * spacing,
+        Wall::PosZ => (arena.max.1 as f32 + 0.5) * spacing,
+    }
+}
+
+/// World-space extent of a wall along its own axis, corner to corner.
+fn wall_extent(arena: &Arena, wall: Wall) -> (f32, f32) {
+    match wall {
+        Wall::NegZ | Wall::PosZ => (wall_plane(arena, Wall::NegX), wall_plane(arena, Wall::PosX)),
+        Wall::NegX | Wall::PosX => (wall_plane(arena, Wall::NegZ), wall_plane(arena, Wall::PosZ)),
+    }
+}
+
+/// Splits a rail's extent around an optional gap, dropping segments too short to
+/// be worth drawing.
+fn rail_segments(min: f32, max: f32, gap: Option<(f32, f32)>) -> Vec<(f32, f32)> {
+    let Some((gap_min, gap_max)) = gap else {
+        return vec![(min, max)];
+    };
+
+    [(min, gap_min.min(max)), (gap_max.max(min), max)]
+        .into_iter()
+        .filter(|(start, end)| end - start > 0.01)
+        .collect()
+}
+
+fn spawn_arena_walls(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena) {
+    for wall in [Wall::NegX, Wall::PosX, Wall::NegZ, Wall::PosZ] {
+        spawn_wall_rail(commands, assets, arena, wall);
+    }
+
+    spawn_parent_gate(commands, assets, arena);
+}
+
+/// Draws one arena wall, leaving a real opening where the parent gate cuts
+/// through it so the gate can be ridden through rather than looked at.
+fn spawn_wall_rail(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena, wall: Wall) {
+    let height = config::LIGHTCYCLE_WALL_HEIGHT;
+    let thickness = config::LIGHTCYCLE_WALL_THICKNESS;
+    let plane = wall_plane(arena, wall);
+    let (min, max) = wall_extent(arena, wall);
+
+    let gap = arena
+        .parent_portal
+        .filter(|portal| portal.wall == wall)
+        .map(|portal| gate_world_span(&portal));
+
+    for (start, end) in rail_segments(min, max, gap) {
+        let center = (start + end) * 0.5;
+        let length = end - start;
+        let (translation, scale) = match wall {
+            Wall::NegZ | Wall::PosZ => (
+                Vec3::new(center, height * 0.5, plane),
+                Vec3::new(length, height, thickness),
+            ),
+            Wall::NegX | Wall::PosX => (
+                Vec3::new(plane, height * 0.5, center),
+                Vec3::new(thickness, height, length),
+            ),
+        };
+
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.wall_material.clone()),
+            Transform::from_translation(translation).with_scale(scale),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// World-space extent of the gate along its wall, covering exactly the cells the
+/// simulation accepts.
+fn gate_world_span(portal: &ParentPortal) -> (f32, f32) {
+    let spacing = config::GRID_SPACING;
+    let (from, _) = portal.along_span();
+    let start = (from as f32 - 0.5) * spacing;
+    (start, start + portal.width_cells() as f32 * spacing)
+}
+
+/// Builds the animated parent gate: two posts, a lintel, and light bars that
+/// sweep up through the opening.
+///
+/// Everything is parented to a root whose rotation puts the wall's axis on local
+/// +X, so the pieces below are laid out once instead of per wall.
+fn spawn_parent_gate(commands: &mut Commands, assets: &LightcycleAssets, arena: &Arena) {
+    let Some(portal) = arena.parent_portal else {
+        return;
+    };
+
+    let height = config::LIGHTCYCLE_PORTAL_HEIGHT;
+    let frame = config::LIGHTCYCLE_PORTAL_FRAME_THICKNESS;
+    let depth = config::LIGHTCYCLE_WALL_THICKNESS * 3.0;
+    let (span_min, span_max) = gate_world_span(&portal);
+    let opening = span_max - span_min;
+    let center = (span_min + span_max) * 0.5;
+    let plane = wall_plane(arena, portal.wall);
+
+    let (translation, rotation) = match portal.wall {
+        Wall::NegZ | Wall::PosZ => (Vec3::new(center, 0.0, plane), Quat::IDENTITY),
+        Wall::NegX | Wall::PosX => (
+            Vec3::new(plane, 0.0, center),
+            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+        ),
+    };
+
+    let half = opening * 0.5;
+    let mut gate = commands.spawn((
+        LightcycleSceneRoot,
+        Transform::from_translation(translation).with_rotation(rotation),
+        Visibility::default(),
+    ));
+
+    gate.with_children(|frames| {
+        let mut piece = |translation: Vec3, scale: Vec3| {
+            frames.spawn((
+                GateFrame,
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.portal_material.clone()),
+                Transform::from_translation(translation).with_scale(scale),
+                Pickable::IGNORE,
+            ));
+        };
+
+        // Posts on the cell boundaries the gate starts and ends at.
+        piece(
+            Vec3::new(-half, height * 0.5, 0.0),
+            Vec3::new(frame, height, depth),
+        );
+        piece(
+            Vec3::new(half, height * 0.5, 0.0),
+            Vec3::new(frame, height, depth),
+        );
+        // Lintel spanning them.
+        piece(
+            Vec3::new(0.0, height, 0.0),
+            Vec3::new(opening + frame, frame, depth),
+        );
+
+        let bars = config::LIGHTCYCLE_PORTAL_BAR_COUNT;
+        for index in 0..bars {
+            frames.spawn((
+                GateScanBar {
+                    offset: index as f32 / bars as f32,
+                    travel: height,
+                },
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.portal_bar_material.clone()),
+                Transform::from_scale(Vec3::new(
+                    opening - frame,
+                    config::LIGHTCYCLE_PORTAL_BAR_HEIGHT,
+                    depth * 0.5,
+                )),
+                Pickable::IGNORE,
+            ));
+        }
+    });
+}
+
+/// Brightness of the gate frame at `elapsed`, from 0 at the pulse's trough to 1
+/// at its peak.
+fn gate_pulse(elapsed: f32) -> f32 {
+    0.5 + 0.5 * (elapsed * config::LIGHTCYCLE_PORTAL_PULSE_SPEED).sin()
+}
+
+/// Height a bar has swept to within its opening, wrapping back to the ground
+/// once it reaches the lintel.
+fn gate_bar_height(bar: &GateScanBar, elapsed: f32) -> f32 {
+    (bar.offset + elapsed * config::LIGHTCYCLE_PORTAL_BAR_SPEED).fract() * bar.travel
+}
+
+/// Pulses the gate frame and sweeps its light bars upward, so a gate reads as
+/// live and is easy to pick out from the surrounding wall.
+fn animate_parent_gate(
+    time: Res<Time>,
+    assets: Res<LightcycleAssets>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut bars: Query<(&GateScanBar, &mut Transform)>,
+) {
+    let elapsed = time.elapsed_secs();
+
+    if let Some(mut material) = materials.get_mut(&assets.portal_material) {
+        material.base_color = config::LIGHTCYCLE_PORTAL_DIM_COLOR
+            .mix(&config::LIGHTCYCLE_PORTAL_COLOR, gate_pulse(elapsed));
+    }
+
+    for (bar, mut transform) in &mut bars {
+        transform.translation.y = gate_bar_height(bar, elapsed);
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn reset_on_directory_loaded(
+    mut loaded: MessageReader<DirectoryLoaded>,
+    mode: Res<InteractionMode>,
+    mut state: ResMut<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+    old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
+) {
+    if *mode != InteractionMode::Lightcycle {
+        return;
+    }
+
+    for event in loaded.read() {
+        despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
+
+        let run = build_active_run(&event.path, event.contents.nodes.clone());
+        spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+
+        state.clock = 0.0;
+        state.crash_fx = None;
+        state.run = Some(run);
+    }
+}
+
+fn apply_load_failure(
+    mut failed: MessageReader<DirectoryLoadFailed>,
+    mut state: ResMut<LightcycleState>,
+) {
+    if failed.read().next().is_none() {
+        return;
+    }
+
+    // Keep the cycle stopped at the folder/portal; DirectoryLoadState shows the error.
+    if let Some(run) = state.run.as_mut()
+        && run.sim.phase == RunPhase::EnteringDir
+    {
+        run.sim.pending_request = None;
+        run.entering_label = None;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_lightcycle_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut state: ResMut<LightcycleState>,
+    mut navigator: ResMut<NavigatorResource>,
+    mut requests: MessageWriter<DirectoryRequested>,
+) {
+    let left = keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::ArrowLeft);
+    let right = keys.just_pressed(KeyCode::KeyD) || keys.just_pressed(KeyCode::ArrowRight);
+    let restart = keys.just_pressed(KeyCode::KeyR);
+    let go_up = keys.just_pressed(KeyCode::KeyU) || keys.just_pressed(KeyCode::Minus);
+
+    let Some(mut run) = state.run.take() else {
+        return;
+    };
+
+    if run.sim.phase == RunPhase::Running && (left || right) {
+        run.sim.queue_turn_input(left, right);
+    }
+
+    if restart {
+        restart_run(&mut run);
+        state.clock = 0.0;
+        state.crash_fx = None;
+    }
+
+    if go_up && let Some(parent) = navigator.0.begin_go_to_parent() {
+        run.sim.pause_for_directory_change();
+        run.entering_label = Some("parent directory".to_string());
+        run.crash_label = None;
+        requests.write(DirectoryRequested { path: parent });
+    }
+
+    state.run = Some(run);
+}
+
+fn restart_run(run: &mut ActiveRun) {
+    run.sim = spawn_sim(&run.arena, &run.cells);
+    run.crash_label = None;
+    run.entering_label = None;
+    run.trail_dirty = true;
+}
+
+fn step_lightcycle(
+    time: Res<Time>,
+    mut state: ResMut<LightcycleState>,
+    mut navigator: ResMut<NavigatorResource>,
+    mut requests: MessageWriter<DirectoryRequested>,
+) {
+    let Some(mut run) = state.run.take() else {
+        return;
+    };
+
+    if run.sim.phase != RunPhase::Running {
+        state.run = Some(run);
+        return;
+    }
+
+    state.clock += time.delta_secs();
+    let max_catch_up = config::LIGHTCYCLE_FIXED_STEP * config::LIGHTCYCLE_MAX_SUBSTEPS as f32;
+    if state.clock > max_catch_up {
+        state.clock = max_catch_up;
+    }
+
+    let fixed_step = config::LIGHTCYCLE_FIXED_STEP;
+    let mut substeps = 0;
+
+    while state.clock >= fixed_step && substeps < config::LIGHTCYCLE_MAX_SUBSTEPS {
+        state.clock -= fixed_step;
+        substeps += 1;
+
+        let trail_before = run.sim.trail.len();
+        let outcome = {
+            let arena = run.arena.clone();
+            let cells = &run.cells;
+            let nodes = &run.nodes;
+
+            run.sim.advance(
+                fixed_step * config::LIGHTCYCLE_CELLS_PER_SEC,
+                |next, sim| {
+                    classify_next_content(next, &arena, sim, cells, |index| nodes[index].is_dir)
+                },
+            )
+        };
+
+        if run.sim.trail.len() != trail_before {
+            run.trail_dirty = true;
+        }
+
+        match outcome {
+            StepOutcome::Moved => {}
+            StepOutcome::Crashed(reason) => {
+                let crash_cell = run.sim.next_cell();
+                let label = match reason {
+                    CrashReason::File => run
+                        .cells
+                        .get(&crash_cell)
+                        .and_then(|&index| run.nodes.get(index))
+                        .map(|node| format!("file {}", node.name))
+                        .unwrap_or_else(|| "file".to_string()),
+                    CrashReason::Trail => "your trail".to_string(),
+                    CrashReason::Wall => "arena wall".to_string(),
+                };
+                run.crash_label = Some(label);
+                run.entering_label = None;
+            }
+            StepOutcome::EnteringDir(index) => {
+                if let Some(node) = run.nodes.get(index) {
+                    let path = node.path.clone();
+                    navigator.0.begin_navigate_to(&path);
+                    run.entering_label = Some(node.name.clone());
+                    run.crash_label = None;
+                    requests.write(DirectoryRequested { path });
+                } else {
+                    run.sim.phase = RunPhase::Crashed;
+                    run.crash_label = Some("missing directory".to_string());
+                }
+            }
+            StepOutcome::GoToParent => {
+                if let Some(parent) = navigator.0.begin_go_to_parent() {
+                    run.entering_label = Some("parent directory".to_string());
+                    run.crash_label = None;
+                    requests.write(DirectoryRequested { path: parent });
+                } else {
+                    run.sim.phase = RunPhase::Crashed;
+                    run.crash_label = Some("arena wall".to_string());
+                }
+            }
+        }
+
+        if run.sim.phase == RunPhase::Crashed && state.crash_fx.is_none() {
+            state.crash_fx = Some(crate::lightcycle::CrashFx::new(
+                config::LIGHTCYCLE_CRASH_FX_DURATION,
+            ));
+        }
+
+        if run.sim.phase != RunPhase::Running {
+            break;
+        }
+    }
+
+    state.run = Some(run);
+}
+
+fn spawn_crash_effect(
+    mut state: ResMut<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut commands: Commands,
+) {
+    let Some(fx) = state.crash_fx.as_mut() else {
+        return;
+    };
+    if fx.spawned {
+        return;
+    }
+    fx.spawned = true;
+
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+    let origin = cycle_world_position(&run.sim) + Vec3::Y * config::LIGHTCYCLE_CYCLE_HEIGHT * 0.5;
+    let count = 18;
+
+    for index in 0..count {
+        let angle = index as f32 / count as f32 * std::f32::consts::TAU;
+        let speed = 5.0 + (index % 5) as f32 * 1.3;
+        let horizontal = Vec3::new(angle.cos(), 0.0, angle.sin());
+        let velocity = horizontal * speed + Vec3::Y * (4.0 + (index % 4) as f32 * 1.1);
+        let initial_scale = 0.18 + (index % 4) as f32 * 0.05;
+        let life = 0.55 + (index % 3) as f32 * 0.1;
+
+        commands.spawn((
+            LightcycleSceneRoot,
+            CrashDebris {
+                velocity,
+                life,
+                max_life: life,
+                initial_scale,
+            },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(if index % 3 == 0 {
+                assets.trail_material.clone()
+            } else {
+                assets.crash_material.clone()
+            }),
+            Transform::from_translation(origin)
+                .with_rotation(Quat::from_rotation_y(angle))
+                .with_scale(Vec3::splat(initial_scale)),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn update_crash_effects(
+    time: Res<Time>,
+    mut state: ResMut<LightcycleState>,
+    mut commands: Commands,
+    mut debris: Query<(Entity, &mut Transform, &mut CrashDebris)>,
+) {
+    let delta = time.delta_secs();
+    let gravity = -18.0;
+
+    for (entity, mut transform, mut piece) in &mut debris {
+        piece.life -= delta;
+        piece.velocity.y += gravity * delta;
+        transform.translation += piece.velocity * delta;
+
+        let life_ratio = (piece.life / piece.max_life).max(0.0);
+        let scale = piece.initial_scale * life_ratio + 0.02;
+        transform.scale = Vec3::splat(scale);
+
+        if piece.life <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    if let Some(fx) = state.crash_fx.as_mut() {
+        fx.timer -= delta;
+        if fx.timer <= 0.0 {
+            state.crash_fx = None;
+        }
+    }
+}
+
+fn rebuild_trail_mesh(
+    mut state: ResMut<LightcycleState>,
+    mut commands: Commands,
+    assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    old_trail: Query<Entity, With<TrailSceneRoot>>,
+) {
+    let Some(run) = state.run.as_mut() else {
+        return;
+    };
+    if !run.trail_dirty {
+        return;
+    }
+    run.trail_dirty = false;
+
+    for entity in &old_trail {
+        commands.entity(entity).despawn();
+    }
+
+    // Build a continuous wall ribbon through every cell the cycle has occupied,
+    // ending at the current head so the wall visibly trails behind the cycle.
+    // Corners are rounded with the same radius used by the rendered cycle path.
+    let mut path = run.sim.trail.clone();
+    path.push(run.sim.cell);
+
+    let segments = trail_ribbon_segments(&path);
+    for chunk in segments.chunks(config::MESH_CHUNK_SIZE) {
+        let Some(mesh) = build_trail_chunk_mesh(chunk) else {
+            continue;
+        };
+        commands.spawn((
+            TrailSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(assets.trail_material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn trail_ribbon_segments(path: &[(i32, i32)]) -> Vec<((f32, f32), (f32, f32))> {
+    let points = rounded_polyline(path);
+    points
+        .windows(2)
+        .filter_map(|pair| match pair {
+            [a, b] => {
+                let dx = b.0 - a.0;
+                let dz = b.1 - a.1;
+                (dx * dx + dz * dz > 0.0001).then_some((*a, *b))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn rounded_polyline(path: &[(i32, i32)]) -> Vec<(f32, f32)> {
+    let radius = config::LIGHTCYCLE_TURN_RADIUS;
+    let mut points = vec![cell_to_point(path[0])];
+
+    for index in 1..path.len().saturating_sub(1) {
+        let previous = path[index - 1];
+        let corner = path[index];
+        let next = path[index + 1];
+
+        if is_path_turn(previous, corner, next) {
+            let incoming = (corner.0 - previous.0, corner.1 - previous.1);
+            let outgoing = (next.0 - corner.0, next.1 - corner.1);
+            let arc_start = offset_cell_point(corner, incoming, -radius);
+            points.push(arc_start);
+
+            let samples = 6;
+            for step in 1..=samples {
+                let u = step as f32 / samples as f32;
+                points.push(arc_cell_pose(corner, incoming, outgoing, u, radius).position);
+            }
+        } else {
+            points.push(cell_to_point(corner));
+        }
+    }
+
+    if let Some(last) = path.last() {
+        points.push(cell_to_point(*last));
+    }
+    points
+}
+
+fn is_path_turn(a: (i32, i32), b: (i32, i32), c: (i32, i32)) -> bool {
+    let incoming = (b.0 - a.0, b.1 - a.1);
+    let outgoing = (c.0 - b.0, c.1 - b.1);
+    incoming.0 * outgoing.0 + incoming.1 * outgoing.1 == 0
+}
+
+fn cell_to_point(cell: (i32, i32)) -> (f32, f32) {
+    (cell.0 as f32, cell.1 as f32)
+}
+
+fn offset_cell_point(cell: (i32, i32), direction: (i32, i32), distance: f32) -> (f32, f32) {
+    (
+        cell.0 as f32 + direction.0 as f32 * distance,
+        cell.1 as f32 + direction.1 as f32 * distance,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn build_trail_chunk_mesh(segments: &[((f32, f32), (f32, f32))]) -> Option<Mesh> {
+    let first = *segments.first()?;
+    let mut mesh = trail_segment_mesh(first.0, first.1);
+    for &(a, b) in &segments[1..] {
+        mesh.merge(&trail_segment_mesh(a, b))
+            .expect("trail ribbon meshes must be merge-compatible");
+    }
+    Some(mesh)
+}
+
+fn trail_segment_mesh(a: (f32, f32), b: (f32, f32)) -> Mesh {
+    let spacing = config::GRID_SPACING;
+    let height = config::LIGHTCYCLE_TRAIL_HEIGHT;
+    let thickness = config::LIGHTCYCLE_TRAIL_THICKNESS;
+
+    let a_world = Vec3::new(a.0 * spacing, 0.0, a.1 * spacing);
+    let b_world = Vec3::new(b.0 * spacing, 0.0, b.1 * spacing);
+    let delta = b_world - a_world;
+    let length = delta.length();
+
+    let center = Vec3::new(
+        (a_world.x + b_world.x) * 0.5,
+        height * 0.5,
+        (a_world.z + b_world.z) * 0.5,
+    );
+    let rotation = Quat::from_rotation_arc(Vec3::X, delta.normalize_or_zero());
+
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(center)
+            .with_rotation(rotation)
+            .with_scale(Vec3::new(length, height, thickness)),
+    )
+}
+
+/// Continuous render pose for the cycle, in cell coordinates.
+struct CyclePose {
+    position: (f32, f32),
+    /// Unit travel direction; the cycle's nose points along it.
+    direction: Vec2,
+    /// Bank angle about the travel direction, in radians. Zero outside corners.
+    lean: f32,
+}
+
+/// Ground-level world position of the pose; the model's wheels sit at its origin.
+fn pose_world_position(pose: &CyclePose) -> Vec3 {
+    Vec3::new(
+        pose.position.0 * config::GRID_SPACING,
+        0.0,
+        pose.position.1 * config::GRID_SPACING,
+    )
+}
+
+fn pose_forward(pose: &CyclePose) -> Vec3 {
+    Vec3::new(pose.direction.x, 0.0, pose.direction.y)
+}
+
+/// Yaw along the travel direction, then bank into the corner. The bank rotates
+/// about the cycle's own +X, which is its direction of travel, so it leaves the
+/// forward vector untouched.
+fn pose_rotation(pose: &CyclePose) -> Quat {
+    let yaw = match pose_forward(pose).try_normalize() {
+        Some(forward) => Quat::from_rotation_arc(Vec3::X, forward),
+        None => Quat::IDENTITY,
+    };
+    yaw * Quat::from_rotation_x(pose.lean)
+}
+
+fn cycle_world_position(sim: &LightcycleSim) -> Vec3 {
+    pose_world_position(&cycle_cell_pose(sim))
+}
+
+/// Continuous cell-space pose for the rendered cycle.
+///
+/// Straight segments use the raw simulation position and heading. Near
+/// queued/applied turns the pose follows a rounded 90-degree arc around the
+/// intersection, taking its facing from the arc's tangent, so the cycle steers
+/// through the corner instead of sliding around it and rotating afterwards.
+fn cycle_cell_pose(sim: &LightcycleSim) -> CyclePose {
+    if let Some(pose) = cornering_pose(sim) {
+        return pose;
+    }
+
+    let (dx, dz) = sim.heading.delta();
+    CyclePose {
+        position: (
+            sim.cell.0 as f32 + dx as f32 * sim.cell_t,
+            sim.cell.1 as f32 + dz as f32 * sim.cell_t,
+        ),
+        direction: Vec2::new(dx as f32, dz as f32),
+        lean: 0.0,
+    }
+}
+
+fn cornering_pose(sim: &LightcycleSim) -> Option<CyclePose> {
+    let radius = config::LIGHTCYCLE_TURN_RADIUS;
+
+    // Approaching a queued turn: the first half of the arc happens just before
+    // the cycle reaches the intersection cell.
+    if let Some(turn) = sim.queued_turn
+        && sim.cell_t >= 1.0 - radius
+    {
+        let incoming = sim.heading.delta();
+        let outgoing = sim.heading.turn(turn).delta();
+        let u = ((sim.cell_t - (1.0 - radius)) / radius) * 0.5;
+        return Some(arc_cell_pose(
+            sim.next_cell(),
+            incoming,
+            outgoing,
+            u,
+            radius,
+        ));
+    }
+
+    // Just applied a turn: render the second half of the arc after leaving the
+    // intersection cell. The previous trail cell tells us the incoming heading.
+    if sim.queued_turn.is_none()
+        && sim.cell_t <= radius
+        && let Some(&previous) = sim.trail.last()
+    {
+        let incoming = (sim.cell.0 - previous.0, sim.cell.1 - previous.1);
+        let outgoing = sim.heading.delta();
+        let is_turn = incoming.0 * outgoing.0 + incoming.1 * outgoing.1 == 0;
+        if is_turn {
+            let u = 0.5 + (sim.cell_t / radius) * 0.5;
+            return Some(arc_cell_pose(sim.cell, incoming, outgoing, u, radius));
+        }
+    }
+
+    None
+}
+
+/// Samples the rounded corner centered on `corner` at `u`, where 0 is the arc
+/// entry (`radius` before the corner, travelling along `incoming`) and 1 is the
+/// exit (`radius` past it, travelling along `outgoing`).
+fn arc_cell_pose(
+    corner: (i32, i32),
+    incoming: (i32, i32),
+    outgoing: (i32, i32),
+    u: f32,
+    radius: f32,
+) -> CyclePose {
+    let center_x = corner.0 as f32 - incoming.0 as f32 * radius + outgoing.0 as f32 * radius;
+    let center_z = corner.1 as f32 - incoming.1 as f32 * radius + outgoing.1 as f32 * radius;
+
+    let start_angle = (-outgoing.1 as f32).atan2(-outgoing.0 as f32);
+    let end_angle = (incoming.1 as f32).atan2(incoming.0 as f32);
+
+    let mut sweep = end_angle - start_angle;
+    if sweep > std::f32::consts::PI {
+        sweep -= std::f32::consts::TAU;
+    } else if sweep < -std::f32::consts::PI {
+        sweep += std::f32::consts::TAU;
+    }
+
+    // Positive sweep curves toward the cycle's right, which is also the
+    // direction it should bank.
+    let u = u.clamp(0.0, 1.0);
+    let theta = start_angle + sweep * u;
+    let turn_sign = sweep.signum();
+
+    CyclePose {
+        position: (
+            center_x + radius * theta.cos(),
+            center_z + radius * theta.sin(),
+        ),
+        direction: Vec2::new(-theta.sin(), theta.cos()) * turn_sign,
+        // Peaks mid-corner and returns upright by the exit.
+        lean: turn_sign * config::LIGHTCYCLE_LEAN_ANGLE * (std::f32::consts::PI * u).sin(),
+    }
+}
+
+fn update_cycle_transform(
+    state: Res<LightcycleState>,
+    mut cycle: Query<&mut Transform, With<CycleEntity>>,
+) {
+    let Ok(mut transform) = cycle.single_mut() else {
+        return;
+    };
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+
+    let pose = cycle_cell_pose(&run.sim);
+    transform.translation = pose_world_position(&pose);
+    transform.rotation = pose_rotation(&pose);
+}
+
+/// Eases the camera's follow direction toward `target` with a frame-rate
+/// independent time constant.
+fn advance_chase_forward(current: Vec3, target: Vec3, delta: f32) -> Vec3 {
+    let blend = 1.0 - (-delta / config::LIGHTCYCLE_CAMERA_TURN_LAG).exp();
+    current
+        .lerp(target, blend.clamp(0.0, 1.0))
+        .try_normalize()
+        .unwrap_or(target)
+}
+
+fn update_chase_camera(
+    state: Res<LightcycleState>,
+    time: Res<Time>,
+    mut camera: Single<&mut Transform, (With<Camera3d>, Without<CycleEntity>)>,
+    mut cycle: Query<(&Transform, &mut ChaseCamera), Without<Camera3d>>,
+) {
+    let Ok((cycle, mut chase)) = cycle.single_mut() else {
+        return;
+    };
+    if state.run.is_none() {
+        return;
+    }
+
+    let travel = cycle.rotation * Vec3::X;
+    chase.forward = advance_chase_forward(
+        chase.forward,
+        Vec3::new(travel.x, 0.0, travel.z),
+        time.delta_secs(),
+    );
+
+    let cycle_pos = cycle.translation;
+    let forward = chase.forward;
+    let look_target = cycle_pos + forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
+    let mut camera_position = cycle_pos - forward * config::LIGHTCYCLE_CAMERA_DISTANCE
+        + Vec3::Y * config::LIGHTCYCLE_CAMERA_HEIGHT;
+
+    if let Some(fx) = state.crash_fx.as_ref() {
+        let intensity = (fx.timer / fx.duration).clamp(0.0, 1.0);
+        let t = time.elapsed_secs();
+        let shake =
+            Vec3::new((t * 83.0).sin(), (t * 97.0).sin(), (t * 71.0).sin()) * (intensity * 0.9);
+        camera_position += shake;
+    }
+
+    camera.translation = camera_position;
+    camera.look_at(look_target, Vec3::Y);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GateScanBar, arc_cell_pose, cycle_cell_pose, gate_bar_height, gate_pulse, pose_rotation,
+        rail_segments,
+    };
+    use crate::config;
+    use crate::lightcycle::logic::{Heading, LightcycleSim, Turn};
+    use bevy::prelude::{Vec2, Vec3};
+
+    const RADIUS: f32 = config::LIGHTCYCLE_TURN_RADIUS;
+
+    /// A right turn at cell (1, 0): entering along +X, leaving along +Z.
+    fn right_corner(u: f32) -> super::CyclePose {
+        arc_cell_pose((1, 0), (1, 0), (0, 1), u, RADIUS)
+    }
+
+    #[test]
+    fn corner_arc_runs_from_the_incoming_heading_to_the_outgoing_one() {
+        let entry = right_corner(0.0);
+        let exit = right_corner(1.0);
+
+        assert!((entry.direction - Vec2::new(1.0, 0.0)).length() < 1e-5);
+        assert!((exit.direction - Vec2::new(0.0, 1.0)).length() < 1e-5);
+
+        // The arc starts `RADIUS` short of the corner and ends `RADIUS` past it.
+        assert!((entry.position.0 - (1.0 - RADIUS)).abs() < 1e-5);
+        assert!(entry.position.1.abs() < 1e-5);
+        assert!((exit.position.0 - 1.0).abs() < 1e-5);
+        assert!((exit.position.1 - RADIUS).abs() < 1e-5);
+
+        // Upright at both ends so straight segments join without a pop.
+        assert!(entry.lean.abs() < 1e-5);
+        assert!(exit.lean.abs() < 1e-5);
+    }
+
+    #[test]
+    fn corner_pose_is_continuous_across_the_cell_boundary() {
+        let mut before = LightcycleSim::start((0, 0), Heading::PosX);
+        before.queue_turn(Turn::Right);
+        before.cell_t = 1.0;
+
+        // The simulation applies the turn at the boundary and starts the next cell.
+        let mut after = LightcycleSim::start((1, 0), Heading::PosZ);
+        after.trail.push((0, 0));
+
+        let before = cycle_cell_pose(&before);
+        let after = cycle_cell_pose(&after);
+
+        assert!((before.position.0 - after.position.0).abs() < 1e-5);
+        assert!((before.position.1 - after.position.1).abs() < 1e-5);
+        assert!((before.direction - after.direction).length() < 1e-5);
+        assert!((before.lean - after.lean).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_wall_without_a_gate_is_one_unbroken_rail() {
+        assert_eq!(rail_segments(-5.0, 5.0, None), vec![(-5.0, 5.0)]);
+    }
+
+    #[test]
+    fn a_gate_splits_its_wall_into_the_rails_on_either_side() {
+        assert_eq!(
+            rail_segments(-5.0, 5.0, Some((-1.0, 2.0))),
+            vec![(-5.0, -1.0), (2.0, 5.0)]
+        );
+    }
+
+    #[test]
+    fn a_gate_at_a_wall_corner_drops_the_empty_side() {
+        assert_eq!(
+            rail_segments(-5.0, 5.0, Some((-5.0, -2.0))),
+            vec![(-2.0, 5.0)]
+        );
+        assert_eq!(
+            rail_segments(-5.0, 5.0, Some((2.0, 5.0))),
+            vec![(-5.0, 2.0)]
+        );
+    }
+
+    #[test]
+    fn a_gate_spanning_the_whole_wall_leaves_no_rail() {
+        assert!(rail_segments(-5.0, 5.0, Some((-5.0, 5.0))).is_empty());
+    }
+
+    #[test]
+    fn gate_frame_pulses_between_its_trough_and_peak() {
+        let samples: Vec<_> = (0..64).map(|step| gate_pulse(step as f32 * 0.05)).collect();
+
+        assert!(samples.iter().all(|value| (0.0..=1.0).contains(value)));
+        assert!(samples.iter().any(|value| *value > 0.9), "never brightens");
+        assert!(samples.iter().any(|value| *value < 0.1), "never dims");
+    }
+
+    #[test]
+    fn gate_bars_sweep_up_the_opening_and_wrap_at_the_lintel() {
+        let travel = config::LIGHTCYCLE_PORTAL_HEIGHT;
+        let bar = GateScanBar {
+            offset: 0.0,
+            travel,
+        };
+
+        // Long enough to cover more than one full sweep of the opening.
+        let steps = (2.5 / config::LIGHTCYCLE_PORTAL_BAR_SPEED / 0.05) as usize;
+        let heights: Vec<_> = (0..steps)
+            .map(|step| gate_bar_height(&bar, step as f32 * 0.05))
+            .collect();
+
+        assert!(heights.iter().all(|height| (0.0..=travel).contains(height)));
+        assert!(heights[1] > heights[0], "bars should rise, not fall");
+        assert!(
+            heights.windows(2).any(|pair| pair[1] < pair[0]),
+            "bars should wrap back to the ground"
+        );
+    }
+
+    #[test]
+    fn gate_bars_stay_evenly_spaced_up_the_opening() {
+        let travel = config::LIGHTCYCLE_PORTAL_HEIGHT;
+        let count = config::LIGHTCYCLE_PORTAL_BAR_COUNT;
+        let bars: Vec<_> = (0..count)
+            .map(|index| GateScanBar {
+                offset: index as f32 / count as f32,
+                travel,
+            })
+            .collect();
+
+        let mut heights: Vec<_> = bars.iter().map(|bar| gate_bar_height(bar, 0.37)).collect();
+        heights.sort_by(f32::total_cmp);
+
+        let expected = travel / count as f32;
+        for pair in heights.windows(2) {
+            assert!((pair[1] - pair[0] - expected).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn cycle_banks_toward_the_inside_of_the_corner() {
+        let right_up = pose_rotation(&right_corner(0.5)) * Vec3::Y;
+        let left_up = pose_rotation(&arc_cell_pose((1, 0), (1, 0), (0, -1), 0.5, RADIUS)) * Vec3::Y;
+
+        assert!(right_up.z > 0.1, "a right turn should bank toward +Z");
+        assert!(left_up.z < -0.1, "a left turn should bank toward -Z");
+    }
+}
