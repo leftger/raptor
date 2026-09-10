@@ -41,6 +41,8 @@ pub struct MusicState {
     params: String,
     /// Last payload sent, so an idle listener does not re-send every frame.
     last_params: String,
+    /// Time accumulated toward the next parameter publish.
+    param_clock: f32,
 }
 
 impl MusicState {
@@ -61,6 +63,7 @@ impl MusicState {
             nodes: Vec::new(),
             params: String::new(),
             last_params: String::new(),
+            param_clock: 0.0,
         }
     }
 }
@@ -203,6 +206,7 @@ fn update_proximity(
         nodes,
         params,
         last_params,
+        param_clock,
         ..
     } = &mut *music;
     let Some(theme) = theme.as_ref() else {
@@ -212,9 +216,18 @@ fn update_proximity(
     let dt = time.delta_secs();
     let targets = mixer.update(listener, nodes, theme, *profile, dt);
 
-    // The evolving melody plus a slow filter sweep on the base voices.
+    // The evolving melody plus a slow filter sweep on the base voices. The
+    // mixer and arp advance every frame, but the payload is only published at a
+    // fixed rate so a fast frame loop cannot starve the audio thread.
     let arp_voice = arp.update(dt, theme, *profile);
     let sweep = 0.5 + 0.5 * (time.elapsed_secs() * profile.sweep_rate() * TAU).sin();
+
+    let publish_interval = 1.0 / config::MUSIC_PARAMS_HZ.max(1.0);
+    *param_clock += dt;
+    if *param_clock < publish_interval {
+        return;
+    }
+    *param_clock = (*param_clock % publish_interval).min(publish_interval);
 
     params.clear();
     for target in targets {

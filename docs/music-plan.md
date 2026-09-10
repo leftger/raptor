@@ -97,13 +97,19 @@ DirectoryLoaded.nodes -> proximity(listener, profile) -----+
 ```
 
 - **Control/audio separation.** A dedicated thread owns `Engine` and renders
-  continuously into a lock-free ring buffer; the cpal callback only drains that
-  ring. This sidesteps any `Engine: !Send` concern and keeps the realtime
-  callback away from the graph. Parameters flow to the audio thread through a
-  second SPSC ring of small numeric snapshots.
+  blocks into a bounded channel that the cpal callback drains. This sidesteps
+  any `Engine: !Send` concern and keeps the realtime callback away from the
+  graph.
+- **Feeding the device without underruns.** The control side publishes voice
+  parameters into a *coalescing mailbox* (only the newest payload), not a queue,
+  and only at `MUSIC_PARAMS_HZ`; the render thread applies at most one update per
+  block. Graph changes are rare commands. The sample channel is a few blocks
+  deep and is prebuffered before the stream starts. This keeps a fast (or
+  uncapped) frame loop from flooding the audio thread, which was the cause of
+  `buffer underrun or overrun` errors.
 - **Struct changes are rare.** The base graph recompiles only on
-  directory/theme/mode change, behind a master-gain fade. Everything continuous
-  uses `send_msg`.
+  directory/theme/mode change, and the audio thread equal-power crossfades to
+  the new graph. Everything continuous uses `send_msg`.
 - **Device-absent is graceful.** If cpal finds no output device, log a
   `UiNotice` and continue silently rather than failing.
 

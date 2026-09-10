@@ -254,6 +254,10 @@ pub const MUSIC_ACTION_PUMP_RATE: f32 = 2.0;
 /// enough to read as a blend, short enough to feel responsive while browsing.
 pub const MUSIC_CROSSFADE_SECONDS: f32 = 0.7;
 
+/// How often voice parameters are published to the audio thread, in Hz. The
+/// payload is coalesced, so a faster frame loop cannot backlog the audio thread.
+pub const MUSIC_PARAMS_HZ: f32 = 60.0;
+
 /// Arpeggiator. `BEATS` is step length in beats, so tempo drives the rate:
 /// Explorer gets one soft note per beat, Lightcycle eighths. `TAU` is the
 /// per-note decay time constant, and `GAIN` the per-note peak.

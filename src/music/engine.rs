@@ -24,8 +24,13 @@ use std::time::Duration;
 pub const BLOCK_SIZE: usize = 256;
 
 /// Rendered interleaved blocks buffered ahead of the device callback. Larger is
-/// more robust against scheduling jitter but adds latency.
-const SAMPLE_QUEUE_BLOCKS: usize = 12;
+/// more robust against scheduling jitter but adds latency. At 256 samples this
+/// is roughly a fifth of a second of headroom.
+const SAMPLE_QUEUE_BLOCKS: usize = 32;
+
+/// Silent blocks pushed into the queue before the stream starts, so the first
+/// device callbacks always have data.
+const PREBUFFER_BLOCKS: usize = 8;
 
 /// How long the render thread waits while the output queue is full before
 /// assuming the device stalled.
@@ -39,13 +44,13 @@ const GAIN_SMOOTHING: f32 = 0.05;
 /// of a second at 256 samples / 44.1 kHz.
 const ACCENT_DECAY: f32 = 0.86;
 
-/// Messages from the Bevy control side to the audio thread.
+/// Rare control messages. Per-frame voice parameters do **not** go through this
+/// channel: they use a coalescing mailbox so a fast frame loop cannot flood the
+/// audio thread.
 #[derive(Debug, Clone)]
 enum EngineCommand {
     /// Replace the graph and tempo. Used on directory and profile changes.
     SetCode { code: String, bpm: f32 },
-    /// A `send_msg` payload updating per-voice parameters.
-    Params(String),
     /// Open the shared accent chain briefly.
     Accent { cutoff: f32, gain: f32 },
 }
@@ -75,6 +80,9 @@ impl AudioStatus {
 #[derive(Clone)]
 pub struct AudioHandle {
     commands: Option<Sender<EngineCommand>>,
+    /// Coalescing mailbox for per-frame voice parameters: only the newest
+    /// payload is kept, so a fast frame loop can never backlog the audio thread.
+    params: Arc<Mutex<Option<String>>>,
     master_gain: Arc<AtomicU32>,
     enabled: Arc<AtomicBool>,
     status: Arc<Mutex<AudioStatus>>,
@@ -97,10 +105,12 @@ impl AudioHandle {
 
         let (commands_tx, commands_rx) = unbounded::<EngineCommand>();
         let (samples_tx, samples_rx) = bounded::<Vec<f32>>(SAMPLE_QUEUE_BLOCKS);
+        let params = Arc::new(Mutex::new(None::<String>));
 
         let gain = master_gain.clone();
         let enabled_flag = enabled.clone();
         let thread_status = status.clone();
+        let thread_params = params.clone();
         let spawned = thread::Builder::new()
             .name("raptor-music".to_string())
             .spawn(move || {
@@ -108,6 +118,7 @@ impl AudioHandle {
                     commands_rx,
                     samples_tx,
                     samples_rx,
+                    thread_params,
                     gain,
                     enabled_flag,
                     thread_status,
@@ -121,6 +132,7 @@ impl AudioHandle {
 
         Self {
             commands: Some(commands_tx),
+            params,
             master_gain,
             enabled,
             status,
@@ -141,11 +153,11 @@ impl AudioHandle {
         }
     }
 
-    /// Sends a prebuilt `send_msg` payload to update voice parameters.
+    /// Publishes the latest voice-parameter payload. Replaces any unpublished
+    /// payload, so the audio thread always applies one coalesced update per
+    /// block no matter how fast frames are produced.
     pub fn set_voice_params(&self, message: &str) {
-        if let Some(commands) = &self.commands {
-            let _ = commands.send(EngineCommand::Params(message.to_string()));
-        }
+        store_latest(&self.params, message);
     }
 
     /// Triggers a short accent hit on the shared accent chain.
@@ -165,11 +177,26 @@ impl AudioHandle {
     }
 }
 
+/// Stores the newest parameter payload, reusing the existing allocation. Only
+/// the latest value matters, so older unpublished payloads are simply replaced.
+fn store_latest(slot: &Mutex<Option<String>>, message: &str) {
+    if let Ok(mut slot) = slot.lock() {
+        match slot.as_mut() {
+            Some(existing) => {
+                existing.clear();
+                existing.push_str(message);
+            }
+            None => *slot = Some(message.to_string()),
+        }
+    }
+}
+
 /// Owns the Glicol engine and the cpal stream for the lifetime of the app.
 fn audio_thread(
     commands: Receiver<EngineCommand>,
     samples_tx: Sender<Vec<f32>>,
     samples_rx: Receiver<Vec<f32>>,
+    params: Arc<Mutex<Option<String>>>,
     master_gain: Arc<AtomicU32>,
     enabled: Arc<AtomicBool>,
     status: Arc<Mutex<AudioStatus>>,
@@ -234,6 +261,11 @@ fn audio_thread(
         }
     };
 
+    // Cushion the first device callbacks so startup cannot underrun.
+    for _ in 0..PREBUFFER_BLOCKS {
+        let _ = samples_tx.try_send(vec![0.0_f32; BLOCK_SIZE * channels as usize]);
+    }
+
     if let Err(error) = stream.play() {
         *status.lock().expect("audio status mutex") =
             AudioStatus::unavailable(format!("could not start output stream: {error}"));
@@ -261,6 +293,8 @@ fn audio_thread(
     // Accent one-shots decay on the audio thread.
     let mut accent_gain = 0.0_f32;
     let mut accent_cutoff = 1800.0_f32;
+    // Reused scratch for the crossfade's incoming graph.
+    let mut incoming_block = vec![0.0_f32; BLOCK_SIZE * channels as usize];
 
     loop {
         while let Ok(command) = commands.try_recv() {
@@ -271,21 +305,22 @@ fn audio_thread(
                         crossfade_age = 0;
                     }
                 }
-                EngineCommand::Params(message) => {
-                    engine.send_msg(&message);
-                    if let Some(next) = incoming.as_mut() {
-                        next.send_msg(&message);
-                    }
-                    if last_params != message {
-                        last_params.clear();
-                        last_params.push_str(&message);
-                    }
-                }
                 EngineCommand::Accent { cutoff, gain } => {
                     accent_cutoff = cutoff;
                     accent_gain = gain;
                 }
             }
+        }
+
+        // Apply at most one parameter update per block. The mailbox holds only
+        // the newest payload, so frame rate cannot backlog this thread.
+        let latest = params.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(message) = latest {
+            engine.send_msg(&message);
+            if let Some(next) = incoming.as_mut() {
+                next.send_msg(&message);
+            }
+            last_params = message;
         }
 
         if accent_gain > 0.0005 {
@@ -319,7 +354,6 @@ fn audio_thread(
                 *sample *= fade_out;
             }
 
-            let mut incoming_block = vec![0.0_f32; interleaved.len()];
             {
                 let block = next.next_block(Vec::new());
                 write_interleaved(
@@ -329,8 +363,8 @@ fn audio_thread(
                     &mut incoming_block,
                 );
             }
-            for (sample, add) in interleaved.iter_mut().zip(incoming_block) {
-                *sample += add;
+            for (sample, add) in interleaved.iter_mut().zip(incoming_block.iter()) {
+                *sample += *add;
             }
 
             crossfade_age += 1;
@@ -486,6 +520,19 @@ mod tests {
         let mut mono = vec![0.0; BLOCK_SIZE];
         write_interleaved(&block, 1, 1.0, &mut mono);
         assert_eq!(mono[0], 0.75);
+    }
+
+    #[test]
+    fn voice_params_coalesce_to_the_newest_payload() {
+        let slot = Mutex::new(None::<String>);
+        store_latest(&slot, "first");
+        store_latest(&slot, "second");
+        let slot = slot.lock().expect("params mutex");
+        assert_eq!(
+            slot.as_deref(),
+            Some("second"),
+            "the mailbox must keep only the newest payload"
+        );
     }
 
     #[test]
