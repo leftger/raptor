@@ -11,6 +11,7 @@
 //! output device exists the handle simply reports why and the rest of the app
 //! runs silently.
 
+use super::score::accent_message;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -34,10 +35,9 @@ const SEND_TIMEOUT: Duration = Duration::from_millis(500);
 /// samples / 44.1 kHz).
 const GAIN_SMOOTHING: f32 = 0.05;
 
-/// Blocks the graph fades down for before a swap, and the faster coefficient
-/// used during that fade (~185 ms at 256 samples / 44.1 kHz).
-const FADE_BLOCKS: u32 = 32;
-const FADE_COEFFICIENT: f32 = 0.12;
+/// Per-block decay of an accent one-shot; reaches near silence in about a third
+/// of a second at 256 samples / 44.1 kHz.
+const ACCENT_DECAY: f32 = 0.86;
 
 /// Messages from the Bevy control side to the audio thread.
 #[derive(Debug, Clone)]
@@ -46,6 +46,8 @@ enum EngineCommand {
     SetCode { code: String, bpm: f32 },
     /// A `send_msg` payload updating per-voice parameters.
     Params(String),
+    /// Open the shared accent chain briefly.
+    Accent { cutoff: f32, gain: f32 },
 }
 
 /// What the audio thread is doing, for UI and diagnostics.
@@ -146,6 +148,13 @@ impl AudioHandle {
         }
     }
 
+    /// Triggers a short accent hit on the shared accent chain.
+    pub fn accent(&self, cutoff: f32, gain: f32) {
+        if let Some(commands) = &self.commands {
+            let _ = commands.send(EngineCommand::Accent { cutoff, gain });
+        }
+    }
+
     pub fn set_volume(&self, volume: f32) {
         let volume = volume.clamp(0.0, 1.0);
         self.master_gain.store(volume.to_bits(), Ordering::Relaxed);
@@ -239,31 +248,53 @@ fn audio_thread(
     };
 
     let mut smoothed_gain = 0.0_f32;
-    // A graph swap is faded out, applied, then faded back in so recompiling the
-    // Glicol AST never clicks.
-    let mut pending_code: Option<(String, f32)> = None;
-    let mut pending_age: u32 = 0;
+    // A room or profile change compiles a second graph and equal-power
+    // crossfades to it, so the swap blends instead of dipping to silence.
+    let crossfade_blocks = ((crate::config::MUSIC_CROSSFADE_SECONDS * sample_rate as f32)
+        / BLOCK_SIZE as f32)
+        .round()
+        .max(1.0) as u32;
+    let mut incoming: Option<glicol::Engine<BLOCK_SIZE>> = None;
+    let mut crossfade_age: u32 = 0;
+    let mut last_params = String::new();
+
+    // Accent one-shots decay on the audio thread.
+    let mut accent_gain = 0.0_f32;
+    let mut accent_cutoff = 1800.0_f32;
+
     loop {
         while let Ok(command) = commands.try_recv() {
             match command {
                 EngineCommand::SetCode { code, bpm } => {
-                    pending_code = Some((code, bpm));
-                    pending_age = 0;
+                    if let Some(next) = compile_engine(&code, bpm, sample_rate, &last_params) {
+                        incoming = Some(next);
+                        crossfade_age = 0;
+                    }
                 }
-                EngineCommand::Params(message) => engine.send_msg(&message),
+                EngineCommand::Params(message) => {
+                    engine.send_msg(&message);
+                    if let Some(next) = incoming.as_mut() {
+                        next.send_msg(&message);
+                    }
+                    if last_params != message {
+                        last_params.clear();
+                        last_params.push_str(&message);
+                    }
+                }
+                EngineCommand::Accent { cutoff, gain } => {
+                    accent_cutoff = cutoff;
+                    accent_gain = gain;
+                }
             }
         }
 
-        if pending_code.is_some() {
-            pending_age += 1;
-            if pending_age >= FADE_BLOCKS
-                && let Some((code, bpm)) = pending_code.take()
-            {
-                engine.set_bpm(bpm);
-                if let Err(error) = engine.update_with_code(&code) {
-                    eprintln!("raptor music: could not compile graph: {error:?}");
-                }
+        if accent_gain > 0.0005 {
+            let message = accent_message(accent_cutoff, accent_gain);
+            engine.send_msg(&message);
+            if let Some(next) = incoming.as_mut() {
+                next.send_msg(&message);
             }
+            accent_gain *= ACCENT_DECAY;
         }
 
         let target_gain = if enabled.load(Ordering::Relaxed) {
@@ -271,21 +302,70 @@ fn audio_thread(
         } else {
             0.0
         };
-        let coefficient = if pending_code.is_some() {
-            FADE_COEFFICIENT
-        } else {
-            GAIN_SMOOTHING
-        };
-        smoothed_gain += (target_gain - smoothed_gain) * coefficient;
+        smoothed_gain += (target_gain - smoothed_gain) * GAIN_SMOOTHING;
 
-        let block = engine.next_block(Vec::new());
         let mut interleaved = vec![0.0_f32; BLOCK_SIZE * channels as usize];
-        write_interleaved(block, channels as usize, smoothed_gain, &mut interleaved);
+        {
+            let block = engine.next_block(Vec::new());
+            write_interleaved(block, channels as usize, smoothed_gain, &mut interleaved);
+        }
+
+        let mut promote = false;
+        if let Some(next) = incoming.as_mut() {
+            let progress = (crossfade_age as f32 / crossfade_blocks as f32).clamp(0.0, 1.0);
+            let (fade_in, fade_out) = (progress * std::f32::consts::FRAC_PI_2).sin_cos();
+
+            for sample in interleaved.iter_mut() {
+                *sample *= fade_out;
+            }
+
+            let mut incoming_block = vec![0.0_f32; interleaved.len()];
+            {
+                let block = next.next_block(Vec::new());
+                write_interleaved(
+                    block,
+                    channels as usize,
+                    smoothed_gain * fade_in,
+                    &mut incoming_block,
+                );
+            }
+            for (sample, add) in interleaved.iter_mut().zip(incoming_block) {
+                *sample += add;
+            }
+
+            crossfade_age += 1;
+            promote = crossfade_age >= crossfade_blocks;
+        }
+        if promote && let Some(done) = incoming.take() {
+            engine = done;
+            crossfade_age = 0;
+        }
 
         if samples_tx.send_timeout(interleaved, SEND_TIMEOUT).is_err() {
             break;
         }
     }
+}
+
+/// Builds a Glicol graph for a code string, applying the last known voice
+/// parameters so a freshly promoted graph is immediately in tune.
+fn compile_engine(
+    code: &str,
+    bpm: f32,
+    sample_rate: u32,
+    params: &str,
+) -> Option<glicol::Engine<BLOCK_SIZE>> {
+    let mut engine = glicol::Engine::<BLOCK_SIZE>::new();
+    engine.set_sr(sample_rate as usize);
+    engine.set_bpm(bpm);
+    if let Err(error) = engine.update_with_code(code) {
+        eprintln!("raptor music: could not compile graph: {error:?}");
+        return None;
+    }
+    if !params.is_empty() {
+        engine.send_msg(params);
+    }
+    Some(engine)
 }
 
 /// Picks a stereo/mono f32 output configuration, preferring 48 kHz.

@@ -1,6 +1,6 @@
 # RAPTOR — Procedural, proximity-reactive music plan
 
-Status: M0–M6 implemented, M7 pending
+Status: M0–M7 implemented
 Owner: —
 Last updated: 2026-09-10
 
@@ -213,7 +213,7 @@ the alternative if a git dependency is ever undesirable.
 
 ## 8. Milestones
 
-Status: M0–M6 implemented; M7 pending.
+Status: M0–M7 implemented.
 
 1. **M0 — Audio spike (no Bevy wiring).** DONE. Glicol renders stereo blocks and
    the graph compiles for both profiles.
@@ -221,27 +221,39 @@ Status: M0–M6 implemented; M7 pending.
    unit tests covering determinism, profile selection, falloff, hysteresis, and
    Glicol compilation.
 3. **M2 — Engine plumbing.** DONE. Dedicated audio thread owns `Engine` + the cpal
-   stream, drains commands, fades graph swaps, and reports a graceful
+   stream, drains commands, crossfades graph swaps, and reports a graceful
    no-device status.
 4. **M3 — Path-seeded base track.** DONE. `DirectoryLoaded` rebuilds the theme and
-   entry list; the audio thread fades the swap. (Audio-verified as far as this
-   headless machine allows; needs a listen on real hardware.)
+   entry list; the audio thread crossfades the swap. (Audio-verified as far as
+   this headless machine allows; needs a listen on real hardware.)
 5. **M4 — Explorer proximity (Calm).** DONE. `orbit.target` drives voice gains,
    pan, and cutoff through the smoothed mixer.
 6. **M5 — Lightcycle proximity (Action).** DONE. The listener follows
    `run.sim.cell`, and `InteractionMode` changes rebuild the action profile.
 7. **M6 — UX.** DONE. Default-on, `N` toggle, `[`/`]` volume, status line, CLI
    flags, README.
-8. **M7 — Polish.** PENDING. Action flourishes (speed -> filter/arp rate, turn
-   accents), crash/entry/portal one-shots, per-frame allocation and perf guards.
+8. **M7 — Polish.** DONE.
+   - **Smoothed room transitions.** A room or profile change compiles a second
+     graph and equal-power crossfades to it over
+     `MUSIC_CROSSFADE_SECONDS` (0.7 s), so changing folders blends instead of
+     dipping to silence. The outgoing graph is promoted/dropped when the fade
+     completes; rapid changes replace the incoming graph rather than stacking.
+   - **Action flourish.** Action's bass and lead run through a tempo-synced
+     `~pump` tremolo (`MUSIC_ACTION_PUMP_DEPTH` / `RATE`), so Lightcycle drives.
+   - **One-shot accents.** A shared `~accent` noise chain, silent until opened,
+     gets crash / transport / turn / portal hits via [`MusicAccent`], decayed on
+     the audio thread.
+   - **Perf guards.** The control side reuses one parameter buffer and skips
+     re-sending unchanged payloads.
 
 ## 9. Risks and mitigations
 
 - **`Engine` thread-safety / `next_block` channel mapping** — resolved in M0
   before any Bevy wiring.
 - **Realtime allocation in `send_msg` / `update_with_code`** — send param
-  snapshots from the control thread; recompile only during a master-gain fade;
-  accept small allocs for v1, revisit if audible.
+  snapshots from the control thread; recompile (incoming graph) off the audible
+  path during a crossfade; accept small allocs for v1, revisit if audible.
+- **Crossfade cost** — two engines render only for the ~0.7 s transition.
 - **Proximity thrash / zipper noise** — high/low-water hysteresis + one-pole
   smoothing.
 - **Proximity cost on huge folders (30k entries)** — evaluate at 30 Hz with cheap

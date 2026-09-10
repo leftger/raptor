@@ -16,7 +16,7 @@ use crate::load::DirectoryLoaded;
 use crate::music::engine::AudioHandle;
 use crate::music::proximity::{Listener, NodePoint};
 use crate::music::score::voice_message;
-use crate::music::{ModeProfile, MusicTheme, VoiceMixer, full_code};
+use crate::music::{ModeProfile, MusicAccent, MusicTheme, VoiceMixer, full_code};
 use crate::state::{InteractionMode, OrbitCameraResource};
 use bevy::prelude::*;
 use std::fmt::Write as _;
@@ -64,10 +64,11 @@ impl MusicState {
 impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
         // `MusicState` is inserted by `main` so the CLI options can seed it.
-        app.add_systems(
+        app.add_message::<MusicAccent>().add_systems(
             Update,
             (
                 report_audio_status,
+                play_accents,
                 sync_profile_with_mode,
                 rebuild_for_directory,
                 update_proximity,
@@ -76,6 +77,14 @@ impl Plugin for MusicPlugin {
             )
                 .chain(),
         );
+    }
+}
+
+/// Plays the one-shot gameplay accents (crash, transport, turn, portal).
+fn play_accents(mut accents: MessageReader<MusicAccent>, music: Res<MusicState>) {
+    for accent in accents.read() {
+        let (gain, cutoff) = accent.voice();
+        music.handle.accent(cutoff, gain);
     }
 }
 

@@ -43,10 +43,19 @@ pub fn base_refs(profile: ModeProfile) -> &'static [&'static str] {
     }
 }
 
-/// Definitions for the profile's base voices (no output chain).
+/// Definitions for the profile's base voices and the shared accent chain.
 pub fn base_voices(theme: &MusicTheme, profile: ModeProfile) -> String {
     let wave = theme.family.waveform();
     let mut code = String::new();
+
+    // Shared, silent until an accent opens it. Node layout: 0 noise, 1 low-pass
+    // (param 0 cutoff), 2 gain, 3 pan. See [`accent_message`]. Glicol's `noise`
+    // node takes an integer seed, not a float.
+    let _ = writeln!(
+        code,
+        "~accent: noise 1 >> lpf 1800.0 0.7 >> mul 0.0 >> pan 0.0;"
+    );
+
     match profile {
         ModeProfile::Calm => {
             let root = theme.root_hz();
@@ -67,15 +76,23 @@ pub fn base_voices(theme: &MusicTheme, profile: ModeProfile) -> String {
         ModeProfile::Action => {
             let bass = theme.degree_hz(0, -1);
             let lead = theme.degree_hz(4, 1);
+            // Tempo-synced tremolo in 0..1, so the arrangement pumps.
+            let pump_hz = (theme.bpm(ModeProfile::Action) / 60.0) * config::MUSIC_ACTION_PUMP_RATE;
+            let half_depth = config::MUSIC_ACTION_PUMP_DEPTH / 2.0;
             let _ = writeln!(
                 code,
-                "~bass: saw {bass:.2} >> lpf {:.1} 0.8 >> mul {:.3} >> pan -0.15;",
+                "~pump: sin {pump_hz:.3} >> mul {half_depth:.3} >> add {:.3};",
+                1.0 - half_depth
+            );
+            let _ = writeln!(
+                code,
+                "~bass: saw {bass:.2} >> lpf {:.1} 0.8 >> mul {:.3} >> mul ~pump >> pan -0.15;",
                 (bass * 8.0).clamp(500.0, 2600.0),
                 config::MUSIC_ACTION_BASS_GAIN
             );
             let _ = writeln!(
                 code,
-                "~lead: squ {lead:.2} >> lpf {:.1} 0.7 >> mul {:.3} >> pan 0.2;",
+                "~lead: squ {lead:.2} >> lpf {:.1} 0.7 >> mul {:.3} >> mul ~pump >> pan 0.2;",
                 (lead * 6.0).clamp(700.0, 3200.0),
                 config::MUSIC_ACTION_LEAD_GAIN
             );
@@ -99,9 +116,10 @@ pub fn voice_bank(theme: &MusicTheme) -> String {
     code
 }
 
-/// The single `o:` chain mixing the profile's base voices and the whole bank.
+/// The single `o:` chain mixing the profile's base voices, the accent, and the
+/// whole bank.
 pub fn output_chain(profile: ModeProfile) -> String {
-    let mut code = String::from("o: mix");
+    let mut code = String::from("o: mix ~accent");
     for name in base_refs(profile) {
         let _ = write!(code, " {name}");
     }
@@ -127,6 +145,12 @@ pub fn voice_message(slot: usize, freq: f32, cutoff: f32, gain: f32, pan: f32) -
     format!(
         "~v{slot},0,0,{freq:.3};~v{slot},1,0,{cutoff:.3};~v{slot},2,0,{gain:.4};~v{slot},3,0,{pan:.3};"
     )
+}
+
+/// A Glicol `send_msg` payload that opens the shared accent chain. Matches the
+/// layout produced by [`base_voices`]: 1 = low-pass cutoff, 2 = gain.
+pub fn accent_message(cutoff: f32, gain: f32) -> String {
+    format!("~accent,1,0,{cutoff:.1};~accent,2,0,{gain:.4};")
 }
 
 #[cfg(test)]
@@ -163,6 +187,23 @@ mod tests {
         assert!(calm.contains("~pad0"));
         assert!(action.contains("~bass"));
         assert_ne!(calm, action);
+    }
+
+    #[test]
+    fn only_action_pumps_and_both_profiles_carry_the_accent() {
+        let calm = full_code(&theme(), ModeProfile::Calm);
+        let action = full_code(&theme(), ModeProfile::Action);
+        assert!(!calm.contains("~pump"));
+        assert!(action.contains("~pump"));
+        assert!(calm.contains("~accent"));
+        assert!(action.contains("~accent"));
+    }
+
+    #[test]
+    fn accent_message_addresses_the_fixed_node_layout() {
+        let message = accent_message(1400.0, 0.375);
+        assert!(message.contains("~accent,1,0,1400.0;"));
+        assert!(message.contains("~accent,2,0,0.3750;"));
     }
 
     #[test]

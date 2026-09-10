@@ -245,6 +245,15 @@ pub const MUSIC_CALM_PAD_GAIN: f32 = 0.16;
 pub const MUSIC_ACTION_BASS_GAIN: f32 = 0.22;
 pub const MUSIC_ACTION_LEAD_GAIN: f32 = 0.14;
 
+/// Action-only amplitude pumping on the bass/lead, expressed as a fraction of
+/// full gain. `RATE` is pumps per beat, so tempo changes the pulse speed.
+pub const MUSIC_ACTION_PUMP_DEPTH: f32 = 0.5;
+pub const MUSIC_ACTION_PUMP_RATE: f32 = 2.0;
+
+/// Seconds the graph crossfade takes when a room or profile changes. Long
+/// enough to read as a blend, short enough to feel responsive while browsing.
+pub const MUSIC_CROSSFADE_SECONDS: f32 = 0.7;
+
 pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
 pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
 pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 4.0;
