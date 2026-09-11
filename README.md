@@ -328,13 +328,24 @@ along the bottom.
 
 ## Stealth
 
-`.sh` files open a **stealth run**: a room of cover seen from above, patrolled by
-guards who each sweep a cone of vision across the floor.
+`.sh` files open a **stealth run**: a room of cover seen from just behind the
+character, patrolled by guards who each sweep a cone of vision across the floor.
+The camera rides high over the runner's shoulder — close enough to see the walk,
+high enough to read the patrols ahead — and holds a fixed bearing, so turning a
+corner never whips the view around.
 
-* `A` / `D` (or the arrows) turn the runner a quarter turn; the runner then
-  creeps a cell at a time on its own.
-* Hold `Space` to wait in place for a patrol to walk past — timing the turns is
-  the whole game.
+* `WASD` (or the arrows) walks: hold a key and the runner keeps walking that
+  way, let go and it stops where it stands. Standing still to let a patrol pass
+  is therefore just not pressing anything.
+* The runner turns to face the way it is walking, walks a cell at a time, and is
+  eased between cells on screen so the grid underneath does not show.
+* The runner is a rigged, skinned character: 19 joints, and a walk cycle
+  authored as a real animation clip. Playback speed is matched to how fast it is
+  actually moving, so the feet do not skate, and it rewinds to the start when
+  the runner stops rather than freezing mid-stride.
+* The guards share the same rig and walk on the same clip, paced by the patrol
+  clock rather than by the player, so they keep walking while you stand still
+  and wait.
 * The cones are drawn on the floor, and a translucent one is a guard looking
   the other way. Anything solid between you and a guard breaks its line of
   sight, so cover is cover.
@@ -446,7 +457,9 @@ by [arabinowitz](https://sketchfab.com/arabinowitz), used under the
 The runner in `assets/models/tron_character` is
 ["Tron Male Character"](https://sketchfab.com/3d-models/tron-male-character-b7b2dd24bf6e495e9a729d7d271c52db)
 by [dehariyalokesh1998](https://sketchfab.com/dehariyalokesh1998), used under
-[CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/).
+[CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/). It has been modified:
+rigged with a 19-joint skeleton, skinned, and given a walk cycle, all scripted in
+Blender. Those modifications are released under the same licence.
 
 ## Future Ideas (aka InGen Phase 2)
 
