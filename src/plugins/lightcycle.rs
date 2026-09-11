@@ -2032,10 +2032,26 @@ fn character_pose(run: &ActiveRun) -> Option<CharacterPose> {
             smooth: false,
         });
     }
-    run.source_stealth().map(|room| CharacterPose {
-        target: config::ground_position(room.character.0, room.character.1),
-        yaw: std::f32::consts::FRAC_PI_2 - heading_angle(room.heading),
-        smooth: true,
+    run.source_stealth().map(|room| {
+        // Backed against a wall, the figure is leaned into it. Standing a whole
+        // cell short reads as not quite touching, which loses the pose entirely;
+        // `hug` is the wall's direction, so the lean is toward it. It eases in and
+        // out through the same smoothing as the walking, so nothing snaps.
+        let stand = config::ground_position(room.character.0, room.character.1);
+        let target = match room.hug {
+            Some(wall) => {
+                let angle = heading_angle(wall);
+                stand + Vec3::new(angle.cos(), 0.0, angle.sin()) * config::STEALTH_HUG_LEAN
+            }
+            None => stand,
+        };
+        CharacterPose {
+            target,
+            // The sim already faces the figure away from a wall it is hugging, so
+            // this is the walking facing in every case.
+            yaw: std::f32::consts::FRAC_PI_2 - heading_angle(room.heading),
+            smooth: true,
+        }
     })
 }
 
@@ -5055,41 +5071,17 @@ fn update_chase_camera(
             .single()
             .map(|transform| transform.translation)
             .unwrap_or_else(|_| config::ground_position(room.character.0, room.character.1));
-        // The camera sits behind whatever the view is looking along. By default
-        // that is -Z, which is the fixed bearing this camera has always used: the
-        // camera is on the +Z side. Getting this backwards puts the camera behind
-        // the room instead, which mirrors the player's controls on screen.
-        //
-        // Pressing into a wall swings the view to look along the wall instead,
-        // past the corner, from whichever side has floor.
-        let looking = room
-            .peek
-            .map(|heading| {
-                let angle = heading_angle(heading);
-                Vec2::new(angle.cos(), angle.sin())
-            })
-            .unwrap_or(Vec2::new(0.0, -1.0));
+        // The camera keeps a fixed bearing, on the +Z side of the figure. Turning
+        // it to look along a hugged wall read as the controls changing under the
+        // player, and at this angle the view already shows a good way past a
+        // corner, so it stays put.
         let target = focus
             + Vec3::new(
-                -looking.x * config::STEALTH_CAMERA_DISTANCE,
+                0.0,
                 config::STEALTH_CAMERA_HEIGHT,
-                -looking.y * config::STEALTH_CAMERA_DISTANCE,
+                config::STEALTH_CAMERA_DISTANCE,
             );
-        // A swing round a corner is quick and the usual follow is not: the whole
-        // point of peeking is a guard who is walking into view. Telling the two
-        // apart by how far the bearing has to turn means the swing back out is
-        // just as quick, instead of lagging behind a threat that has passed.
-        let offset = camera.translation - focus;
-        let turning = Vec2::new(offset.x, offset.z)
-            .angle_to(Vec2::new(target.x - focus.x, target.z - focus.z))
-            .abs();
-        let entering = offset.length() > config::STEALTH_CAMERA_DISTANCE * 2.0;
-        let rate = if entering || turning <= config::STEALTH_PEEK_SWING {
-            config::STEALTH_CAMERA_LERP
-        } else {
-            config::STEALTH_PEEK_LERP
-        };
-        let blend = 1.0 - (-rate * time.delta_secs()).exp();
+        let blend = 1.0 - (-config::STEALTH_CAMERA_LERP * time.delta_secs()).exp();
         camera.translation = camera.translation.lerp(target, blend);
         camera.look_at(focus + Vec3::Y * config::STEALTH_CAMERA_LOOK, Vec3::Y);
         return;

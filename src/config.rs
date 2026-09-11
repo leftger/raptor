@@ -650,22 +650,27 @@ pub const STEALTH_DECAY: f32 = 0.45;
 /// Cell spacing of the line-of-sight samples.
 pub const STEALTH_SIGHT_SAMPLE: f32 = 0.4;
 pub const STEALTH_CONE_SEGMENTS: usize = 18;
-/// Third-person stealth camera: close over the shoulder, but high enough to
-/// still read the patrols ahead. The bearing is fixed rather than following the
-/// character's facing, so turning a corner does not whip the view around.
-pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
-pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
-/// Height above the character's feet that the camera aims at.
-pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
+/// Third-person stealth camera: low and nearly level, so a room reads like a
+/// corridor seen from behind the figure rather than a board seen from above.
+///
+/// The height cannot go all the way down to the hip: below the cover walls, the
+/// walls themselves hide the character, which is worse than any angle. Sitting
+/// just above them keeps the walls in shot as cover, where they belong.
+pub const STEALTH_CAMERA_HEIGHT: f32 = 2.9;
+pub const STEALTH_CAMERA_DISTANCE: f32 = 10.0;
+/// Height above the character's feet that the camera aims at: the chest, which
+/// leaves the view tilted by only a few degrees.
+pub const STEALTH_CAMERA_LOOK: f32 = 1.5;
+/// How far the figure is pushed toward a wall it is backed against, in world
+/// units, so the pose reads as leaning on the wall rather than standing a cell
+/// short of it.
+pub const STEALTH_HUG_LEAN: f32 = 0.85;
+// A camera below the cover walls would have the room's own geometry hiding the
+// character it is following.
+const _: () = assert!(STEALTH_CAMERA_HEIGHT > STEALTH_WALL_HEIGHT);
 /// How quickly the camera catches up with the character, per second. Fast
 /// enough that its lag stays a steady offset rather than swinging the aim.
 pub const STEALTH_CAMERA_LERP: f32 = 10.0;
-/// How quickly the camera swings round a corner, per second: much quicker than
-/// the follow, because the point of peeking is a guard who is walking.
-pub const STEALTH_PEEK_LERP: f32 = 22.0;
-/// How far the camera's bearing has to be off before a move counts as a swing
-/// round a corner rather than the usual follow, in radians.
-pub const STEALTH_PEEK_SWING: f32 = 0.12;
 /// How far along a hugged wall to look when deciding which side has more floor
 /// to show, in cells. A bound on the search, not on what the player can see.
 pub const STEALTH_PEEK_RUN: i32 = 12;

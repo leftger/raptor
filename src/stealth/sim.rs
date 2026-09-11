@@ -386,15 +386,19 @@ impl StealthSim {
         self.walking =
             wanted.is_some_and(|heading| !self.is_solid(step_cell(self.character, heading)));
 
-        // Pressing into a solid is the wall-hug gesture: the character turns to
-        // face it and stays put. Report the wall and the way along it worth
-        // looking down, so the camera can look past the corner.
+        // Pressing into a solid is the wall-hug gesture: the figure turns so that
+        // its back is against the wall, which is the pose that reads as sheltering
+        // behind cover, and the wall is reported so the renderer can lean it in.
+        //
+        // Only the facing changes here. `tick` moves by the held direction rather
+        // than by this, so the character still does not step into the wall.
         if let Some(heading) = wanted
             && self.is_solid(step_cell(self.character, heading))
         {
             self.hug = Some(heading);
-            // The side with more floor: a corner camera aimed at a cupboard is
-            // no use, and which side that is changes as the player moves.
+            self.heading = heading.opposite();
+            // The side with more floor: a camera looking past the corner wants the
+            // open way, and which side that is changes as the player moves.
             self.peek = along_wall(heading)
                 .into_iter()
                 .map(|across| (self.open_run(across), across))
@@ -722,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn cover_stops_the_walk_but_not_the_facing() {
+    fn cover_stops_the_walk_and_turns_the_back_to_it() {
         let mut room = sim(1);
         room.guards.clear();
         room.cover.clear();
@@ -732,7 +736,12 @@ mod tests {
         room.update(config::STEALTH_STEP_SECONDS);
         assert_eq!(room.character, (x, z), "cover should block the step");
         assert!(!room.walking, "and it is not walking into it either");
-        assert_eq!(room.heading, Heading::PosX, "but it still turns to face it");
+        assert_eq!(
+            room.heading,
+            Heading::NegX,
+            "hugging turns the back to the wall rather than the face to it"
+        );
+        assert_eq!(room.hug, Some(Heading::PosX), "and the wall is reported");
     }
 
     #[test]
