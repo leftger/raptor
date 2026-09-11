@@ -1,4 +1,5 @@
 use crate::config;
+use crate::plugins::transition::transition_inactive;
 use crate::state::{InteractionMode, OrbitCameraResource};
 use bevy::camera::Hdr;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -15,7 +16,10 @@ impl Plugin for CameraPlugin {
             .add_systems(
                 Update,
                 (
-                    update_camera.run_if(in_explorer_mode),
+                    // A mode transition flies the camera itself, and reads the
+                    // orbit rig to know where to land; leave both alone until it
+                    // hands the camera back.
+                    update_camera.run_if(in_explorer_mode.and_then(transition_inactive)),
                     sync_lightcycle_bloom,
                 ),
             );

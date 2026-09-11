@@ -46,7 +46,8 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Interactive UI Panels** with live stats
 * **Smooth camera tweening**
 * **Cool glowing wireframes because aesthetics**
-* **TRON-style Lightcycle Mode** (press `M` in the 3D view)
+* **TRON-style Lightcycle Mode** (press `M` in the 3D view), entered by a
+  satellite-style zoom out over the city and back down into the road you start on
 * **Procedural music** seeded by your folders (`N` to toggle)
 
 ## Navigation
@@ -114,6 +115,23 @@ drawn at random: the same folder always keeps the same door.
 The cycle moves continuously between cell centers; turns are queued and execute
 at boundaries. Explorer mouse picking, orbit camera, and labels are disabled
 while riding, and are restored when you toggle back.
+
+`M` does not cut between the two modes, it zooms between them, the way you
+zoom into a satellite image. The camera pulls back off whichever rig it is on
+until the whole city is below it, then zooms back in on a single road and lands
+exactly on the rig the destination mode was going to use, so nothing pops when
+it hands the camera over. Entering, that road is the one the cycle is about to
+ride, framed running up the screen with the bike at the bottom; leaving, the
+shot is centered on the directory the explorer is about to show you.
+
+There is no flash covering the swap. The world being left behind sinks into the
+ground as the camera pulls back, and the new one grows out of it as the camera
+comes down, so the two are only ever exchanged while both are flat — a cyan rez
+wave lies over the ground for that moment and then rises with the city coming up
+under it. Detail resolves as you close in, and the lens widens through the zoom.
+
+The run is held on its spawn cell until the camera lands, so you always start
+riding from the shot you were given rather than partway down the first street.
 
 The chase camera follows the cycle's heading, but hold the right mouse button
 and drag to swing it around the bike and tilt it between a near-ground view and

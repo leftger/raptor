@@ -56,6 +56,9 @@ impl ActiveRun {
 #[derive(Resource, Default)]
 pub struct LightcycleState {
     pub run: Option<ActiveRun>,
+    /// Run built when a mode transition started, held back until the transition
+    /// reaches the point where the old world is swapped out for it.
+    pub pending_run: Option<ActiveRun>,
     /// Accumulated time used for fixed-step simulation.
     pub clock: f32,
     /// Active crash animation state (debris burst + camera shake).

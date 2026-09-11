@@ -12,6 +12,7 @@ use crate::lightcycle::logic::{
 use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
 use crate::music::MusicSfx;
+use crate::plugins::transition::{ModeTransition, gods_eye_pose};
 use crate::state::{
     DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
     OrbitCameraResource, TrailSceneRoot,
@@ -37,6 +38,7 @@ impl Plugin for LightcyclePlugin {
                 Update,
                 (
                     toggle_mode,
+                    apply_mode_swap,
                     reset_on_directory_loaded,
                     start_document_loads,
                     poll_document_loads,
@@ -491,21 +493,83 @@ fn spawn_sim(arena: &Arena, cells: &HashMap<(i32, i32), usize>) -> LightcycleSim
     LightcycleSim::ready(cell, Heading::PosX)
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+/// Starts the flight between the two modes when `M` is pressed.
+///
+/// Nothing about the world changes here. The run for a lightcycle mode is built
+/// but parked, because the flight has to know which road it is diving into and
+/// where its chase rig will end up before [`apply_mode_swap`] puts that arena on
+/// screen at the top of the climb.
 fn toggle_mode(
     keys: Res<ButtonInput<KeyCode>>,
-    mut mode: ResMut<InteractionMode>,
+    mode: Res<InteractionMode>,
+    mut transition: ResMut<ModeTransition>,
     mut state: ResMut<LightcycleState>,
     navigator: Res<NavigatorResource>,
     mut orbit: ResMut<OrbitCameraResource>,
+    camera: Single<&Transform, With<Camera3d>>,
+) {
+    if !keys.just_pressed(KeyCode::KeyM) || transition.is_active() {
+        return;
+    }
+
+    let from = **camera;
+    match *mode {
+        InteractionMode::Lightcycle => {
+            // Park the orbit rig now rather than letting it lerp home after the
+            // swap, so the flight can aim at the exact pose the explorer camera
+            // will hold when it takes over.
+            orbit.reset_target();
+            orbit.target = Vec3::ZERO;
+            let to =
+                Transform::from_translation(orbit.position()).looking_at(orbit.target, Vec3::Y);
+            // Rise out of the street the cycle is on, so the overhead shot
+            // arrives holding the heading the run was riding.
+            let road = state
+                .run
+                .as_ref()
+                .map_or(Vec3::X, |run| pose_forward(&cycle_cell_pose(&run.sim)));
+            let apex = gods_eye_pose(orbit.target, road);
+            transition.start(InteractionMode::Explorer, from, apex, to, orbit.target);
+        }
+        InteractionMode::Explorer => {
+            let run = build_active_run(&navigator.0.current_path, navigator.0.entries.clone());
+            let (to, focus, road) = chase_landing_pose(&run);
+            let apex = gods_eye_pose(focus, road);
+            state.pending_run = Some(run);
+            transition.start(InteractionMode::Lightcycle, from, apex, to, focus);
+        }
+    }
+}
+
+/// Where the chase camera will sit once a run spawns, the point it looks at,
+/// and the road the cycle will ride away down.
+fn chase_landing_pose(run: &ActiveRun) -> (Transform, Vec3, Vec3) {
+    let pose = cycle_cell_pose(&run.sim);
+    let cycle = pose_world_position(&pose);
+    let (offset, view_forward) = chase_camera_rig(pose_forward(&pose), Vec2::ZERO);
+    let focus = cycle + view_forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
+    (
+        Transform::from_translation(cycle + offset).looking_at(focus, Vec3::Y),
+        focus,
+        view_forward,
+    )
+}
+
+/// Tears down the old world and builds the new one, at the top of the flight's
+/// climb, where the camera is highest and the flash covers the frame.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn apply_mode_swap(
+    mut transition: ResMut<ModeTransition>,
+    mut mode: ResMut<InteractionMode>,
+    mut state: ResMut<LightcycleState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
     old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyM) {
+    let Some(target) = transition.pending_swap() else {
         return;
-    }
+    };
 
     despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
     state.clock = 0.0;
@@ -514,16 +578,16 @@ fn toggle_mode(
     state.entry_fx = None;
     state.restore_directory = false;
 
-    if *mode == InteractionMode::Lightcycle {
-        *mode = InteractionMode::Explorer;
-        orbit.reset_target();
-        return;
+    if target == InteractionMode::Lightcycle
+        && let Some(run) = state.pending_run.take()
+    {
+        spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+        state.run = Some(run);
     }
 
-    let run = build_active_run(&navigator.0.current_path, navigator.0.entries.clone());
-    spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
-    state.run = Some(run);
-    *mode = InteractionMode::Lightcycle;
+    state.pending_run = None;
+    *mode = target;
+    transition.mark_swapped();
 }
 
 #[allow(clippy::type_complexity)]
@@ -1703,11 +1767,17 @@ fn apply_document_load_failure(
 #[allow(clippy::too_many_arguments)]
 fn read_lightcycle_input(
     keys: Res<ButtonInput<KeyCode>>,
+    transition: Res<ModeTransition>,
     mut state: ResMut<LightcycleState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
     mut effects: MessageWriter<MusicSfx>,
 ) {
+    // Riding controls belong to the run, not to the flight arriving at it.
+    if transition.is_active() {
+        return;
+    }
+
     let left = keys.just_pressed(KeyCode::KeyA) || keys.just_pressed(KeyCode::ArrowLeft);
     let right = keys.just_pressed(KeyCode::KeyD) || keys.just_pressed(KeyCode::ArrowRight);
     let restart = keys.just_pressed(KeyCode::KeyR);
@@ -1779,12 +1849,22 @@ fn restore_directory_arena(
 
 fn step_lightcycle(
     time: Res<Time>,
+    transition: Res<ModeTransition>,
     mut state: ResMut<LightcycleState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
     mut documents: MessageWriter<DocumentRequested>,
     mut effects: MessageWriter<MusicSfx>,
 ) {
+    // The arena exists from the top of the climb onward, but the camera is
+    // still diving toward it. Hold the cycle on its spawn cell until it lands,
+    // so the run starts from the shot the player is given rather than partway
+    // down the first street.
+    if transition.is_active() {
+        state.clock = 0.0;
+        return;
+    }
+
     let Some(mut run) = state.run.take() else {
         return;
     };
@@ -2710,6 +2790,7 @@ fn chase_rig_radius() -> f32 {
 
 fn update_chase_camera(
     state: Res<LightcycleState>,
+    transition: Res<ModeTransition>,
     time: Res<Time>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
@@ -2719,7 +2800,9 @@ fn update_chase_camera(
     let Ok((cycle, mut chase)) = cycle.single_mut() else {
         return;
     };
-    if state.run.is_none() {
+    // The flight owns the camera until it lands on this rig; easing the follow
+    // direction or taking a look drag now would move the pose it is aiming for.
+    if state.run.is_none() || transition.is_active() {
         return;
     }
 
@@ -2762,8 +2845,9 @@ mod tests {
         chase_camera_rig, chase_rig_radius, city_base_trim_mesh, city_body_height, city_body_mesh,
         city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
-        glyph_char_offset, glyph_pixel_offset, glyph_pixels, pose_rotation, rail_segments,
-        road_marking_mesh, trail_centerline, trail_heights, trim_polyline_end, wrap_angle,
+        glyph_char_offset, glyph_pixel_offset, glyph_pixels, pose_forward, pose_rotation,
+        pose_world_position, rail_segments, road_marking_mesh, trail_centerline, trail_heights,
+        trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
@@ -3322,6 +3406,40 @@ mod tests {
                 1e-4
             ),
             "free look at rest must reproduce the fixed rig, got {offset}"
+        );
+    }
+
+    /// Entering the lightcycle flies the camera to a rig that `update_chase_camera`
+    /// then holds on its own, and dives in along the road the cycle is about to
+    /// ride. Landing anywhere else would pop on the first frame of the run.
+    #[test]
+    fn the_flight_lands_on_the_rig_the_chase_camera_will_hold() {
+        let path = std::path::PathBuf::from("/tmp");
+        let nodes = vec![crate::filesystem::FileNode::new(
+            "a.txt".into(),
+            path.join("a.txt"),
+            false,
+            12,
+            0,
+        )];
+        let run = super::build_active_run(&path, nodes);
+        let (landing, focus, road) = super::chase_landing_pose(&run);
+        let cycle = pose_world_position(&cycle_cell_pose(&run.sim));
+
+        assert!((landing.translation.distance(cycle) - chase_rig_radius()).abs() < 1e-4);
+        assert!((landing.translation.y - config::LIGHTCYCLE_CAMERA_HEIGHT).abs() < 1e-4);
+        assert!(
+            (landing.rotation * Vec3::NEG_Z)
+                .abs_diff_eq((focus - landing.translation).normalize(), 1e-5)
+        );
+
+        // The road is the cycle's own heading, which the overhead shot leans on
+        // for its roll, so it has to be a unit vector along the ground.
+        assert!(road.abs_diff_eq(pose_forward(&cycle_cell_pose(&run.sim)), 1e-5));
+        assert!((road.length() - 1.0).abs() < 1e-5 && road.y.abs() < 1e-5);
+        assert!(
+            focus.abs_diff_eq(cycle + road * config::LIGHTCYCLE_CAMERA_LOOKAHEAD, 1e-4),
+            "the shot has to be aimed down the road ahead of the cycle"
         );
     }
 
