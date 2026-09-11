@@ -657,14 +657,21 @@ pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
 pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
 /// Height above the character's feet that the camera aims at.
 pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
-/// The view while backed against a wall: hip height and close in, so the figure
-/// fills the frame and the eyeline runs along the wall and past its end.
+/// The view while backed against a wall: over the shoulder, close in, looking down
+/// the wall to the corner.
 ///
-/// Being below the cover walls is the point here rather than a problem. Unlike
-/// the walking view, the wall runs alongside this camera instead of between it and
-/// the figure, which is exactly why this view shows what the high one cannot.
-pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 1.2;
-pub const STEALTH_HUG_CAMERA_DISTANCE: f32 = 4.5;
+/// The framing follows the reference the wall-hug is modelled on: the figure large
+/// and pushed to the edge of the frame, with the corridor and whatever is on it
+/// taking the middle. Two numbers do that work. The view aims
+/// `STEALTH_HUG_CAMERA_AIM` along the wall rather than at the figure, and sitting
+/// `HEIGHT` up while aiming `LOOK` high over that whole span tilts it about twenty
+/// degrees down.
+///
+/// It is also above the cover walls, deliberately: below them, the room's own
+/// geometry gets between the camera and the figure it is following.
+pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 3.2;
+pub const STEALTH_HUG_CAMERA_DISTANCE: f32 = 3.0;
+pub const STEALTH_HUG_CAMERA_AIM: f32 = 3.0;
 /// How far the figure is pushed toward a wall it is backed against, in world
 /// units, so the pose reads as leaning on the wall rather than standing a cell
 /// short of it.

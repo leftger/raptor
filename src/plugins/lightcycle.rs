@@ -5109,7 +5109,22 @@ fn update_chase_camera(
         let height = offset.y + (want_height - offset.y) * blend;
         camera.translation =
             focus + Vec3::new(bearing.cos() * radius, height, bearing.sin() * radius);
-        camera.look_at(focus + Vec3::Y * config::STEALTH_CAMERA_LOOK, Vec3::Y);
+        // Backed against a wall, the view looks down the wall toward the corner
+        // rather than at the figure. That is what pushes the figure to the edge of
+        // the frame and puts the corridor, and whatever is patrolling it, in the
+        // middle of the shot. Walking, it looks at the figure as it always has.
+        let ahead = match room.hug {
+            Some(_) => {
+                let reach = config::STEALTH_HUG_CAMERA_AIM;
+                Vec3::new(
+                    -aim.cos() * reach,
+                    config::STEALTH_CAMERA_LOOK,
+                    -aim.sin() * reach,
+                )
+            }
+            None => Vec3::Y * config::STEALTH_CAMERA_LOOK,
+        };
+        camera.look_at(focus + ahead, Vec3::Y);
         return;
     }
 
