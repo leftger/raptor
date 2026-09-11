@@ -8,7 +8,16 @@ import os
 import bpy
 import tempfile
 
-SOURCE = os.environ.get("TRON_SOURCE", os.path.join(tempfile.gettempdir(), "tron_src", "scene.gltf"))
+# The unrigged source, checked in beside the textures so the glTF's own
+# `textures/...` URIs resolve without copying anything. Never point this at the
+# rigged asset: rigging our own export rigs the wrong mesh (see the README).
+SOURCE = os.environ.get(
+    "TRON_SOURCE",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "assets/models/tron_character/unrigged.gltf",
+    ),
+)
 
 SPINE = {
     "Hips": ((0.0, 0.0, 10.30), (0.0, 0.0, 12.90)),

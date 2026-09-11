@@ -21,20 +21,16 @@ re-deriving all of it from scratch.
   see user-installed packages and the glTF importer fails with
   `ModuleNotFoundError: No module named 'numpy'`.
 
-## Getting a source mesh
+## The source mesh
 
-`rig_lib.py` rigs an **unrigged** glTF, by default `<tmp>/tron_src/scene.gltf`.
-The unrigged original is in git history, from just before the rig landed:
+`rig_lib.py` rigs `assets/models/tron_character/unrigged.gltf`: the original
+unrigged mesh, checked in beside the textures so the glTF's own `textures/...`
+URIs resolve and nothing has to be copied. Point `TRON_SOURCE` elsewhere to rig a
+different unrigged humanoid in a T/A-pose.
 
-```bash
-SRC=$(mktemp -d)/tron_src && mkdir -p "$SRC/textures"
-git show c710917^:assets/models/tron_character/scene.gltf > "$SRC/scene.gltf"
-git show c710917^:assets/models/tron_character/scene.bin  > "$SRC/scene.bin"
-cp assets/models/tron_character/textures/*.png "$SRC/textures/"
-export TRON_SOURCE="$SRC/scene.gltf"
-```
-
-Or point `TRON_SOURCE` at any other unrigged humanoid in a T/A-pose.
+It must be an **unrigged** mesh. The rigged `scene.gltf` next to it is this
+pipeline's output, and rigging that re-imports our own export, which appends
+stray objects and rigs the wrong one.
 
 ## Running it
 
