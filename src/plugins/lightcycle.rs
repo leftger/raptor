@@ -1926,8 +1926,17 @@ fn sync_character_entities(
         // that into a glide, and the walk clip supplies the limbs. The
         // platformer's physics is already continuous.
         let base = if pose.smooth {
-            anim.base
-                .lerp(pose.target, 1.0 - (-config::WALK_CATCH_UP * dt).exp())
+            // Cover the ground at the pace the sim steps, instead of easing to
+            // each cell and waiting. The second term only bites once the figure
+            // has fallen behind, so a frame hitch does not leave it trailing.
+            let to_target = pose.target - anim.base;
+            let distance = to_target.length();
+            let travel = config::STEALTH_WALK_SPEED.max(distance * 2.0) * dt;
+            if distance <= travel {
+                pose.target
+            } else {
+                anim.base + to_target / distance * travel
+            }
         } else {
             pose.target
         };
@@ -2031,7 +2040,7 @@ fn drive_character_walk(
     // The patrol step rate, and the character's own ground speed in world units
     // per second. The guards walk continuously, so their clip must not stop
     // just because the player is waiting for them to pass.
-    let step_speed = config::GRID_SPACING / config::STEALTH_STEP_SECONDS;
+    let step_speed = config::STEALTH_WALK_SPEED;
     let character_speed = if let Some(room) = run.source_stealth() {
         if room.walking { step_speed } else { 0.0 }
     } else if let Some(level) = run.source_platformer() {

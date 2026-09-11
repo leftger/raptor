@@ -636,6 +636,11 @@ pub const STEALTH_HEIGHT: i32 = 15;
 pub const STEALTH_COVER: usize = 16;
 /// Seconds per cell of creep, for the character and the guards alike.
 pub const STEALTH_STEP_SECONDS: f32 = 0.26;
+/// The pace a step covers ground, in world units per second. The figure is moved
+/// between cells at exactly this speed, and the walk clip is played to match it:
+/// easing to each cell instead makes the travel pulse once per step, which the
+/// camera inherits as a bob.
+pub const STEALTH_WALK_SPEED: f32 = GRID_SPACING / STEALTH_STEP_SECONDS;
 pub const STEALTH_VISION_RANGE: f32 = 7.0;
 pub const STEALTH_VISION_HALF_ANGLE: f32 = 0.5;
 pub const STEALTH_SCAN_SWEEP: f32 = 0.45;
@@ -652,8 +657,9 @@ pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
 pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
 /// Height above the character's feet that the camera aims at.
 pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
-/// How quickly the camera catches up with the character, per second.
-pub const STEALTH_CAMERA_LERP: f32 = 5.0;
+/// How quickly the camera catches up with the character, per second. Fast
+/// enough that its lag stays a steady offset rather than swinging the aim.
+pub const STEALTH_CAMERA_LERP: f32 = 10.0;
 pub const STEALTH_WALL_HEIGHT: f32 = 2.4;
 /// Guards as a fraction of the character's height.
 pub const STEALTH_GUARD_SCALE: f32 = 0.85;
@@ -685,9 +691,6 @@ pub const WALK_CLIP: &str = "Walk";
 /// rigged cycle (24 frames at 24 fps), and used to convert ground speed into
 /// clip playback speed.
 pub const WALK_CLIP_GROUND: f32 = 7.3;
-/// How quickly the rendered figure catches up with its grid cell, so the
-/// stealth walk glides instead of teleporting a cell at a time.
-pub const WALK_CATCH_UP: f32 = 14.0;
 
 pub const STEALTH_FLOOR_COLOR: Color = Color::srgb(0.1, 0.13, 0.19);
 pub const STEALTH_WALL_COLOR: Color = Color::srgb(0.28, 0.38, 0.52);
