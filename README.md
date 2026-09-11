@@ -48,11 +48,19 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Cool glowing wireframes because aesthetics**
 * **TRON-style Lightcycle Mode** (press `M` in the 3D view), entered by a
   satellite-style zoom out over the city and back down into the road you start on
-* **Disc Wars** — ride into a `.rs` / `.c` / `.h` / `.cpp` file to fight a
-  Recognizer in a ring generated from that file, best of three (`Space` / click
-  to throw, `Q` to recall)
-* **Asteroid Field** — ride into a `.py` file to pivot a parked cycle in a ring
-  and blast the drifting rocks (`A`/`D` to aim, `Space` to fire)
+* **Disc Wars** — ride into a `.rs` / `.cpp` file to fight a Recognizer in a ring
+  generated from that file, best of three (`Space` / click to throw, `Q` to
+  recall)
+* **Asteroid Field** — ride into a `.c` / `.h` file to pivot a parked cycle in a
+  ring and blast the drifting rocks (`A`/`D` to aim, `Space` to fire)
+* **Snake** — ride into a `.py` file to chase power-ups around a ring; every one
+  you eat lengthens your tail, and the exit only opens once you have them all
+* **Platformer** — ride into a `.slint` file to run and jump a procedural level
+  to the door at the far end
+* **Brick Breaker** — ride into a `.lua` file and *be* the paddle: the bike
+  slides along the bottom and rebounds the ball at the wall of bricks
+* **Stealth** — ride into a `.sh` file to sneak the Tron runner past patrolling
+  guards and their vision cones
 * **Procedural music** seeded by your folders (`N` to toggle)
 
 ## Navigation
@@ -244,7 +252,7 @@ files with the system default app.
 
 ## Asteroid Field
 
-Python files are not a disc ring. A `.py` file opens an **asteroid field**: the
+C files are not a disc ring. A `.c` or `.h` file opens an **asteroid field**: the
 cycle is parked at the middle of a small ring and never moves, but it pivots on
 the spot and fires beams. Same ring geometry, close gate and restore path as
 disc wars — only the game inside changes.
@@ -271,6 +279,67 @@ Once the field is **won or lost the cycle is handed back** and drives normally,
 keeping the facing you were aiming, so you can ride out through the gate to the
 parent directory. `U` / `-` leaves immediately from anywhere, `M` returns to
 Explorer, and `R` restarts the field.
+
+## Snake
+
+Python files open a **snake** run: the ordinary lightcycle grid, except the trail
+is a tail of finite length and the ring's exit is sealed until you have eaten
+every power-up.
+
+* Ride with `A` / `D` (or the arrows) exactly as in a normal run — no new
+  controls.
+* Six power-ups are scattered over the ring, seeded from the file, and none of
+  them land on top of your spawn.
+* Each one you eat adds four cells to your tail. The tail is lethal, so the
+  longer it gets the less room you have to turn.
+* The status line tracks `SNAKE <eaten> | LEFT <rest> | TAIL <length>` and
+  `EXIT: LOCKED`. Until the exit opens, the gate is a solid red bar: riding into
+  it wrecks the cycle like any other wall.
+* Once the last power-up is eaten the bar disappears, the status flips to
+  `EXIT: OPEN`, and the gate becomes a normal way out.
+* One crash ends the run — your own tail, a gallery wall or the ring wall all
+  count. `R` restarts and re-scatters the same power-ups.
+
+## Platformer
+
+`.slint` files open a **side-scrolling platformer**: the camera swings around to
+the side and the Tron runner has to reach the door at the end of the level.
+
+* `A` / `D` (or the arrows) run; `Space` jumps. Nothing else changes.
+* The level is laid out from the file's fingerprint: a run of platforms with
+  gaps and steps that always stay inside what the jump can clear, so a level is
+  never impossible. Longer file, longer level.
+* Fall into the gap below the level and the run ends like any other crash —
+  `R` rebuilds the very same level.
+* Reaching the door leaves the run and returns you to the directory.
+
+## Brick Breaker
+
+`.lua` files open a **brick breaker**, and the bike is the paddle. The court is
+upright in front of you: the wall of bricks is above, the bike is on the rail
+along the bottom.
+
+* `A` / `D` (or the arrows) slide the bike; `Space` serves the ball.
+* The ball bounces off the side and ceiling walls, and where it lands on the
+  bike sets its return angle, so the edges of the paddle are for aiming.
+* The wall you have to worry about is the one **below** the bike: let the ball
+  past and the run is over.
+* Clear every brick and the run is cleared; `R` re-serves the same wall.
+
+## Stealth
+
+`.sh` files open a **stealth run**: a room of cover seen from above, patrolled by
+guards who each sweep a cone of vision across the floor.
+
+* `A` / `D` (or the arrows) turn the runner a quarter turn; the runner then
+  creeps a cell at a time on its own.
+* Hold `Space` to wait in place for a patrol to walk past — timing the turns is
+  the whole game.
+* The cones are drawn on the floor, and a translucent one is a guard looking
+  the other way. Anything solid between you and a guard breaks its line of
+  sight, so cover is cover.
+* Standing in a cone fills the detection meter in the status line. Fill it and
+  you are caught; reach the door at the far side and you are out.
 
 ## Procedural Music
 
@@ -373,6 +442,11 @@ The lightcycle model in `assets/models/light_cycle` is
 ["Light Cycle - Tron (1982)"](https://sketchfab.com/3d-models/light-cycle-tron-1982-54fedda920094ef09d87a17d42b282af)
 by [arabinowitz](https://sketchfab.com/arabinowitz), used under the
 [Sketchfab Standard license](https://sketchfab.com/licenses).
+
+The runner in `assets/models/tron_character` is
+["Tron Male Character"](https://sketchfab.com/3d-models/tron-male-character-b7b2dd24bf6e495e9a729d7d271c52db)
+by [dehariyalokesh1998](https://sketchfab.com/dehariyalokesh1998), used under
+[CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/).
 
 ## Future Ideas (aka InGen Phase 2)
 
