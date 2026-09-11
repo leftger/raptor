@@ -4529,11 +4529,11 @@ fn read_lightcycle_input(
             // Steer the hoverbike; the throttle is always open and boost is held.
             surfer.set_input(steer as f32, boost);
         } else if let Some(sim) = run.source_galaga_mut() {
-            // Slide along the bottom; Space or click fires upward.
-            sim.set_input(steer as f32, throw);
+            // Slide along the bottom; the -Z camera mirrors X, so negate steer.
+            sim.set_input(-steer as f32, throw);
         } else if let Some(sim) = run.source_pacman_mut() {
             // Hold a direction to keep walking the corridor.
-            sim.set_input(steer, -move_z);
+            sim.set_input(steer, move_z);
         } else if let Some(sim) = run.source_columns_mut() {
             // A/D slides the piece, W rotates, Space hard-drops.
             sim.set_input(i32::from(right) - i32::from(left), hop_z > 0, throw);
@@ -4549,12 +4549,13 @@ fn read_lightcycle_input(
             // One hop per keypress in any of the four directions.
             sim.hop(i32::from(right) - i32::from(left), hop_z);
         } else if let Some(sim) = run.source_qbert_mut() {
-            // Diagonal hops: A/D/W/S each map to a pyramid direction.
-            sim.hop(i32::from(right) - i32::from(left), hop_z);
+            // Diagonal hops: A/D/W/S each map to a pyramid direction. The -Z
+            // camera mirrors X, so swap the east/west edges.
+            sim.hop(i32::from(left) - i32::from(right), hop_z);
         } else if let Some(sim) = run.source_bomberman_mut() {
             // Walk on the room grid and plant bombs with Space or click.
             if (steer != 0 || move_z != 0) && sim.phase == BomberPhase::Walking {
-                sim.step(steer, -move_z);
+                sim.step(steer, move_z);
             }
             if throw {
                 sim.plant();
@@ -6619,7 +6620,7 @@ fn update_chase_camera(
                 Vec3::new(
                     0.0,
                     config::PAC_CAMERA_HEIGHT,
-                    -config::PAC_CAMERA_HEIGHT * config::PAC_CAMERA_LEAN,
+                    config::PAC_CAMERA_HEIGHT * config::PAC_CAMERA_LEAN,
                 ),
                 Vec3::ZERO,
             ),
@@ -6627,7 +6628,7 @@ fn update_chase_camera(
                 Vec3::new(
                     0.0,
                     config::FROGGER_CAMERA_HEIGHT,
-                    -config::FROGGER_CAMERA_HEIGHT * config::FROGGER_CAMERA_LEAN,
+                    config::FROGGER_CAMERA_HEIGHT * config::FROGGER_CAMERA_LEAN,
                 ),
                 Vec3::ZERO,
             ),
@@ -6643,7 +6644,7 @@ fn update_chase_camera(
                 Vec3::new(
                     0.0,
                     config::BOMBER_CAMERA_HEIGHT,
-                    -config::BOMBER_CAMERA_HEIGHT * config::BOMBER_CAMERA_LEAN,
+                    config::BOMBER_CAMERA_HEIGHT * config::BOMBER_CAMERA_LEAN,
                 ),
                 Vec3::ZERO,
             ),
