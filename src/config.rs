@@ -432,11 +432,20 @@ pub const SNAKE_GATE_COLOR: Color = Color::srgb(1.0, 0.22, 0.25);
 
 /// The Tron runner. CC-BY-4.0: see the credits in the README.
 pub const TRON_MODEL_ASSET: &str = "models/tron_character/scene.gltf";
-/// The mesh is authored in centimetres: foot to head is this many glTF units.
-/// Read off the POSITION accessor bounds in `scene.gltf`.
-pub const TRON_MODEL_HEIGHT_UNITS: f32 = 929.4;
+/// Height of the loaded scene in world units, with the glTF's own node
+/// transforms applied.
+///
+/// The mesh is authored in inches: its `POSITION` bounds span 929 units and the
+/// scene's root node matrices scale that by 0.0254 (inches to metres), so the
+/// model arrives 23.607 units tall with its feet on the origin. Dividing by the
+/// raw mesh height instead is a 39x error, which once left the runner a
+/// twentieth of a unit tall: present, glowing, and invisible.
+pub const TRON_MODEL_HEIGHT: f32 = 23.607;
+// Fail the build, not the render: reading the raw mesh bounds instead of the
+// loaded scene is a 39x error that leaves the character invisible.
+const _: () = assert!(TRON_MODEL_HEIGHT > 1.0 && TRON_MODEL_HEIGHT < 100.0);
 /// Scaled so the runner stands exactly as tall as its collision box.
-pub const TRON_MODEL_SCALE: f32 = PLATFORMER_RUNNER_HEIGHT / TRON_MODEL_HEIGHT_UNITS;
+pub const TRON_MODEL_SCALE: f32 = PLATFORMER_RUNNER_HEIGHT / TRON_MODEL_HEIGHT;
 /// The model faces along its thin axis; flip this a half turn if the runner
 /// ends up looking backwards.
 pub const TRON_MODEL_YAW: f32 = std::f32::consts::PI;
@@ -633,10 +642,25 @@ pub const STEALTH_DECAY: f32 = 0.45;
 /// Cell spacing of the line-of-sight samples.
 pub const STEALTH_SIGHT_SAMPLE: f32 = 0.4;
 pub const STEALTH_CONE_SEGMENTS: usize = 18;
-pub const STEALTH_CAMERA_FIT: f32 = 1.7;
+/// Frames the whole room, including the corner the character starts in.
+pub const STEALTH_CAMERA_FIT: f32 = 2.4;
 pub const STEALTH_WALL_HEIGHT: f32 = 2.4;
-/// Guards as a fraction of the runner's height.
+/// Guards as a fraction of the character's height.
 pub const STEALTH_GUARD_SCALE: f32 = 0.85;
+/// The stealth figure's height in world units, sized against the grid cell so
+/// it reads from the overhead camera. Kept just under the cover walls so they
+/// still look like cover.
+pub const STEALTH_CHARACTER_HEIGHT: f32 = GRID_SPACING * 0.9;
+pub const STEALTH_CHARACTER_SCALE: f32 = STEALTH_CHARACTER_HEIGHT / TRON_MODEL_HEIGHT;
+// A figure that does not roughly fill its cell reads as a speck from above.
+const _: () = assert!(
+    STEALTH_CHARACTER_HEIGHT > GRID_SPACING * 0.5 && STEALTH_CHARACTER_HEIGHT < GRID_SPACING * 1.5
+);
+/// The vision cone's reach in world units. The sim measures sight in cells, so
+/// the drawn cone has to be converted the same way the guards' cells are.
+pub const STEALTH_CONE_REACH: f32 = STEALTH_VISION_RANGE * GRID_SPACING;
+// A cone shorter than the figure it belongs to would look detached.
+const _: () = assert!(STEALTH_CONE_REACH > STEALTH_CHARACTER_HEIGHT);
 
 pub const STEALTH_FLOOR_COLOR: Color = Color::srgb(0.1, 0.13, 0.19);
 pub const STEALTH_WALL_COLOR: Color = Color::srgb(0.28, 0.38, 0.52);

@@ -1534,7 +1534,7 @@ fn spawn_stealth_room(
         Transform::from_translation(start).with_rotation(facing(room.heading.angle())),
         Visibility::default(),
         Pickable::IGNORE,
-        body(assets, config::TRON_MODEL_SCALE),
+        body(assets, config::STEALTH_CHARACTER_SCALE),
     ));
 
     for (index, guard) in room.guards.iter().enumerate() {
@@ -1549,7 +1549,7 @@ fn spawn_stealth_room(
             Pickable::IGNORE,
             body(
                 assets,
-                config::TRON_MODEL_SCALE * config::STEALTH_GUARD_SCALE,
+                config::STEALTH_CHARACTER_SCALE * config::STEALTH_GUARD_SCALE,
             ),
         ));
         commands.spawn((
@@ -1559,7 +1559,7 @@ fn spawn_stealth_room(
             MeshMaterial3d(assets.stealth_cone_material.clone()),
             Transform::from_translation(position + Vec3::Y * 0.08)
                 .with_rotation(facing(guard.vision_angle()))
-                .with_scale(Vec3::splat(config::STEALTH_VISION_RANGE)),
+                .with_scale(Vec3::splat(config::STEALTH_CONE_REACH)),
             Pickable::IGNORE,
         ));
     }
