@@ -40,7 +40,7 @@ opt-level = 3
 
 [profile.release]
 opt-level = 3
-codegen-units = 16
+codegen-units = 1
 lto = "thin"
 panic = "abort"
 strip = true

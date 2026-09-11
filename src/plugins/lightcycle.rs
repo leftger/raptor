@@ -6587,8 +6587,25 @@ fn update_chase_camera(
     }
 
     // The arcade block: each game gets a small fixed camera tailored to its
-    // board, independent of the parked cycle.
-    if let Some(game) = state.run.as_ref().and_then(|run| run.source_game()) {
+    // board, independent of the parked cycle. Every other source game (and
+    // plain directory riding) keeps the chase camera below.
+    let arcade_game = state
+        .run
+        .as_ref()
+        .and_then(|run| run.source_game())
+        .filter(|game| {
+            matches!(
+                game,
+                SourceGame::PacMan
+                    | SourceGame::Columns
+                    | SourceGame::Tetris
+                    | SourceGame::Frogger
+                    | SourceGame::Qbert
+                    | SourceGame::Bomberman
+                    | SourceGame::Plinko
+            )
+        });
+    if let Some(game) = arcade_game {
         let (translation, target) = match game {
             SourceGame::PacMan => (
                 Vec3::new(
@@ -6639,7 +6656,7 @@ fn update_chase_camera(
                 Vec3::new(0.0, config::TETRIS_ROWS as f32 * 0.4, 0.0),
             ),
             SourceGame::Plinko => (Vec3::new(0.0, 0.0, config::PLINKO_CAMERA_BACK), Vec3::ZERO),
-            _ => return,
+            _ => unreachable!("filtered to the arcade block above"),
         };
         camera.translation = translation;
         camera.look_at(target, Vec3::Y);
