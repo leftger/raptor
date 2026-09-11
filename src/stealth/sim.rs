@@ -145,6 +145,11 @@ pub struct StealthSim {
     /// True while the held direction is actually walkable, so the renderer can
     /// run a steady gait instead of one tied to the grid clock.
     pub walking: bool,
+    /// The wall the player is pressing into, if any. Pressing into a solid is how
+    /// a wall is hugged: the character turns to face it and stays put.
+    pub hug: Option<Heading>,
+    /// The open direction along that wall, which a corner camera can look down.
+    pub peek: Option<Heading>,
     /// Cells walked, for the HUD.
     pub steps: usize,
     bounds: (i32, i32),
@@ -203,6 +208,8 @@ impl StealthSim {
             seen: false,
             input: StealthInput::default(),
             walking: false,
+            hug: None,
+            peek: None,
             steps: 0,
             bounds: (half_w, half_h),
             move_clock: 0.0,
@@ -310,6 +317,8 @@ impl StealthSim {
     pub fn update(&mut self, dt: f32) -> StealthEvents {
         let mut events = StealthEvents::default();
         self.walking = false;
+        self.hug = None;
+        self.peek = None;
         if self.phase != StealthPhase::Sneaking {
             return events;
         }
@@ -322,6 +331,18 @@ impl StealthSim {
         }
         self.walking =
             wanted.is_some_and(|heading| !self.is_solid(step_cell(self.character, heading)));
+
+        // Pressing into a solid is the wall-hug gesture: the character turns to
+        // face it and stays put. Report the wall and the first open way along it,
+        // so the camera can look past the corner.
+        if let Some(heading) = wanted
+            && self.is_solid(step_cell(self.character, heading))
+        {
+            self.hug = Some(heading);
+            self.peek = along_wall(heading)
+                .into_iter()
+                .find(|across| !self.is_solid(step_cell(self.character, *across)));
+        }
 
         // Sweep the cones, and watch, every frame.
         for guard in &mut self.guards {
@@ -454,6 +475,14 @@ fn next_unit(rng: &mut u64) -> f32 {
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
     (*rng >> 40) as f32 / (1_u32 << 24) as f32
+}
+
+/// The two directions along a wall: the ones perpendicular to `heading`.
+fn along_wall(heading: Heading) -> [Heading; 2] {
+    match heading {
+        Heading::PosX | Heading::NegX => [Heading::PosZ, Heading::NegZ],
+        Heading::PosZ | Heading::NegZ => [Heading::PosX, Heading::NegX],
+    }
 }
 
 #[cfg(test)]
@@ -680,6 +709,38 @@ mod tests {
             room.character
         );
         assert_eq!(room.character.0, -room.bounds.0 + 1);
+    }
+
+    #[test]
+    fn pressing_into_something_reports_the_wall_and_an_open_way_along_it() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        let (x, z) = room.character;
+        room.cover.insert((x + 1, z));
+        room.set_input(1, 0);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(
+            room.hug,
+            Some(Heading::PosX),
+            "the wall it is pressed against"
+        );
+        assert!(
+            matches!(room.peek, Some(Heading::PosZ | Heading::NegZ)),
+            "the open way along the wall, got {:?}",
+            room.peek
+        );
+    }
+
+    #[test]
+    fn walking_in_the_open_is_not_a_hug() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        room.set_input(1, 0);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.hug, None);
+        assert_eq!(room.peek, None);
     }
 
     #[test]

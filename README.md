@@ -346,6 +346,11 @@ corner never whips the view around.
 * The guards share the same rig and walk on the same clip, paced by the patrol
   clock rather than by the player, so they keep walking while you stand still
   and wait.
+* Press into a wall and hold it: the character turns to face the wall and
+  stops, and the camera swings round to look along it, past the corner, from
+  whichever side has floor — so you can see what is coming before you step out.
+  Let go and it swings back. This is a view only; it does not change what the
+  guards can see.
 * The cones are drawn on the floor, and a translucent one is a guard looking
   the other way. Anything solid between you and a guard breaks its line of
   sight, so cover is cover.

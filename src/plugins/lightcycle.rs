@@ -4993,11 +4993,19 @@ fn update_chase_camera(
             .single()
             .map(|transform| transform.translation)
             .unwrap_or_else(|_| config::ground_position(room.character.0, room.character.1));
+        // Pressing into a wall is the peek gesture: the camera swings round to
+        // look along that wall, past the corner, from whichever side has floor.
+        // The usual view is the same thing aimed at +Z, hence the default angle.
+        // The position lerp below is what smooths the swing.
+        let peek = room
+            .peek
+            .map(heading_angle)
+            .unwrap_or(std::f32::consts::FRAC_PI_2);
         let target = focus
             + Vec3::new(
-                0.0,
+                -peek.cos() * config::STEALTH_CAMERA_DISTANCE,
                 config::STEALTH_CAMERA_HEIGHT,
-                config::STEALTH_CAMERA_DISTANCE,
+                -peek.sin() * config::STEALTH_CAMERA_DISTANCE,
             );
         let blend = 1.0 - (-config::STEALTH_CAMERA_LERP * time.delta_secs()).exp();
         camera.translation = camera.translation.lerp(target, blend);
