@@ -20,12 +20,24 @@ pub enum SourceLanguage {
     Slint,
     Lua,
     Shell,
+    Toml,
+    Json,
+    Go,
+    Ruby,
+    Yaml,
+    JavaScript,
+    Zig,
+    Php,
+    R,
 }
 
 /// Which mini-game a source file opens.
 ///
 /// The ring geometry is shared; only the game inside it changes. Python files
-/// are a snake run, C files an asteroid field, and Rust/C++ a disc-wars ring.
+/// are a snake run, C files an asteroid field, Rust/C++ a disc-wars ring, TOML
+/// files a river-surfer course, JSON files a Galaga field, Go files a Pac-Man
+/// maze, Ruby files a Columns well, YAML files Tetris, JavaScript files
+/// Frogger, Zig files Q*bert, PHP files Bomberman, and R files a Plinko board.
 /// Moving a game to another extension is a one-line change in
 /// [`SourceLanguage::game`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,11 +48,20 @@ pub enum SourceGame {
     Platformer,
     Breaker,
     Stealth,
+    RiverSurfer,
+    Galaga,
+    PacMan,
+    Columns,
+    Tetris,
+    Frogger,
+    Qbert,
+    Bomberman,
+    Plinko,
 }
 
 impl SourceLanguage {
     /// How many languages the allowlist covers, for fixed-size tables.
-    pub const COUNT: usize = 7;
+    pub const COUNT: usize = 16;
 
     /// Every language, for tests that need to cover them all.
     pub const ALL: [SourceLanguage; SourceLanguage::COUNT] = [
@@ -51,6 +72,15 @@ impl SourceLanguage {
         SourceLanguage::Slint,
         SourceLanguage::Lua,
         SourceLanguage::Shell,
+        SourceLanguage::Toml,
+        SourceLanguage::Json,
+        SourceLanguage::Go,
+        SourceLanguage::Ruby,
+        SourceLanguage::Yaml,
+        SourceLanguage::JavaScript,
+        SourceLanguage::Zig,
+        SourceLanguage::Php,
+        SourceLanguage::R,
     ];
 
     /// Maps a lowercase file extension to a language, or `None` when the
@@ -66,6 +96,15 @@ impl SourceLanguage {
             "slint" => Some(Self::Slint),
             "lua" => Some(Self::Lua),
             "sh" | "bash" | "zsh" => Some(Self::Shell),
+            "toml" => Some(Self::Toml),
+            "json" => Some(Self::Json),
+            "go" => Some(Self::Go),
+            "rb" => Some(Self::Ruby),
+            "yaml" | "yml" => Some(Self::Yaml),
+            "js" | "mjs" => Some(Self::JavaScript),
+            "zig" => Some(Self::Zig),
+            "php" => Some(Self::Php),
+            "r" => Some(Self::R),
             _ => None,
         }
     }
@@ -86,6 +125,15 @@ impl SourceLanguage {
             Self::Slint => "slint",
             Self::Lua => "lua",
             Self::Shell => "shell",
+            Self::Toml => "toml",
+            Self::Json => "json",
+            Self::Go => "go",
+            Self::Ruby => "ruby",
+            Self::Yaml => "yaml",
+            Self::JavaScript => "js",
+            Self::Zig => "zig",
+            Self::Php => "php",
+            Self::R => "r",
         }
     }
 
@@ -98,6 +146,15 @@ impl SourceLanguage {
             Self::Slint => SourceGame::Platformer,
             Self::Lua => SourceGame::Breaker,
             Self::Shell => SourceGame::Stealth,
+            Self::Toml => SourceGame::RiverSurfer,
+            Self::Json => SourceGame::Galaga,
+            Self::Go => SourceGame::PacMan,
+            Self::Ruby => SourceGame::Columns,
+            Self::Yaml => SourceGame::Tetris,
+            Self::JavaScript => SourceGame::Frogger,
+            Self::Zig => SourceGame::Qbert,
+            Self::Php => SourceGame::Bomberman,
+            Self::R => SourceGame::Plinko,
         }
     }
 
@@ -112,6 +169,15 @@ impl SourceLanguage {
             Self::Slint => "slint-build",
             Self::Lua => "lua",
             Self::Shell => "sh",
+            Self::Toml => "taplo",
+            Self::Json => "jq",
+            Self::Go => "go",
+            Self::Ruby => "ruby",
+            Self::Yaml => "yamllint",
+            Self::JavaScript => "node",
+            Self::Zig => "zig",
+            Self::Php => "php",
+            Self::R => "Rscript",
         }
     }
 
@@ -125,6 +191,15 @@ impl SourceLanguage {
             Self::Slint => config::DISC_SLINT_ACCENT,
             Self::Lua => config::DISC_LUA_ACCENT,
             Self::Shell => config::DISC_SHELL_ACCENT,
+            Self::Toml => config::DISC_TOML_ACCENT,
+            Self::Json => config::DISC_JSON_ACCENT,
+            Self::Go => config::DISC_GO_ACCENT,
+            Self::Ruby => config::DISC_RUBY_ACCENT,
+            Self::Yaml => config::DISC_YAML_ACCENT,
+            Self::JavaScript => config::DISC_JS_ACCENT,
+            Self::Zig => config::DISC_ZIG_ACCENT,
+            Self::Php => config::DISC_PHP_ACCENT,
+            Self::R => config::DISC_R_ACCENT,
         }
     }
 
@@ -138,6 +213,15 @@ impl SourceLanguage {
             Self::Slint => config::MUSIC_DISC_SLINT_ARP_GAIN,
             Self::Lua => config::MUSIC_DISC_LUA_ARP_GAIN,
             Self::Shell => config::MUSIC_DISC_SHELL_ARP_GAIN,
+            Self::Toml => config::MUSIC_DISC_TOML_ARP_GAIN,
+            Self::Json => config::MUSIC_DISC_JSON_ARP_GAIN,
+            Self::Go => config::MUSIC_DISC_GO_ARP_GAIN,
+            Self::Ruby => config::MUSIC_DISC_RUBY_ARP_GAIN,
+            Self::Yaml => config::MUSIC_DISC_YAML_ARP_GAIN,
+            Self::JavaScript => config::MUSIC_DISC_JS_ARP_GAIN,
+            Self::Zig => config::MUSIC_DISC_ZIG_ARP_GAIN,
+            Self::Php => config::MUSIC_DISC_PHP_ARP_GAIN,
+            Self::R => config::MUSIC_DISC_R_ARP_GAIN,
         }
     }
 
@@ -153,6 +237,15 @@ impl SourceLanguage {
             Self::Slint => config::MUSIC_DISC_SLINT_ARP_RATE,
             Self::Lua => config::MUSIC_DISC_LUA_ARP_RATE,
             Self::Shell => config::MUSIC_DISC_SHELL_ARP_RATE,
+            Self::Toml => config::MUSIC_DISC_TOML_ARP_RATE,
+            Self::Json => config::MUSIC_DISC_JSON_ARP_RATE,
+            Self::Go => config::MUSIC_DISC_GO_ARP_RATE,
+            Self::Ruby => config::MUSIC_DISC_RUBY_ARP_RATE,
+            Self::Yaml => config::MUSIC_DISC_YAML_ARP_RATE,
+            Self::JavaScript => config::MUSIC_DISC_JS_ARP_RATE,
+            Self::Zig => config::MUSIC_DISC_ZIG_ARP_RATE,
+            Self::Php => config::MUSIC_DISC_PHP_ARP_RATE,
+            Self::R => config::MUSIC_DISC_R_ARP_RATE,
         }
     }
 
@@ -202,6 +295,69 @@ impl SourceLanguage {
                     "unbound variable"
                 }
             }
+            Self::Toml => {
+                if seed & 1 == 0 {
+                    "invalid value: expected string"
+                } else {
+                    "duplicate key in table"
+                }
+            }
+            Self::Json => {
+                if seed & 1 == 0 {
+                    "unexpected end of JSON input"
+                } else {
+                    "invalid value: expected `,`"
+                }
+            }
+            Self::Go => {
+                if seed & 1 == 0 {
+                    "panic: runtime error: index out of range"
+                } else {
+                    "fatal error: all goroutines are asleep - deadlock!"
+                }
+            }
+            Self::Ruby => {
+                if seed & 1 == 0 {
+                    "NoMethodError: undefined method for nil"
+                } else {
+                    "SyntaxError: unexpected end-of-input"
+                }
+            }
+            Self::Yaml => {
+                if seed & 1 == 0 {
+                    "mapping values are not allowed in this context"
+                } else {
+                    "found character that cannot start any token"
+                }
+            }
+            Self::JavaScript => {
+                if seed & 1 == 0 {
+                    "TypeError: cannot read properties of undefined"
+                } else {
+                    "SyntaxError: Unexpected token"
+                }
+            }
+            Self::Zig => {
+                if seed & 1 == 0 {
+                    "error: expected type expression, found '}'"
+                } else {
+                    "error: overflow in arithmetic operation"
+                }
+            }
+            Self::Php => {
+                if seed & 1 == 0 {
+                    "PHP Fatal error: Uncaught Error: Call to undefined function"
+                } else {
+                    "Parse error: syntax error, unexpected end of file"
+                }
+            }
+            Self::R => {
+                if seed & 1 == 0 {
+                    "Error: object 'x' not found"
+                } else {
+                    "Error in parse: unexpected symbol"
+                }
+            }
         }
     }
 }
@@ -225,6 +381,17 @@ mod tests {
             ("init.lua", SourceLanguage::Lua),
             ("build.sh", SourceLanguage::Shell),
             ("run.zsh", SourceLanguage::Shell),
+            ("Cargo.toml", SourceLanguage::Toml),
+            ("data.json", SourceLanguage::Json),
+            ("main.go", SourceLanguage::Go),
+            ("gems.rb", SourceLanguage::Ruby),
+            ("config.yaml", SourceLanguage::Yaml),
+            ("config.yml", SourceLanguage::Yaml),
+            ("app.js", SourceLanguage::JavaScript),
+            ("app.mjs", SourceLanguage::JavaScript),
+            ("main.zig", SourceLanguage::Zig),
+            ("index.php", SourceLanguage::Php),
+            ("analysis.r", SourceLanguage::R),
         ] {
             assert_eq!(
                 SourceLanguage::from_path(&PathBuf::from(path)),
@@ -279,5 +446,14 @@ mod tests {
         for language in [SourceLanguage::Rust, SourceLanguage::Cpp] {
             assert_eq!(language.game(), SourceGame::DiscWars);
         }
+        assert_eq!(SourceLanguage::Toml.game(), SourceGame::RiverSurfer);
+        assert_eq!(SourceLanguage::Json.game(), SourceGame::Galaga);
+        assert_eq!(SourceLanguage::Go.game(), SourceGame::PacMan);
+        assert_eq!(SourceLanguage::Ruby.game(), SourceGame::Columns);
+        assert_eq!(SourceLanguage::Yaml.game(), SourceGame::Tetris);
+        assert_eq!(SourceLanguage::JavaScript.game(), SourceGame::Frogger);
+        assert_eq!(SourceLanguage::Zig.game(), SourceGame::Qbert);
+        assert_eq!(SourceLanguage::Php.game(), SourceGame::Bomberman);
+        assert_eq!(SourceLanguage::R.game(), SourceGame::Plinko);
     }
 }

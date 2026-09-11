@@ -1,13 +1,22 @@
 pub mod logic;
 
 use crate::asteroids::AsteroidsSim;
+use crate::bomberman::BomberSim;
 use crate::breaker::BreakerSim;
+use crate::columns::ColumnsSim;
 use crate::disc::{DiscLayout, DiscSim, SourceGame, SourceLanguage};
 use crate::document::DocumentLayout;
 use crate::filesystem::FileNode;
+use crate::frogger::FroggerSim;
+use crate::galaga::GalagaSim;
+use crate::pacman::PacSim;
 use crate::platformer::PlatformerSim;
+use crate::plinko::PlinkoSim;
+use crate::qbert::QbertSim;
 use crate::snake::SnakeSim;
 use crate::stealth::StealthSim;
+use crate::surfer::SurferSim;
+use crate::tetris::TetrisSim;
 use bevy::prelude::Resource;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,6 +47,15 @@ pub enum SourceSim {
     Platformer(Box<PlatformerSim>),
     Breaker(Box<BreakerSim>),
     Stealth(Box<StealthSim>),
+    Surfer(Box<SurferSim>),
+    Galaga(Box<GalagaSim>),
+    PacMan(Box<PacSim>),
+    Columns(Box<ColumnsSim>),
+    Tetris(Box<TetrisSim>),
+    Frogger(Box<FroggerSim>),
+    Qbert(Box<QbertSim>),
+    Bomberman(Box<BomberSim>),
+    Plinko(Box<PlinkoSim>),
 }
 
 impl SourceSim {
@@ -50,6 +68,15 @@ impl SourceSim {
             Self::Platformer(_) => SourceGame::Platformer,
             Self::Breaker(_) => SourceGame::Breaker,
             Self::Stealth(_) => SourceGame::Stealth,
+            Self::Surfer(_) => SourceGame::RiverSurfer,
+            Self::Galaga(_) => SourceGame::Galaga,
+            Self::PacMan(_) => SourceGame::PacMan,
+            Self::Columns(_) => SourceGame::Columns,
+            Self::Tetris(_) => SourceGame::Tetris,
+            Self::Frogger(_) => SourceGame::Frogger,
+            Self::Qbert(_) => SourceGame::Qbert,
+            Self::Bomberman(_) => SourceGame::Bomberman,
+            Self::Plinko(_) => SourceGame::Plinko,
         }
     }
 
@@ -133,6 +160,132 @@ impl SourceSim {
     pub fn as_stealth_mut(&mut self) -> Option<&mut StealthSim> {
         match self {
             Self::Stealth(room) => Some(room),
+            _ => None,
+        }
+    }
+
+    pub fn as_surfer(&self) -> Option<&SurferSim> {
+        match self {
+            Self::Surfer(surfer) => Some(surfer),
+            _ => None,
+        }
+    }
+
+    pub fn as_surfer_mut(&mut self) -> Option<&mut SurferSim> {
+        match self {
+            Self::Surfer(surfer) => Some(surfer),
+            _ => None,
+        }
+    }
+
+    pub fn as_galaga(&self) -> Option<&GalagaSim> {
+        match self {
+            Self::Galaga(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_galaga_mut(&mut self) -> Option<&mut GalagaSim> {
+        match self {
+            Self::Galaga(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_pacman(&self) -> Option<&PacSim> {
+        match self {
+            Self::PacMan(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_pacman_mut(&mut self) -> Option<&mut PacSim> {
+        match self {
+            Self::PacMan(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_columns(&self) -> Option<&ColumnsSim> {
+        match self {
+            Self::Columns(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_columns_mut(&mut self) -> Option<&mut ColumnsSim> {
+        match self {
+            Self::Columns(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_tetris(&self) -> Option<&TetrisSim> {
+        match self {
+            Self::Tetris(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_tetris_mut(&mut self) -> Option<&mut TetrisSim> {
+        match self {
+            Self::Tetris(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_frogger(&self) -> Option<&FroggerSim> {
+        match self {
+            Self::Frogger(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_frogger_mut(&mut self) -> Option<&mut FroggerSim> {
+        match self {
+            Self::Frogger(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_qbert(&self) -> Option<&QbertSim> {
+        match self {
+            Self::Qbert(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_qbert_mut(&mut self) -> Option<&mut QbertSim> {
+        match self {
+            Self::Qbert(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_bomberman(&self) -> Option<&BomberSim> {
+        match self {
+            Self::Bomberman(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_bomberman_mut(&mut self) -> Option<&mut BomberSim> {
+        match self {
+            Self::Bomberman(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_plinko(&self) -> Option<&PlinkoSim> {
+        match self {
+            Self::Plinko(sim) => Some(sim),
+            _ => None,
+        }
+    }
+
+    pub fn as_plinko_mut(&mut self) -> Option<&mut PlinkoSim> {
+        match self {
+            Self::Plinko(sim) => Some(sim),
             _ => None,
         }
     }
@@ -279,6 +432,132 @@ impl ActiveRun {
     pub fn source_stealth_mut(&mut self) -> Option<&mut StealthSim> {
         match &mut self.environment {
             RunEnvironment::Source { sim, .. } => sim.as_stealth_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_surfer(&self) -> Option<&SurferSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_surfer(),
+            _ => None,
+        }
+    }
+
+    pub fn source_surfer_mut(&mut self) -> Option<&mut SurferSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_surfer_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_galaga(&self) -> Option<&GalagaSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_galaga(),
+            _ => None,
+        }
+    }
+
+    pub fn source_galaga_mut(&mut self) -> Option<&mut GalagaSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_galaga_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_pacman(&self) -> Option<&PacSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_pacman(),
+            _ => None,
+        }
+    }
+
+    pub fn source_pacman_mut(&mut self) -> Option<&mut PacSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_pacman_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_columns(&self) -> Option<&ColumnsSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_columns(),
+            _ => None,
+        }
+    }
+
+    pub fn source_columns_mut(&mut self) -> Option<&mut ColumnsSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_columns_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_tetris(&self) -> Option<&TetrisSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_tetris(),
+            _ => None,
+        }
+    }
+
+    pub fn source_tetris_mut(&mut self) -> Option<&mut TetrisSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_tetris_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_frogger(&self) -> Option<&FroggerSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_frogger(),
+            _ => None,
+        }
+    }
+
+    pub fn source_frogger_mut(&mut self) -> Option<&mut FroggerSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_frogger_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_qbert(&self) -> Option<&QbertSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_qbert(),
+            _ => None,
+        }
+    }
+
+    pub fn source_qbert_mut(&mut self) -> Option<&mut QbertSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_qbert_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_bomberman(&self) -> Option<&BomberSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_bomberman(),
+            _ => None,
+        }
+    }
+
+    pub fn source_bomberman_mut(&mut self) -> Option<&mut BomberSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_bomberman_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_plinko(&self) -> Option<&PlinkoSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_plinko(),
+            _ => None,
+        }
+    }
+
+    pub fn source_plinko_mut(&mut self) -> Option<&mut PlinkoSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_plinko_mut(),
             _ => None,
         }
     }

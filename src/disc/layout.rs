@@ -589,6 +589,21 @@ fn is_function_line(line: &str, language: SourceLanguage) -> bool {
             let head = line.trim_start();
             head.starts_with("function ") || (!head.contains('=') && head.contains("()"))
         }
+        // TOML has tables, not functions; the surfer only needs the file's
+        // length and fingerprint.
+        SourceLanguage::Toml => false,
+        // JSON has values, not functions; the Galaga field only needs the
+        // file's length and fingerprint.
+        SourceLanguage::Json => false,
+        // The arcade languages get a cheap, language-shaped detector so their
+        // fingerprints still differ by structure.
+        SourceLanguage::Go => line.starts_with("func "),
+        SourceLanguage::Ruby => line.starts_with("def "),
+        SourceLanguage::Yaml => false,
+        SourceLanguage::JavaScript => line.starts_with("function ") || line.contains("=>"),
+        SourceLanguage::Zig => line.starts_with("fn "),
+        SourceLanguage::Php => line.starts_with("function "),
+        SourceLanguage::R => line.contains("<- function"),
         SourceLanguage::C | SourceLanguage::Cpp => {
             let Some(open) = line.find('(') else {
                 return false;
@@ -779,6 +794,15 @@ fn language_pepper(language: SourceLanguage) -> u64 {
         SourceLanguage::Slint => 0x536c_696e,
         SourceLanguage::Lua => 0x4c75_6100,
         SourceLanguage::Shell => 0x4241_5348,
+        SourceLanguage::Toml => 0x544f_4d4c,
+        SourceLanguage::Json => 0x4a53_4f4e,
+        SourceLanguage::Go => 0x676f_6c61,
+        SourceLanguage::Ruby => 0x7275_6279,
+        SourceLanguage::Yaml => 0x7961_6d6c,
+        SourceLanguage::JavaScript => 0x6a73_5f5f,
+        SourceLanguage::Zig => 0x7a69_675f,
+        SourceLanguage::Php => 0x7068_705f,
+        SourceLanguage::R => 0x0052_5f5f,
     }
 }
 

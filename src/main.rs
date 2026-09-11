@@ -1,22 +1,31 @@
 use bevy::prelude::*;
 
 mod asteroids;
+mod bomberman;
 mod breaker;
 mod cli;
+mod columns;
 mod command;
 mod config;
 mod disc;
 mod document;
 mod filesystem;
+mod frogger;
+mod galaga;
 mod lightcycle;
 mod load;
 mod music;
+mod pacman;
 mod platform;
 mod platformer;
+mod plinko;
 mod plugins;
+mod qbert;
 mod snake;
 mod state;
 mod stealth;
+mod surfer;
+mod tetris;
 
 use cli::Options;
 use config::{WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};

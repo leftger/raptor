@@ -1,5 +1,7 @@
 use crate::asteroids::{AsteroidsPhase, AsteroidsSim};
+use crate::bomberman::{BomberPhase, BomberSim};
 use crate::breaker::{BreakerPhase, BreakerSim};
+use crate::columns::{ColumnsPhase, ColumnsSim};
 use crate::config;
 use crate::disc::{
     DiscEvents, DiscLayout, DiscPhase, DiscSim, PlayerSnapshot, SourceGame, SourceLanguage,
@@ -12,6 +14,8 @@ use crate::document::{
     parse::{ParseLimits, parse_markdown_bytes},
 };
 use crate::filesystem::FileNode;
+use crate::frogger::{FroggerPhase, FroggerSim};
+use crate::galaga::{GalagaPhase, GalagaSim};
 use crate::lightcycle::logic::{
     Arena, ArenaKind, CellContent, CityStructure, CityStructureKind, CityTheme, CrashReason,
     GatePlacement, Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall,
@@ -20,14 +24,19 @@ use crate::lightcycle::logic::{
 use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
 use crate::music::MusicSfx;
+use crate::pacman::{PacPhase, PacSim};
 use crate::platformer::{PlatformerPhase, PlatformerSim};
+use crate::plinko::{PlinkoPhase, PlinkoSim};
 use crate::plugins::transition::{ModeTransition, gods_eye_pose};
+use crate::qbert::{QbertPhase, QbertSim};
 use crate::snake::SnakeSim;
 use crate::state::{
     DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
     OrbitCameraResource, TrailSceneRoot,
 };
 use crate::stealth::{StealthPhase, StealthSim};
+use crate::surfer::{SurferPhase, SurferSim};
+use crate::tetris::{TetrisPhase, TetrisSim};
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -81,6 +90,14 @@ impl Plugin for LightcyclePlugin {
                     ),
                     (
                         sync_asteroid_entities.run_if(in_lightcycle_mode),
+                        sync_galaga_entities.run_if(in_lightcycle_mode),
+                        sync_pacman_entities.run_if(in_lightcycle_mode),
+                        sync_columns_entities.run_if(in_lightcycle_mode),
+                        sync_tetris_entities.run_if(in_lightcycle_mode),
+                        sync_frogger_entities.run_if(in_lightcycle_mode),
+                        sync_qbert_entities.run_if(in_lightcycle_mode),
+                        sync_bomberman_entities.run_if(in_lightcycle_mode),
+                        sync_plinko_entities.run_if(in_lightcycle_mode),
                         sync_snake_entities.run_if(in_lightcycle_mode),
                         sync_character_entities.run_if(in_lightcycle_mode),
                         tag_character_model.run_if(in_lightcycle_mode),
@@ -169,6 +186,24 @@ struct LightcycleAssets {
     stealth_exit_material: Handle<StandardMaterial>,
     /// Unit-length cone with the stealth half-angle, scaled by its range.
     vision_cone: Handle<Mesh>,
+    /// Water ribbon, rocks, boost gates and the finish gate for the surfer.
+    surfer_water_material: Handle<StandardMaterial>,
+    surfer_rock_material: Handle<StandardMaterial>,
+    surfer_gate_material: Handle<StandardMaterial>,
+    surfer_finish_material: Handle<StandardMaterial>,
+    /// Bug bodies and beam bolts for the Galaga field.
+    galaga_bug_material: Handle<StandardMaterial>,
+    galaga_beam_material: Handle<StandardMaterial>,
+    /// Arcade block: shared materials for the seven fixed-screen games.
+    gem_materials: [Handle<StandardMaterial>; 4],
+    tetris_materials: [Handle<StandardMaterial>; 7],
+    qbert_cube_dim: Handle<StandardMaterial>,
+    qbert_cube_lit: Handle<StandardMaterial>,
+    qbert_enemy_material: Handle<StandardMaterial>,
+    plinko_pin_material: Handle<StandardMaterial>,
+    plinko_ball_material: Handle<StandardMaterial>,
+    bomber_crate_material: Handle<StandardMaterial>,
+    bomber_bomb_material: Handle<StandardMaterial>,
     document_floor_material: Handle<StandardMaterial>,
     document_rule_material: Handle<StandardMaterial>,
     document_margin_material: Handle<StandardMaterial>,
@@ -255,6 +290,79 @@ struct RockEntity {
 /// One pooled beam in the asteroid field, keyed into `AsteroidsSim::beams`.
 #[derive(Component)]
 struct BeamEntity {
+    index: usize,
+}
+
+/// One pooled bug in the Galaga field, keyed into `GalagaSim::bugs`.
+#[derive(Component)]
+struct BugEntity {
+    index: usize,
+}
+
+/// One pooled beam in the Galaga field, keyed into `GalagaSim::beams`.
+#[derive(Component)]
+struct GalagaBeamEntity {
+    index: usize,
+}
+
+/// One pooled dot in the Pac-Man maze, keyed by its cell.
+#[derive(Component)]
+struct DotEntity {
+    cell: (i32, i32),
+}
+
+/// One pooled ghost in the Pac-Man maze, keyed into `PacSim::ghosts`.
+#[derive(Component)]
+struct GhostEntity {
+    index: usize,
+}
+
+/// One pooled cell of the Columns well, keyed by its row-major index.
+#[derive(Component)]
+struct GemEntity {
+    index: usize,
+}
+
+/// One pooled cell of the Tetris board, keyed by its row-major index.
+#[derive(Component)]
+struct BlockEntity {
+    index: usize,
+}
+
+/// One pooled obstacle cube on the Frogger highway.
+#[derive(Component)]
+struct FrogObstacleEntity {
+    index: usize,
+}
+
+/// One cube of the Q*bert pyramid, keyed by its row/index pair.
+#[derive(Component)]
+struct QbertCubeEntity {
+    row: usize,
+    index: usize,
+}
+
+/// One pooled enemy on the Q*bert pyramid, keyed into `QbertSim::enemies`.
+#[derive(Component)]
+struct QbertEnemyEntity {
+    index: usize,
+}
+
+/// One pooled crate in the Bomberman room, keyed by its cell.
+#[derive(Component)]
+struct BomberCrateEntity {
+    cell: (i32, i32),
+}
+
+/// One pooled bomb in the Bomberman room, keyed into `BomberSim::bombs`.
+#[derive(Component)]
+struct BomberBombEntity {
+    index: usize,
+}
+
+/// One pooled ball on the Plinko board, keyed into `PlinkoSim::balls`.
+#[derive(Component)]
+struct PlinkoBallEntity {
     index: usize,
 }
 
@@ -587,6 +695,79 @@ fn setup_lightcycle_assets(
             config::STEALTH_VISION_HALF_ANGLE,
             config::STEALTH_CONE_SEGMENTS,
         )),
+        surfer_water_material: materials.add(StandardMaterial {
+            base_color: config::SURFER_WATER_COLOR,
+            emissive: LinearRgba::from(config::SURFER_WATER_COLOR) * 0.2,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        }),
+        surfer_rock_material: materials.add(unlit_material(config::SURFER_ROCK_COLOR)),
+        surfer_gate_material: materials.add(StandardMaterial {
+            base_color: config::SURFER_GATE_COLOR,
+            emissive: LinearRgba::from(config::SURFER_GATE_COLOR) * 2.2,
+            unlit: true,
+            ..default()
+        }),
+        surfer_finish_material: materials.add(StandardMaterial {
+            base_color: config::SURFER_FINISH_COLOR,
+            emissive: LinearRgba::from(config::SURFER_FINISH_COLOR) * 2.4,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
+        galaga_bug_material: materials.add(StandardMaterial {
+            base_color: config::GALAGA_BUG_COLOR,
+            emissive: LinearRgba::from(config::GALAGA_BUG_COLOR) * 2.0,
+            unlit: true,
+            ..default()
+        }),
+        galaga_beam_material: materials.add(StandardMaterial {
+            base_color: config::GALAGA_BEAM_COLOR,
+            emissive: LinearRgba::from(config::GALAGA_BEAM_COLOR) * 3.0,
+            unlit: true,
+            ..default()
+        }),
+        gem_materials: std::array::from_fn(|index| {
+            materials.add(StandardMaterial {
+                base_color: config::COLUMNS_GEM_COLORS_LIST[index],
+                emissive: LinearRgba::from(config::COLUMNS_GEM_COLORS_LIST[index]) * 1.6,
+                unlit: true,
+                ..default()
+            })
+        }),
+        tetris_materials: std::array::from_fn(|index| {
+            materials.add(StandardMaterial {
+                base_color: config::TETRIS_COLORS[index],
+                emissive: LinearRgba::from(config::TETRIS_COLORS[index]) * 1.4,
+                unlit: true,
+                ..default()
+            })
+        }),
+        qbert_cube_dim: materials.add(unlit_material(config::QBERT_CUBE_DIM_COLOR)),
+        qbert_cube_lit: materials.add(StandardMaterial {
+            base_color: config::QBERT_CUBE_LIT_COLOR,
+            emissive: LinearRgba::from(config::QBERT_CUBE_LIT_COLOR) * 1.8,
+            unlit: true,
+            ..default()
+        }),
+        qbert_enemy_material: materials.add(StandardMaterial {
+            base_color: config::QBERT_ENEMY_COLOR,
+            emissive: LinearRgba::from(config::QBERT_ENEMY_COLOR) * 2.0,
+            unlit: true,
+            ..default()
+        }),
+        plinko_pin_material: materials.add(unlit_material(config::PLINKO_PIN_COLOR)),
+        plinko_ball_material: materials.add(StandardMaterial {
+            base_color: config::PLINKO_BALL_COLOR,
+            emissive: LinearRgba::from(config::PLINKO_BALL_COLOR) * 1.8,
+            unlit: true,
+            ..default()
+        }),
+        bomber_crate_material: materials.add(unlit_material(config::BOMBER_CRATE_COLOR)),
+        bomber_bomb_material: materials.add(unlit_material(config::BOMBER_BOMB_COLOR)),
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
@@ -793,6 +974,19 @@ fn build_source_run(path: &Path, language: SourceLanguage, bytes: &[u8]) -> Acti
         SourceGame::Platformer | SourceGame::Breaker | SourceGame::Stealth => {
             build_flat_arena(path, language, bytes, config::PLATFORMER_HALF_EXTENT)
         }
+        SourceGame::RiverSurfer => {
+            build_flat_arena(path, language, bytes, config::SURFER_HALF_EXTENT)
+        }
+        SourceGame::Galaga => build_flat_arena(path, language, bytes, config::GALAGA_HALF_EXTENT),
+        // The whole arcade block shares one arena extent; each game's board is
+        // small enough to fit inside it.
+        SourceGame::PacMan
+        | SourceGame::Columns
+        | SourceGame::Tetris
+        | SourceGame::Frogger
+        | SourceGame::Qbert
+        | SourceGame::Bomberman
+        | SourceGame::Plinko => build_flat_arena(path, language, bytes, config::ARCADE_HALF_EXTENT),
     };
     let sim = LightcycleSim::start(layout.player_spawn, layout.player_spawn_heading);
     let sim_state = match game {
@@ -821,6 +1015,33 @@ fn build_source_run(path: &Path, language: SourceLanguage, bytes: &[u8]) -> Acti
         ))),
         SourceGame::Breaker => SourceSim::Breaker(Box::new(BreakerSim::new(layout.seed))),
         SourceGame::Stealth => SourceSim::Stealth(Box::new(StealthSim::new(layout.seed))),
+        SourceGame::RiverSurfer => {
+            SourceSim::Surfer(Box::new(SurferSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::Galaga => {
+            SourceSim::Galaga(Box::new(GalagaSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::PacMan => {
+            SourceSim::PacMan(Box::new(PacSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::Columns => {
+            SourceSim::Columns(Box::new(ColumnsSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::Tetris => {
+            SourceSim::Tetris(Box::new(TetrisSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::Frogger => {
+            SourceSim::Frogger(Box::new(FroggerSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::Qbert => {
+            SourceSim::Qbert(Box::new(QbertSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::Bomberman => {
+            SourceSim::Bomberman(Box::new(BomberSim::new(layout.seed, layout.signals.lines)))
+        }
+        SourceGame::Plinko => {
+            SourceSim::Plinko(Box::new(PlinkoSim::new(layout.seed, layout.signals.lines)))
+        }
     };
     ActiveRun {
         sim,
@@ -1062,6 +1283,33 @@ fn spawn_run_entities(
             }
             SourceSim::Stealth(room) => {
                 spawn_stealth_room(commands, assets, meshes, room);
+            }
+            SourceSim::Surfer(surfer) => {
+                spawn_surfer_course(commands, assets, meshes, surfer);
+            }
+            SourceSim::Galaga(sim) => {
+                spawn_galaga_field(commands, assets, sim);
+            }
+            SourceSim::PacMan(sim) => {
+                spawn_pac_maze(commands, assets, meshes, sim);
+            }
+            SourceSim::Columns(sim) => {
+                spawn_gem_well(commands, assets, sim);
+            }
+            SourceSim::Tetris(sim) => {
+                spawn_tetris_board(commands, assets, sim);
+            }
+            SourceSim::Frogger(sim) => {
+                spawn_frogger_highway(commands, assets, sim);
+            }
+            SourceSim::Qbert(sim) => {
+                spawn_qbert_pyramid(commands, assets, sim);
+            }
+            SourceSim::Bomberman(sim) => {
+                spawn_bomber_room(commands, assets, meshes, sim);
+            }
+            SourceSim::Plinko(sim) => {
+                spawn_plinko_board(commands, assets, meshes, sim);
             }
             SourceSim::DiscWars(disc) => {
                 spawn_disc_arena(
@@ -1305,6 +1553,312 @@ fn spawn_asteroid_field(commands: &mut Commands, assets: &LightcycleAssets, sim:
             } else {
                 Visibility::Hidden
             },
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the pooled bug and beam bodies for a Galaga field.
+///
+/// The formation is a fixed grid, so the bug pool never grows; the sim drives
+/// transforms and visibility.
+fn spawn_galaga_field(commands: &mut Commands, assets: &LightcycleAssets, sim: &GalagaSim) {
+    for (index, bug) in sim.bugs.iter().enumerate() {
+        commands.spawn((
+            LightcycleSceneRoot,
+            BugEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.galaga_bug_material.clone()),
+            Transform::from_xyz(bug.x, config::GALAGA_BUG_HEIGHT * 0.5, bug.z).with_scale(
+                Vec3::new(
+                    config::GALAGA_BUG_RADIUS * 2.0,
+                    config::GALAGA_BUG_HEIGHT,
+                    config::GALAGA_BUG_RADIUS * 2.0,
+                ),
+            ),
+            if bug.alive {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            Pickable::IGNORE,
+        ));
+    }
+    for index in 0..config::GALAGA_MAX_BEAMS {
+        let live = sim.beams.get(index);
+        commands.spawn((
+            LightcycleSceneRoot,
+            GalagaBeamEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.galaga_beam_material.clone()),
+            Transform::from_xyz(0.0, 0.35, 0.0),
+            if live.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the Pac-Man maze: static walls plus pooled dots and ghosts.
+fn spawn_pac_maze(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    _meshes: &mut Assets<Mesh>,
+    sim: &PacSim,
+) {
+    for row in 0..config::PAC_ROWS {
+        for col in 0..config::PAC_COLS {
+            if !PacSim::solid((col, row)) {
+                continue;
+            }
+            let (x, z) = PacSim::center((col, row));
+            commands.spawn((
+                LightcycleSceneRoot,
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.stealth_wall_material.clone()),
+                Transform::from_xyz(x, config::GRID_SPACING * 0.5, z)
+                    .with_scale(Vec3::splat(config::GRID_SPACING)),
+                Visibility::Visible,
+                Pickable::IGNORE,
+            ));
+        }
+    }
+    for (index, ghost) in sim.ghosts.iter().enumerate() {
+        commands.spawn((
+            LightcycleSceneRoot,
+            GhostEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.galaga_bug_material.clone()),
+            Transform::from_xyz(ghost.x, 0.9, ghost.z).with_scale(Vec3::splat(1.5)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+    for &cell in &sim.dots {
+        let (x, z) = PacSim::center(cell);
+        commands.spawn((
+            LightcycleSceneRoot,
+            DotEntity { cell },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.snake_food_material.clone()),
+            Transform::from_xyz(x, 0.35, z).with_scale(Vec3::splat(0.55)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the pooled gem cells of a Columns well.
+fn spawn_gem_well(commands: &mut Commands, assets: &LightcycleAssets, sim: &ColumnsSim) {
+    for index in 0..config::COLUMNS_COLS * config::COLUMNS_ROWS {
+        let col = index % config::COLUMNS_COLS;
+        let row = index / config::COLUMNS_COLS;
+        let x = (col as f32 - (config::COLUMNS_COLS - 1) as f32 * 0.5) * 1.6;
+        let y = row as f32 * 1.6 - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8);
+        let colour = sim.board[index];
+        commands.spawn((
+            LightcycleSceneRoot,
+            GemEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(
+                assets.gem_materials[colour.unwrap_or(0) as usize % config::COLUMNS_GEM_COLORS]
+                    .clone(),
+            ),
+            Transform::from_xyz(x, y, 0.0).with_scale(Vec3::splat(1.5)),
+            if colour.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the pooled block cells of a Tetris board.
+fn spawn_tetris_board(commands: &mut Commands, assets: &LightcycleAssets, sim: &TetrisSim) {
+    for index in 0..config::TETRIS_COLS * config::TETRIS_ROWS {
+        let col = index % config::TETRIS_COLS;
+        let row = index / config::TETRIS_COLS;
+        let x = (col as f32 - (config::TETRIS_COLS - 1) as f32 * 0.5) * 1.2;
+        let y = row as f32 * 1.2 - (config::TETRIS_ROWS as f32 * 0.5 - 0.6);
+        let colour = sim.board[index];
+        commands.spawn((
+            LightcycleSceneRoot,
+            BlockEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.tetris_materials[colour.unwrap_or(0) as usize % 7].clone()),
+            Transform::from_xyz(x, y, 0.0).with_scale(Vec3::splat(1.15)),
+            if colour.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the pooled obstacle cubes of a Frogger highway.
+fn spawn_frogger_highway(commands: &mut Commands, assets: &LightcycleAssets, sim: &FroggerSim) {
+    let cells = sim.obstacle_cells();
+    for (index, &cell) in cells.iter().enumerate() {
+        let (x, z) = FroggerSim::center(cell);
+        commands.spawn((
+            LightcycleSceneRoot,
+            FrogObstacleEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.galaga_bug_material.clone()),
+            Transform::from_xyz(x, 0.6, z).with_scale(Vec3::splat(1.9)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the Q*bert pyramid cubes and its pooled enemies.
+fn spawn_qbert_pyramid(commands: &mut Commands, assets: &LightcycleAssets, sim: &QbertSim) {
+    for row in 0..config::QBERT_ROWS {
+        for index in 0..=row {
+            let (x, z) = QbertSim::cube_position(row, index);
+            let lit = sim.lit[QbertSim::cube_index(row, index)];
+            let y =
+                (config::QBERT_ROWS as f32 - 1.0 - row as f32) * config::QBERT_CUBE_HEIGHT * 0.5;
+            commands.spawn((
+                LightcycleSceneRoot,
+                QbertCubeEntity { row, index },
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(if lit {
+                    assets.qbert_cube_lit.clone()
+                } else {
+                    assets.qbert_cube_dim.clone()
+                }),
+                Transform::from_xyz(x, y, z).with_scale(Vec3::new(
+                    config::QBERT_CUBE_SPACING * 0.9,
+                    config::QBERT_CUBE_HEIGHT,
+                    config::QBERT_CUBE_SPACING * 0.9,
+                )),
+                Visibility::Visible,
+                Pickable::IGNORE,
+            ));
+        }
+    }
+    for (index, enemy) in sim.enemies.iter().enumerate() {
+        let (x, z) = QbertSim::cube_position(enemy.row, enemy.index);
+        let y =
+            (config::QBERT_ROWS as f32 - 1.0 - enemy.row as f32) * config::QBERT_CUBE_HEIGHT * 0.5
+                + config::QBERT_CUBE_HEIGHT * 0.8;
+        commands.spawn((
+            LightcycleSceneRoot,
+            QbertEnemyEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.qbert_enemy_material.clone()),
+            Transform::from_xyz(x, y, z).with_scale(Vec3::splat(1.4)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the Bomberman room: crates, bombs, walls and the exit marker.
+fn spawn_bomber_room(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    _meshes: &mut Assets<Mesh>,
+    sim: &BomberSim,
+) {
+    for row in 0..config::BOMBER_ROWS {
+        for col in 0..config::BOMBER_COLS {
+            let cell = (col, row);
+            let (x, z) = BomberSim::center(cell);
+            let is_border = col == 0
+                || col == config::BOMBER_COLS - 1
+                || row == 0
+                || row == config::BOMBER_ROWS - 1;
+            if is_border {
+                commands.spawn((
+                    LightcycleSceneRoot,
+                    Mesh3d(assets.unit_cube.clone()),
+                    MeshMaterial3d(assets.stealth_wall_material.clone()),
+                    Transform::from_xyz(x, 1.0, z).with_scale(Vec3::splat(2.0)),
+                    Visibility::Visible,
+                    Pickable::IGNORE,
+                ));
+            } else if sim.crates.contains(&cell) {
+                commands.spawn((
+                    LightcycleSceneRoot,
+                    BomberCrateEntity { cell },
+                    Mesh3d(assets.unit_cube.clone()),
+                    MeshMaterial3d(assets.bomber_crate_material.clone()),
+                    Transform::from_xyz(x, 0.8, z).with_scale(Vec3::splat(1.8)),
+                    Visibility::Visible,
+                    Pickable::IGNORE,
+                ));
+            }
+        }
+    }
+    let (ex, ez) = BomberSim::center(sim.exit);
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.stealth_exit_material.clone()),
+        Transform::from_xyz(ex, 0.5, ez).with_scale(Vec3::new(1.9, 0.4, 1.9)),
+        Visibility::Visible,
+        Pickable::IGNORE,
+    ));
+    for index in 0..config::BOMBER_MAX_BOMBS {
+        commands.spawn((
+            LightcycleSceneRoot,
+            BomberBombEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.bomber_bomb_material.clone()),
+            Transform::from_xyz(0.0, 0.6, 0.0),
+            Visibility::Hidden,
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Spawns the Plinko board: static pins and buckets plus pooled balls.
+fn spawn_plinko_board(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    _meshes: &mut Assets<Mesh>,
+    sim: &PlinkoSim,
+) {
+    for pin in &sim.pins {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.plinko_pin_material.clone()),
+            Transform::from_xyz(pin.x, pin.y, 0.0).with_scale(Vec3::splat(0.42)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+    for slot in 0..8 {
+        let x = (slot as f32 - 3.5) * 2.0;
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.disc_accent_materials[slot].clone()),
+            Transform::from_xyz(x, -config::PLINKO_HEIGHT * 0.5 - 1.0, 0.0)
+                .with_scale(Vec3::new(1.7, 0.4, 0.4)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+    for index in 0..config::PLINKO_BALLS {
+        commands.spawn((
+            LightcycleSceneRoot,
+            PlinkoBallEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.plinko_ball_material.clone()),
+            Transform::from_xyz(0.0, config::PLINKO_HEIGHT * 0.5, 0.0),
+            Visibility::Hidden,
             Pickable::IGNORE,
         ));
     }
@@ -1609,6 +2163,133 @@ fn spawn_stealth_room(
             Pickable::IGNORE,
         ));
     }
+}
+
+/// Spawns a river surfer course: the water ribbon that follows the sim's
+/// centreline, the rocks, the boost gates and the finish gate. The bike itself
+/// is the shared cycle, posed from the sim every frame.
+fn spawn_surfer_course(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    surfer: &SurferSim,
+) {
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(meshes.add(surfer_river_mesh(surfer))),
+        MeshMaterial3d(assets.surfer_water_material.clone()),
+        Pickable::IGNORE,
+    ));
+
+    for rock in &surfer.rocks {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.surfer_rock_material.clone()),
+            Transform::from_translation(Vec3::new(
+                rock.x,
+                config::SURFER_ROCK_HEIGHT * 0.5,
+                rock.z,
+            ))
+            .with_scale(Vec3::new(
+                rock.radius * 2.0,
+                config::SURFER_ROCK_HEIGHT,
+                rock.radius * 2.0,
+            )),
+            Pickable::IGNORE,
+        ));
+    }
+
+    for gate in &surfer.gates {
+        spawn_surfer_gate(
+            commands,
+            assets,
+            gate.x,
+            gate.z,
+            config::SURFER_GATE_SPAN,
+            config::SURFER_GATE_HEIGHT,
+            &assets.surfer_gate_material,
+        );
+    }
+
+    let finish_x = surfer.centerline(surfer.length);
+    spawn_surfer_gate(
+        commands,
+        assets,
+        finish_x,
+        surfer.length,
+        surfer.width * 0.9,
+        config::SURFER_FINISH_HEIGHT,
+        &assets.surfer_finish_material,
+    );
+}
+
+/// Two posts and a lintel framing a gate opening across the river.
+#[allow(clippy::too_many_arguments)]
+fn spawn_surfer_gate(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    x: f32,
+    z: f32,
+    span: f32,
+    height: f32,
+    material: &Handle<StandardMaterial>,
+) {
+    let post = Vec3::new(0.18, height, 0.18);
+    for side in [-1.0_f32, 1.0] {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(Vec3::new(x + side * span, height * 0.5, z))
+                .with_scale(post),
+            Pickable::IGNORE,
+        ));
+    }
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(material.clone()),
+        Transform::from_translation(Vec3::new(x, height, z)).with_scale(Vec3::new(
+            span * 2.0 + 0.36,
+            0.18,
+            0.18,
+        )),
+        Pickable::IGNORE,
+    ));
+}
+
+/// The water ribbon, tessellated along the sim's centreline so the visual
+/// banks match the gameplay banks exactly.
+fn surfer_river_mesh(surfer: &SurferSim) -> Mesh {
+    let start = -config::SURFER_RIVER_MARGIN;
+    let end = surfer.length + config::SURFER_RIVER_MARGIN;
+    let steps = ((end - start) / config::SURFER_RIVER_SAMPLE).ceil() as usize;
+    let mut positions = Vec::with_capacity((steps + 1) * 2);
+    let mut normals = Vec::with_capacity((steps + 1) * 2);
+    for step in 0..=steps {
+        let z = start + (end - start) * step as f32 / steps as f32;
+        let center = surfer.centerline(z);
+        positions.push([center - surfer.width, 0.0, z]);
+        positions.push([center + surfer.width, 0.0, z]);
+        normals.push([0.0, 1.0, 0.0]);
+        normals.push([0.0, 1.0, 0.0]);
+    }
+    let mut indices = Vec::with_capacity(steps * 6);
+    for step in 0..steps as u32 {
+        let a = step * 2;
+        let b = step * 2 + 1;
+        let c = (step + 1) * 2;
+        let d = (step + 1) * 2 + 1;
+        indices.extend_from_slice(&[a, c, b, b, c, d]);
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 /// A floor fan: a centre point, then one rim point per ray, each reaching as far
@@ -1936,6 +2617,279 @@ fn sync_asteroid_entities(
                 transform.translation = Vec3::new(beam.x, 0.35, beam.z);
                 transform.rotation = Quat::from_rotation_y(-beam.vz.atan2(beam.vx));
                 transform.scale = Vec3::new(config::ASTEROIDS_BEAM_LENGTH, 0.12, 0.12);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Places the pooled bugs and beams of a Galaga field. Dead bugs and spent
+/// beams are hidden rather than despawned, so the pool never needs to grow.
+#[allow(clippy::type_complexity)]
+fn sync_galaga_entities(
+    state: Res<LightcycleState>,
+    mut bugs: Query<
+        (&BugEntity, &mut Transform, &mut Visibility),
+        (Without<GalagaBeamEntity>, Without<CycleEntity>),
+    >,
+    mut beams: Query<
+        (&GalagaBeamEntity, &mut Transform, &mut Visibility),
+        (Without<BugEntity>, Without<CycleEntity>),
+    >,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_galaga()) else {
+        return;
+    };
+
+    for (entity, mut transform, mut visibility) in &mut bugs {
+        match sim.bugs.get(entity.index) {
+            Some(bug) if bug.alive => {
+                transform.translation = Vec3::new(bug.x, config::GALAGA_BUG_HEIGHT * 0.5, bug.z);
+                *visibility = Visibility::Visible;
+            }
+            _ => *visibility = Visibility::Hidden,
+        }
+    }
+
+    for (entity, mut transform, mut visibility) in &mut beams {
+        match sim.beams.get(entity.index) {
+            Some(beam) => {
+                transform.translation = Vec3::new(beam.x, 0.35, beam.z);
+                transform.scale = Vec3::new(0.12, 0.12, config::GALAGA_BEAM_LENGTH);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Places the pooled dots and ghosts of a Pac-Man maze.
+#[allow(clippy::type_complexity)]
+fn sync_pacman_entities(
+    state: Res<LightcycleState>,
+    mut dots: Query<(&DotEntity, &mut Visibility), (Without<GhostEntity>, Without<CycleEntity>)>,
+    mut ghosts: Query<
+        (&GhostEntity, &mut Transform, &mut Visibility),
+        (Without<DotEntity>, Without<CycleEntity>),
+    >,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_pacman()) else {
+        return;
+    };
+    for (entity, mut visibility) in &mut dots {
+        *visibility = if sim.dots.contains(&entity.cell) {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (entity, mut transform, mut visibility) in &mut ghosts {
+        match sim.ghosts.get(entity.index) {
+            Some(ghost) => {
+                transform.translation = Vec3::new(ghost.x, 0.9, ghost.z);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Places the pooled gem cells of a Columns well.
+#[allow(clippy::type_complexity)]
+fn sync_columns_entities(
+    state: Res<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut gems: Query<
+        (
+            &GemEntity,
+            &mut Transform,
+            &mut Visibility,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        Without<CycleEntity>,
+    >,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_columns()) else {
+        return;
+    };
+    for (entity, mut transform, mut visibility, mut material) in &mut gems {
+        match sim.board.get(entity.index) {
+            Some(Some(colour)) => {
+                let col = entity.index % config::COLUMNS_COLS;
+                let row = entity.index / config::COLUMNS_COLS;
+                transform.translation = Vec3::new(
+                    (col as f32 - (config::COLUMNS_COLS - 1) as f32 * 0.5) * 1.6,
+                    row as f32 * 1.6 - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8),
+                    0.0,
+                );
+                material.0 =
+                    assets.gem_materials[*colour as usize % config::COLUMNS_GEM_COLORS].clone();
+                *visibility = Visibility::Visible;
+            }
+            _ => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Places the pooled block cells of a Tetris board.
+#[allow(clippy::type_complexity)]
+fn sync_tetris_entities(
+    state: Res<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut blocks: Query<
+        (
+            &BlockEntity,
+            &mut Transform,
+            &mut Visibility,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        Without<CycleEntity>,
+    >,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_tetris()) else {
+        return;
+    };
+    for (entity, mut transform, mut visibility, mut material) in &mut blocks {
+        match sim.board.get(entity.index) {
+            Some(Some(colour)) => {
+                let col = entity.index % config::TETRIS_COLS;
+                let row = entity.index / config::TETRIS_COLS;
+                transform.translation = Vec3::new(
+                    (col as f32 - (config::TETRIS_COLS - 1) as f32 * 0.5) * 1.2,
+                    row as f32 * 1.2 - (config::TETRIS_ROWS as f32 * 0.5 - 0.6),
+                    0.0,
+                );
+                material.0 = assets.tetris_materials[*colour as usize % 7].clone();
+                *visibility = Visibility::Visible;
+            }
+            _ => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Places the pooled obstacle cubes of a Frogger highway.
+#[allow(clippy::type_complexity)]
+fn sync_frogger_entities(
+    state: Res<LightcycleState>,
+    mut obstacles: Query<
+        (&FrogObstacleEntity, &mut Transform, &mut Visibility),
+        Without<CycleEntity>,
+    >,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_frogger()) else {
+        return;
+    };
+    let cells = sim.obstacle_cells();
+    for (entity, mut transform, mut visibility) in &mut obstacles {
+        match cells.get(entity.index) {
+            Some(&cell) => {
+                let (x, z) = FroggerSim::center(cell);
+                transform.translation = Vec3::new(x, 0.6, z);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Relights Q*bert cubes and places the pooled enemies.
+#[allow(clippy::type_complexity)]
+fn sync_qbert_entities(
+    state: Res<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut cubes: Query<
+        (
+            &QbertCubeEntity,
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        Without<QbertEnemyEntity>,
+    >,
+    mut enemies: Query<
+        (&QbertEnemyEntity, &mut Transform, &mut Visibility),
+        Without<QbertCubeEntity>,
+    >,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_qbert()) else {
+        return;
+    };
+    for (entity, mut transform, mut material) in &mut cubes {
+        let lit = sim.lit.get(QbertSim::cube_index(entity.row, entity.index));
+        let (x, z) = QbertSim::cube_position(entity.row, entity.index);
+        let y =
+            (config::QBERT_ROWS as f32 - 1.0 - entity.row as f32) * config::QBERT_CUBE_HEIGHT * 0.5;
+        transform.translation = Vec3::new(x, y, z);
+        material.0 = if lit == Some(&true) {
+            assets.qbert_cube_lit.clone()
+        } else {
+            assets.qbert_cube_dim.clone()
+        };
+    }
+    for (entity, mut transform, mut visibility) in &mut enemies {
+        match sim.enemies.get(entity.index) {
+            Some(enemy) => {
+                let (x, z) = QbertSim::cube_position(enemy.row, enemy.index);
+                let y = (config::QBERT_ROWS as f32 - 1.0 - enemy.row as f32)
+                    * config::QBERT_CUBE_HEIGHT
+                    * 0.5
+                    + config::QBERT_CUBE_HEIGHT * 0.8;
+                transform.translation = Vec3::new(x, y, z);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Places the pooled crates and bombs of a Bomberman room.
+#[allow(clippy::type_complexity)]
+fn sync_bomberman_entities(
+    state: Res<LightcycleState>,
+    mut crates: Query<
+        (&BomberCrateEntity, &mut Visibility),
+        (Without<BomberBombEntity>, Without<CycleEntity>),
+    >,
+    mut bombs: Query<
+        (&BomberBombEntity, &mut Transform, &mut Visibility),
+        (Without<BomberCrateEntity>, Without<CycleEntity>),
+    >,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_bomberman()) else {
+        return;
+    };
+    for (entity, mut visibility) in &mut crates {
+        *visibility = if sim.crates.contains(&entity.cell) {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (entity, mut transform, mut visibility) in &mut bombs {
+        match sim.bombs.get(entity.index) {
+            Some(bomb) => {
+                let (x, z) = BomberSim::center(bomb.cell);
+                transform.translation = Vec3::new(x, 0.6, z);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Places the pooled balls of a Plinko board.
+#[allow(clippy::type_complexity)]
+fn sync_plinko_entities(
+    state: Res<LightcycleState>,
+    mut balls: Query<(&PlinkoBallEntity, &mut Transform, &mut Visibility), Without<CycleEntity>>,
+) {
+    let Some(sim) = state.run.as_ref().and_then(|run| run.source_plinko()) else {
+        return;
+    };
+    for (entity, mut transform, mut visibility) in &mut balls {
+        match sim.balls.get(entity.index) {
+            Some(ball) => {
+                transform.translation = Vec3::new(ball.x, ball.y, 0.0);
                 *visibility = Visibility::Visible;
             }
             None => *visibility = Visibility::Hidden,
@@ -3490,9 +4444,18 @@ fn read_lightcycle_input(
     // other pair is needed here.
     let move_z = i32::from(keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown))
         - i32::from(keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp));
+    // Hop inputs for the arcade block: one cell per tap, like Frogger and
+    // Q*bert need.
+    let hop_z = i32::from(keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp))
+        - i32::from(keys.just_pressed(KeyCode::KeyS) || keys.just_pressed(KeyCode::ArrowDown));
     // Steering is continuous: the asteroid field pivots while the key is held.
     let steer = i32::from(keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight))
         - i32::from(keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft));
+    // The surfer's throttle is always open; boost is held, on the same keys
+    // that would otherwise walk or jump.
+    let boost = keys.pressed(KeyCode::Space)
+        || keys.pressed(KeyCode::KeyW)
+        || keys.pressed(KeyCode::ArrowUp);
     // Bullet time: hold Shift to slow the ring while lining up a turn or shot.
     state.slow_motion = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
@@ -3511,7 +4474,20 @@ fn read_lightcycle_input(
     let drives_grid = match run.source_game() {
         Some(SourceGame::DiscWars | SourceGame::Snake) | None => true,
         Some(SourceGame::Asteroids) => !field_active,
-        Some(SourceGame::Platformer | SourceGame::Breaker | SourceGame::Stealth) => false,
+        Some(
+            SourceGame::Platformer
+            | SourceGame::Breaker
+            | SourceGame::Stealth
+            | SourceGame::RiverSurfer
+            | SourceGame::Galaga
+            | SourceGame::PacMan
+            | SourceGame::Columns
+            | SourceGame::Tetris
+            | SourceGame::Frogger
+            | SourceGame::Qbert
+            | SourceGame::Bomberman
+            | SourceGame::Plinko,
+        ) => false,
     };
     if drives_grid && run.sim.phase == RunPhase::Running && (left || right) {
         run.sim.queue_turn_input(left, right);
@@ -3541,6 +4517,47 @@ fn read_lightcycle_input(
         } else if let Some(room) = run.source_stealth_mut() {
             // Hold a direction to keep walking it; let go to stop.
             room.set_input(steer, move_z);
+        } else if let Some(surfer) = run.source_surfer_mut() {
+            // Steer the hoverbike; the throttle is always open and boost is held.
+            surfer.set_input(steer as f32, boost);
+        } else if let Some(sim) = run.source_galaga_mut() {
+            // Slide along the bottom; Space or click fires upward.
+            sim.set_input(steer as f32, throw);
+        } else if let Some(sim) = run.source_pacman_mut() {
+            // Hold a direction to keep walking the corridor.
+            sim.set_input(steer, -move_z);
+        } else if let Some(sim) = run.source_columns_mut() {
+            // A/D slides the piece, W rotates, Space hard-drops.
+            sim.set_input(i32::from(right) - i32::from(left), hop_z > 0, throw);
+        } else if let Some(sim) = run.source_tetris_mut() {
+            // A/D slides, W rotates, S soft-drops, Space hard-drops.
+            sim.set_input(
+                i32::from(right) - i32::from(left),
+                hop_z > 0,
+                move_z < 0,
+                throw,
+            );
+        } else if let Some(sim) = run.source_frogger_mut() {
+            // One hop per keypress in any of the four directions.
+            sim.hop(i32::from(right) - i32::from(left), hop_z);
+        } else if let Some(sim) = run.source_qbert_mut() {
+            // Diagonal hops: A/D/W/S each map to a pyramid direction.
+            sim.hop(i32::from(right) - i32::from(left), hop_z);
+        } else if let Some(sim) = run.source_bomberman_mut() {
+            // Walk on the room grid and plant bombs with Space or click.
+            if (steer != 0 || move_z != 0) && sim.phase == BomberPhase::Walking {
+                sim.step(steer, -move_z);
+            }
+            if throw {
+                sim.plant();
+            }
+        } else if let Some(sim) = run.source_plinko_mut() {
+            // Slide the rail and drop balls with Space or click.
+            let slide = sim.aim + steer as f32 * 6.0;
+            sim.set_aim(slide);
+            if throw {
+                sim.drop_ball();
+            }
         } else if run.source_game() == Some(SourceGame::DiscWars) {
             // Disc wars: throw and recall. The cycle's movement is unchanged.
             let snapshot = PlayerSnapshot {
@@ -3626,6 +4643,15 @@ fn restart_run(run: &mut ActiveRun) {
                 SourceSim::Platformer(level) => level.restart(),
                 SourceSim::Breaker(level) => level.restart(),
                 SourceSim::Stealth(room) => room.restart(),
+                SourceSim::Surfer(surfer) => surfer.restart(),
+                SourceSim::Galaga(sim) => sim.restart(),
+                SourceSim::PacMan(sim) => sim.restart(),
+                SourceSim::Columns(sim) => sim.restart(),
+                SourceSim::Tetris(sim) => sim.restart(),
+                SourceSim::Frogger(sim) => sim.restart(),
+                SourceSim::Qbert(sim) => sim.restart(),
+                SourceSim::Bomberman(sim) => sim.restart(),
+                SourceSim::Plinko(sim) => sim.restart(),
             }
         }
     }
@@ -3781,9 +4807,18 @@ fn step_lightcycle(
                     }
                     // The off-grid games drive their own sims, so the shared
                     // grid has nothing to advance.
-                    SourceSim::Platformer(_) | SourceSim::Breaker(_) | SourceSim::Stealth(_) => {
-                        StepOutcome::Moved
-                    }
+                    SourceSim::Platformer(_)
+                    | SourceSim::Breaker(_)
+                    | SourceSim::Stealth(_)
+                    | SourceSim::Surfer(_)
+                    | SourceSim::Galaga(_)
+                    | SourceSim::PacMan(_)
+                    | SourceSim::Columns(_)
+                    | SourceSim::Tetris(_)
+                    | SourceSim::Frogger(_)
+                    | SourceSim::Qbert(_)
+                    | SourceSim::Bomberman(_)
+                    | SourceSim::Plinko(_) => StepOutcome::Moved,
                     SourceSim::DiscWars(disc) => {
                         // The opponent's body and its live disc are lethal cells
                         // in the same grid model the cycle already uses.
@@ -3926,6 +4961,15 @@ fn step_lightcycle(
                 Some(SourceGame::Platformer) => step_platformer(&mut run, step, &mut effects),
                 Some(SourceGame::Breaker) => step_breaker(&mut run, step, &mut effects),
                 Some(SourceGame::Stealth) => step_stealth(&mut run, step, &mut effects),
+                Some(SourceGame::RiverSurfer) => step_surfer(&mut run, step, &mut effects),
+                Some(SourceGame::Galaga) => step_galaga(&mut run, step, &mut effects),
+                Some(SourceGame::PacMan) => step_pacman(&mut run, step, &mut effects),
+                Some(SourceGame::Columns) => step_columns(&mut run, step, &mut effects),
+                Some(SourceGame::Tetris) => step_tetris(&mut run, step, &mut effects),
+                Some(SourceGame::Frogger) => step_frogger(&mut run, step, &mut effects),
+                Some(SourceGame::Qbert) => step_qbert(&mut run, step, &mut effects),
+                Some(SourceGame::Bomberman) => step_bomberman(&mut run, step, &mut effects),
+                Some(SourceGame::Plinko) => step_plinko(&mut run, step, &mut effects),
                 Some(SourceGame::DiscWars) => {
                     step_disc_fight(&mut run, step, &mut effects);
                     false
@@ -4091,6 +5135,224 @@ fn step_stealth(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicS
         crash_source(run, "a patrol", effects);
     }
     events.escaped
+}
+
+/// Steps a river surfer run. Returns `true` when the bike crosses the finish.
+fn step_surfer(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, crashed) = {
+        let Some(surfer) = run.source_surfer_mut() else {
+            return false;
+        };
+        let events = surfer.update(dt);
+        (events, surfer.phase == SurferPhase::Crashed)
+    };
+    if events.boosted {
+        effects.write(MusicSfx::Beam);
+    }
+    if events.finished {
+        effects.write(MusicSfx::Victory);
+    }
+    if crashed {
+        let label = if events.banked {
+            "the riverbank"
+        } else {
+            "a rock in the river"
+        };
+        crash_source(run, label, effects);
+    }
+    events.finished
+}
+
+/// Steps a Galaga field. Returns `true` when the formation is cleared, which
+/// hands the run back to the directory.
+fn step_galaga(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, lost) = {
+        let Some(sim) = run.source_galaga_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == GalagaPhase::Lost)
+    };
+    if events.fired {
+        effects.write(MusicSfx::Beam);
+    }
+    for _ in 0..events.killed {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.lost_life {
+        effects.write(MusicSfx::Crash);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if lost {
+        let label = if events.overrun {
+            "the swarm reached the cycle"
+        } else {
+            "the swarm"
+        };
+        crash_source(run, label, effects);
+    }
+    events.cleared
+}
+
+/// Steps a Pac-Man maze. Returns `true` when every dot is eaten.
+fn step_pacman(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, caught) = {
+        let Some(sim) = run.source_pacman_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == PacPhase::Caught)
+    };
+    if events.dots > 0 {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.lost_life {
+        effects.write(MusicSfx::Crash);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if caught {
+        crash_source(run, "a ghost in the maze", effects);
+    }
+    events.cleared
+}
+
+/// Steps a Columns well. Returns `true` when the well is empty.
+fn step_columns(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, lost) = {
+        let Some(sim) = run.source_columns_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == ColumnsPhase::Lost)
+    };
+    if events.matched > 0 {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.landed {
+        effects.write(MusicSfx::Beam);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if lost {
+        crash_source(run, "the gem well", effects);
+    }
+    events.cleared
+}
+
+/// Steps a Tetris board. Returns `true` once the line target is met.
+fn step_tetris(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, lost) = {
+        let Some(sim) = run.source_tetris_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == TetrisPhase::Lost)
+    };
+    if events.lines > 0 {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.locked {
+        effects.write(MusicSfx::Beam);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if lost {
+        crash_source(run, "the stack of indentation", effects);
+    }
+    events.cleared
+}
+
+/// Steps a Frogger highway. Returns `true` when the far row is reached.
+fn step_frogger(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, splatted) = {
+        let Some(sim) = run.source_frogger_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == FroggerPhase::Splatted)
+    };
+    if events.splatted {
+        effects.write(MusicSfx::Crash);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if splatted {
+        crash_source(run, "the async highway", effects);
+    }
+    events.cleared
+}
+
+/// Steps a Q*bert pyramid. Returns `true` once every cube is lit.
+fn step_qbert(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, lost) = {
+        let Some(sim) = run.source_qbert_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == QbertPhase::Lost)
+    };
+    if events.lost_life {
+        effects.write(MusicSfx::Crash);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if lost {
+        crash_source(run, "the pyramid edge", effects);
+    }
+    events.cleared
+}
+
+/// Steps a Bomberman room. Returns `true` once the exit is reached.
+fn step_bomberman(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, lost) = {
+        let Some(sim) = run.source_bomberman_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == BomberPhase::Lost)
+    };
+    if events.crates > 0 {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.lost_life {
+        effects.write(MusicSfx::Crash);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if lost {
+        crash_source(run, "your own bomb", effects);
+    }
+    events.cleared
+}
+
+/// Steps a Plinko board. Returns `true` when the rack beats the target.
+fn step_plinko(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, lost) = {
+        let Some(sim) = run.source_plinko_mut() else {
+            return false;
+        };
+        let events = sim.update(dt);
+        (events, sim.phase == PlinkoPhase::Lost)
+    };
+    if events.scored > 0 {
+        effects.write(MusicSfx::Beam);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    if lost {
+        crash_source(run, "the data", effects);
+    }
+    events.cleared
 }
 
 /// Ends a source run through the shared crash path, so the burst, the shake, the
@@ -4926,6 +6188,75 @@ fn update_cycle_transform(
     }
     transform.scale = Vec3::ONE;
 
+    // The surfer rides the shared bike as a hovercraft over the river, bobbing
+    // with the waves and leaning into the steering heading.
+    if let Some(surfer) = run.source_surfer() {
+        transform.translation = Vec3::new(surfer.x, surfer.height, surfer.z);
+        transform.rotation = Quat::from_rotation_arc(
+            Vec3::X,
+            Vec3::new(surfer.heading.cos(), 0.0, surfer.heading.sin()),
+        );
+        return;
+    }
+
+    // The Galaga field parks the bike on the bottom edge, facing up the field,
+    // and slides it side to side.
+    if let Some(sim) = run.source_galaga() {
+        transform.translation = Vec3::new(sim.player_x, 0.0, config::GALAGA_PLAYER_Z);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Z);
+        return;
+    }
+
+    // Pac-Man rides the maze corridors.
+    if let Some(sim) = run.source_pacman() {
+        transform.translation = Vec3::new(sim.x, 0.7, sim.z);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Z);
+        return;
+    }
+
+    // Columns and Tetris park the bike at the foot of the well; Plinko parks
+    // it on the top rail.
+    if run.source_columns().is_some() {
+        transform.translation = Vec3::new(0.0, 0.0, 3.0);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Y);
+        return;
+    }
+    if run.source_tetris().is_some() {
+        transform.translation = Vec3::new(0.0, 0.0, 4.0);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Y);
+        return;
+    }
+    if let Some(sim) = run.source_plinko() {
+        transform.translation = Vec3::new(sim.aim, config::PLINKO_HEIGHT * 0.5 - 1.0, 1.5);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Y);
+        return;
+    }
+
+    // Frogger and Bomberman walk the cycle on their X/Z grids.
+    if let Some(sim) = run.source_frogger() {
+        let (x, z) = FroggerSim::center(sim.cell);
+        transform.translation = Vec3::new(x, 0.7, z);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Z);
+        return;
+    }
+    if let Some(sim) = run.source_bomberman() {
+        let (x, z) = BomberSim::center(sim.cell);
+        transform.translation = Vec3::new(x, 0.7, z);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Z);
+        return;
+    }
+
+    // Q*bert perches the bike on its current cube.
+    if let Some(sim) = run.source_qbert() {
+        let (x, z) = QbertSim::cube_position(sim.row, sim.index);
+        let y =
+            (config::QBERT_ROWS as f32 - 1.0 - sim.row as f32) * config::QBERT_CUBE_HEIGHT * 0.5
+                + config::QBERT_CUBE_HEIGHT * 0.6;
+        transform.translation = Vec3::new(x, y, z);
+        transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Z);
+        return;
+    }
+
     let pose = cycle_cell_pose(&run.sim);
     transform.translation = pose_world_position(&pose);
     // A parked cycle pivots on the spot: its facing is the field's aim angle,
@@ -4988,6 +6319,21 @@ fn chase_rig_radius() -> f32 {
     .length()
 }
 
+/// The river surfer's chase rig: lower and closer than the street rig, so the
+/// water and the gates read as a course rather than a flyover. Same free-look
+/// orbit, same pitch clamps.
+fn surfer_camera_rig(forward: Vec3, look: Vec2) -> (Vec3, Vec3) {
+    let view_forward = Quat::from_rotation_y(look.x) * forward;
+    let pitch = (config::SURFER_CAMERA_HEIGHT.atan2(config::SURFER_CAMERA_DISTANCE) + look.y)
+        .clamp(
+            config::LIGHTCYCLE_CAMERA_MIN_PITCH,
+            config::LIGHTCYCLE_CAMERA_MAX_PITCH,
+        );
+    let radius = Vec2::new(config::SURFER_CAMERA_DISTANCE, config::SURFER_CAMERA_HEIGHT).length();
+    let offset = Vec3::Y * (radius * pitch.sin()) - view_forward * (radius * pitch.cos());
+    (offset, view_forward)
+}
+
 /// Facing, in radians, for a grid heading, matching the field's aim convention
 /// (`0` is `+X`, growing toward `+Z`).
 fn heading_facing(heading: Heading) -> f32 {
@@ -5025,6 +6371,88 @@ fn field_camera_focus(run: &ActiveRun) -> Option<(Vec3, f32)> {
     }
     let sim = run.source_asteroids()?;
     Some((Vec3::new(sim.center.0, 0.0, sim.center.1), sim.radius))
+}
+
+/// One wall-hug camera pose: where the camera stands and what it looks at, both
+/// as offsets from the character's cell centre, plus the camera height.
+struct HugShot {
+    offset: Vec3,
+    look: Vec3,
+    height: f32,
+}
+
+/// Picks the wall-hug camera pose for a character with its back to a wall.
+///
+/// The camera is treated as an imaginary second figure standing off the wall
+/// and looking back at the real one. Standing past the corner on the open side
+/// and aiming back across it is what keeps every element of the shot in frame
+/// at once: the character sits on one side, the wall he is hugging runs across
+/// the middle as a low edge, and the corner with the corridor around it opens
+/// on the other side.
+///
+/// When the wall runs on without a corner in reach, the camera trails the
+/// character instead and looks down the corridor ahead of him.
+fn hug_camera_shot(room: &StealthSim) -> Option<HugShot> {
+    let wall = room.hug?;
+    let across = room.peek?;
+    let (px, pz) = unit_of(across);
+    let (wx, wz) = unit_of(wall);
+    let spacing = config::GRID_SPACING;
+
+    // Follow the wall toward the peek until it ends. `run` counts the solid
+    // wall cells passed, so the first open cell behind the wall's end is
+    // `run * spacing` along the wall from the character.
+    let mut cell = room.character;
+    let mut run = 0;
+    while run < config::STEALTH_PEEK_STEPS && room.is_solid(step_cell(cell, wall)) {
+        cell = step_cell(cell, across);
+        run += 1;
+    }
+
+    if run <= config::STEALTH_HUG_CORNER_STEPS {
+        // A reachable corner: stand past it and out from the hugged face. The
+        // farther the corner is, the farther out the camera has to stand for
+        // the corner and the corridor behind it to stay inside the frame.
+        let gap = run as f32 * spacing;
+        let out = config::STEALTH_HUG_CAMERA_OUT
+            + run.saturating_sub(1) as f32 * config::STEALTH_HUG_CAMERA_OUT_STEP;
+        let offset = Vec3::new(
+            px * (gap + config::STEALTH_HUG_CAMERA_PAST) - wx * out,
+            0.0,
+            pz * (gap + config::STEALTH_HUG_CAMERA_PAST) - wz * out,
+        );
+        // Aim at the wall-top corner halfway to the gap cell centre: the
+        // character is then on one side of the view and the corridor around
+        // the corner on the other.
+        let look = Vec3::new(
+            (px * gap + wx * spacing) * 0.5,
+            config::STEALTH_WALL_HEIGHT,
+            (pz * gap + wz * spacing) * 0.5,
+        );
+        Some(HugShot {
+            offset,
+            look,
+            height: config::STEALTH_HUG_CAMERA_HEIGHT,
+        })
+    } else {
+        // No corner in reach: trail the character along the wall and look down
+        // the corridor ahead, with the wall beside him sharing the frame.
+        let offset = Vec3::new(
+            -px * config::STEALTH_HUG_CAMERA_BACK - wx * config::STEALTH_HUG_CAMERA_OUT,
+            0.0,
+            -pz * config::STEALTH_HUG_CAMERA_BACK - wz * config::STEALTH_HUG_CAMERA_OUT,
+        );
+        let look = Vec3::new(
+            px * config::STEALTH_HUG_CAMERA_AIM,
+            config::STEALTH_CAMERA_LOOK,
+            pz * config::STEALTH_HUG_CAMERA_AIM,
+        );
+        Some(HugShot {
+            offset,
+            look,
+            height: config::STEALTH_HUG_CAMERA_HEIGHT,
+        })
+    }
 }
 
 // A Bevy system: the queries are the reason for both of these, and folding them
@@ -5100,34 +6528,13 @@ fn update_chase_camera(
         // Where the view should sit, and what it should look at, both as offsets
         // from the figure.
         //
-        // Backed against a wall, the camera goes to the corner and looks back down
-        // the hallway at the figure.
-        //
-        // Every other placement fails the same way. Cover is taller than the
-        // camera, so from behind the figure the wall hides the corner; and from
-        // past the corner looking onward, the figure leaves the frame. Looking back
-        // from the corner keeps both, and puts the corner opening in the foreground.
-        let (want_x, want_z, want_height, look) = match (room.hug, room.peek) {
-            (Some(wall), Some(across)) => {
-                let (px, pz) = unit_of(across);
-                let (wx, wz) = unit_of(wall);
-                let mut cell = room.character;
-                let mut run = 0;
-                while room.is_solid(step_cell(cell, across)) && run < config::STEALTH_PEEK_STEPS {
-                    cell = step_cell(cell, across);
-                    run += 1;
-                }
-                let along = (run as f32 * config::GRID_SPACING + config::STEALTH_HUG_CAMERA_PAST)
-                    .min(config::STEALTH_HUG_CAMERA_MAX);
-                let out = config::STEALTH_HUG_CAMERA_OUT;
-                let (want_x, want_z) = (px * along - wx * out, pz * along - wz * out);
-                // Aimed past the figure and back down the hallway, so he sits on
-                // one side of the frame with the hallway running away behind him.
-                let past = config::STEALTH_HUG_CAMERA_AIM;
-                let look = Vec3::new(-px * past, config::STEALTH_CAMERA_LOOK, -pz * past);
-                (want_x, want_z, config::STEALTH_HUG_CAMERA_HEIGHT, look)
-            }
-            _ => (
+        // Backed against a wall, the pose comes from [`hug_camera_shot`]: the
+        // camera acts like an imaginary second figure standing off the wall and
+        // looking back at the real one, so the figure, the wall he is hugging,
+        // the corner and the corridor around it all share the frame.
+        let (want_x, want_z, want_height, look) = match hug_camera_shot(room) {
+            Some(shot) => (shot.offset.x, shot.offset.z, shot.height, shot.look),
+            None => (
                 0.0,
                 config::STEALTH_CAMERA_DISTANCE,
                 config::STEALTH_CAMERA_HEIGHT,
@@ -5162,6 +6569,83 @@ fn update_chase_camera(
         return;
     }
 
+    // The Galaga field is played from above too: the whole formation stays in
+    // frame while the cycle slides along the bottom.
+    if state
+        .run
+        .as_ref()
+        .and_then(|run| run.source_galaga())
+        .is_some()
+    {
+        let center = Vec3::ZERO;
+        let height = config::GALAGA_CAMERA_HEIGHT;
+        // Lean the camera in from -Z so the cycle (parked at -Z) sits at the
+        // bottom of the screen and the formation hangs above it.
+        camera.translation = center + Vec3::new(0.0, height, -height * config::GALAGA_CAMERA_LEAN);
+        camera.look_at(center, Vec3::Y);
+        return;
+    }
+
+    // The arcade block: each game gets a small fixed camera tailored to its
+    // board, independent of the parked cycle.
+    if let Some(game) = state.run.as_ref().and_then(|run| run.source_game()) {
+        let (translation, target) = match game {
+            SourceGame::PacMan => (
+                Vec3::new(
+                    0.0,
+                    config::PAC_CAMERA_HEIGHT,
+                    -config::PAC_CAMERA_HEIGHT * config::PAC_CAMERA_LEAN,
+                ),
+                Vec3::ZERO,
+            ),
+            SourceGame::Frogger => (
+                Vec3::new(
+                    0.0,
+                    config::FROGGER_CAMERA_HEIGHT,
+                    -config::FROGGER_CAMERA_HEIGHT * config::FROGGER_CAMERA_LEAN,
+                ),
+                Vec3::ZERO,
+            ),
+            SourceGame::Qbert => (
+                Vec3::new(
+                    0.0,
+                    config::QBERT_CAMERA_HEIGHT,
+                    -config::QBERT_CAMERA_HEIGHT * config::QBERT_CAMERA_LEAN,
+                ),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            SourceGame::Bomberman => (
+                Vec3::new(
+                    0.0,
+                    config::BOMBER_CAMERA_HEIGHT,
+                    -config::BOMBER_CAMERA_HEIGHT * config::BOMBER_CAMERA_LEAN,
+                ),
+                Vec3::ZERO,
+            ),
+            SourceGame::Columns => (
+                Vec3::new(
+                    0.0,
+                    config::COLUMNS_ROWS as f32 * 0.6,
+                    config::COLUMNS_CAMERA_BACK,
+                ),
+                Vec3::new(0.0, config::COLUMNS_ROWS as f32 * 0.6, 0.0),
+            ),
+            SourceGame::Tetris => (
+                Vec3::new(
+                    0.0,
+                    config::TETRIS_ROWS as f32 * 0.4,
+                    config::TETRIS_CAMERA_BACK,
+                ),
+                Vec3::new(0.0, config::TETRIS_ROWS as f32 * 0.4, 0.0),
+            ),
+            SourceGame::Plinko => (Vec3::new(0.0, 0.0, config::PLINKO_CAMERA_BACK), Vec3::ZERO),
+            _ => return,
+        };
+        camera.translation = translation;
+        camera.look_at(target, Vec3::Y);
+        return;
+    }
+
     let travel = cycle.rotation * Vec3::X;
     chase.forward = advance_chase_forward(
         chase.forward,
@@ -5178,8 +6662,22 @@ fn update_chase_camera(
     }
 
     let cycle_pos = cycle.translation;
-    let (offset, view_forward) = chase_camera_rig(chase.forward, chase.look);
-    let look_target = cycle_pos + view_forward * config::LIGHTCYCLE_CAMERA_LOOKAHEAD;
+    let surfing = state
+        .run
+        .as_ref()
+        .and_then(|run| run.source_surfer())
+        .is_some();
+    let (offset, view_forward) = if surfing {
+        surfer_camera_rig(chase.forward, chase.look)
+    } else {
+        chase_camera_rig(chase.forward, chase.look)
+    };
+    let lookahead = if surfing {
+        config::SURFER_CAMERA_LOOKAHEAD
+    } else {
+        config::LIGHTCYCLE_CAMERA_LOOKAHEAD
+    };
+    let look_target = cycle_pos + view_forward * lookahead;
     let mut camera_position = cycle_pos + offset;
 
     if let Some(fx) = state.crash_fx.as_ref() {
@@ -5201,14 +6699,15 @@ mod tests {
         chase_camera_rig, chase_rig_radius, city_base_trim_mesh, city_body_height, city_body_mesh,
         city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
-        glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing, nearest_heading,
-        pose_forward, pose_rotation, pose_world_position, rail_segments, road_marking_mesh,
-        trail_centerline, trail_heights, trim_polyline_end, wrap_angle,
+        glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing, hug_camera_shot,
+        nearest_heading, pose_forward, pose_rotation, pose_world_position, rail_segments,
+        road_marking_mesh, trail_centerline, trail_heights, trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
         CityStructure, CityStructureKind, CityTheme, Heading, LightcycleSim, Turn,
     };
+    use crate::stealth::StealthSim;
     use bevy::camera::primitives::MeshAabb;
     use bevy::prelude::{Vec2, Vec3};
     use std::collections::BTreeSet;
@@ -5237,6 +6736,111 @@ mod tests {
             accent: 0,
             pulse_phase: 0,
         }
+    }
+
+    /// The horizontal view a camera must keep its subjects inside. Half a
+    /// frame at the narrowest aspect the stealth run has to survive.
+    const HUG_SHOT_HALF_VIEW: f32 = 30.0 * std::f32::consts::PI / 180.0;
+
+    /// Ground-plane angle from `from` to `to`, in radians.
+    fn horizontal_angle(from: Vec3, to: Vec3) -> f32 {
+        let d = to - from;
+        d.z.atan2(d.x)
+    }
+
+    /// A room whose character hugs an east wall made of `wall_cells`.
+    fn hugging_room(wall_cells: &[(i32, i32)]) -> StealthSim {
+        let mut room = StealthSim::new(1);
+        room.guards.clear();
+        room.cover.clear();
+        room.character = (0, 0);
+        room.cover.extend(wall_cells.iter().copied());
+        room.hug = Some(Heading::PosX);
+        room.peek = Some(Heading::PosZ);
+        room
+    }
+
+    /// Asserts that the imaginary figure at `shot.offset` looking at `shot.look`
+    /// has every `subject` inside its view.
+    fn assert_shot_frames(shot: &super::HugShot, subjects: &[(&str, Vec3)]) {
+        let camera = shot.offset;
+        let view = horizontal_angle(shot.offset, shot.look);
+        for (label, point) in subjects {
+            let delta = wrap_angle(horizontal_angle(camera, *point) - view).abs();
+            assert!(
+                delta <= HUG_SHOT_HALF_VIEW,
+                "{label} sits {delta:.3} rad from the view centre, past the half-view \
+                 {HUG_SHOT_HALF_VIEW:.3}",
+            );
+        }
+    }
+
+    #[test]
+    fn the_wall_hug_camera_frames_everything_round_the_corner() {
+        let room = hugging_room(&[(1, 0)]);
+        let shot = hug_camera_shot(&room).expect("a hugging character gets a shot");
+        let s = config::GRID_SPACING;
+        // The five things the shot has to show at once: the figure, the wall he
+        // is hugging, the corner, around the corner, and the corridor right
+        // behind the corner.
+        assert_shot_frames(
+            &shot,
+            &[
+                ("figure", Vec3::ZERO),
+                ("hugged wall", Vec3::new(s * 0.5, 0.0, 0.0)),
+                ("corner", Vec3::new(s * 0.5, 0.0, s * 0.5)),
+                ("gap", Vec3::new(s, 0.0, s)),
+                ("corridor", Vec3::new(s * 2.0, 0.0, s)),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_corner_one_cell_on_stands_the_camera_out_farther() {
+        let room = hugging_room(&[(1, 0), (1, 1)]);
+        let shot = hug_camera_shot(&room).expect("a hugging character gets a shot");
+        let s = config::GRID_SPACING;
+        // For a wall running east of the figure, the camera's west offset is
+        // how far out it stands, and it must grow for a corner that is a cell
+        // away or the corridor behind it slips out of frame.
+        assert!(
+            -shot.offset.x > config::STEALTH_HUG_CAMERA_OUT,
+            "the camera should stand out farther than at the corner, got {:?}",
+            shot.offset
+        );
+        assert_shot_frames(
+            &shot,
+            &[
+                ("figure", Vec3::ZERO),
+                ("hugged wall", Vec3::new(s * 0.5, 0.0, 0.0)),
+                ("corner", Vec3::new(s * 0.5, 0.0, s * 1.5)),
+                ("gap", Vec3::new(s, 0.0, s * 2.0)),
+                ("corridor", Vec3::new(s * 2.0, 0.0, s * 2.0)),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_wall_that_runs_on_gets_a_corridor_shot() {
+        let room = hugging_room(&[(1, 0), (1, 1), (1, 2), (1, 3), (1, 4)]);
+        let shot = hug_camera_shot(&room).expect("a hugging character gets a shot");
+        let s = config::GRID_SPACING;
+        // No corner in reach: the camera trails the figure along the wall and
+        // looks down the corridor ahead instead of standing out to peek.
+        assert!(
+            shot.offset.z < 0.0,
+            "the camera trails the figure along the wall, got {:?}",
+            shot.offset
+        );
+        assert_shot_frames(
+            &shot,
+            &[
+                ("figure", Vec3::ZERO),
+                ("hugged wall", Vec3::new(s * 0.5, 0.0, 0.0)),
+                ("corridor ahead", Vec3::new(0.0, 0.0, s * 2.0)),
+                ("corridor around the wall", Vec3::new(s, 0.0, s * 2.0)),
+            ],
+        );
     }
 
     #[test]

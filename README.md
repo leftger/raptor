@@ -61,6 +61,23 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
   slides along the bottom and rebounds the ball at the wall of bricks
 * **Stealth** — ride into a `.sh` file to sneak the Tron runner past patrolling
   guards and their vision cones
+* **River Surfer** — ride into a `.toml` file to hover-bike down a procedural
+  river, threading boost gates to the finish without beaching on a bank or a rock
+* **Galaga** — ride into a `.json` file to slide the cycle along the bottom of
+  a fixed screen and shoot down the diving formation before it marches onto you
+* **Pac-Man** — ride into a `.go` file to eat every dot in a maze while three
+  garbage collectors chase you
+* **Columns** — ride into a `.rb` file to drop and rotate gem stacks and clear
+  three-in-a-row matches in a vertical well
+* **Tetris** — ride into a `.yaml` / `.yml` file and clear ten lines of
+  indentation blocks
+* **Frogger** — ride into a `.js` file and hop the cycle across five lanes of
+  moving code
+* **Q*bert** — ride into a `.zig` file and hop diagonally across a cube pyramid
+  to light every cube
+* **Bomberman** — ride into a `.php` file, blast the crates, and reach the exit
+* **Plinko** — ride into an `.r` file and drop balls through seeded pins to
+  beat the score target
 * **Procedural music** seeded by your folders (`N` to toggle)
 
 ## Navigation
@@ -356,6 +373,99 @@ corner never whips the view around.
   sight, so cover is cover.
 * Standing in a cone fills the detection meter in the status line. Fill it and
   you are caught; reach the door at the far side and you are out.
+
+## River Surfer
+
+`.toml` files open a **river surfer** — the lightcycle becomes a hoverbike and
+the arena becomes a river that runs the length of the file, swaying to a path
+seeded from its bytes.
+
+* The throttle is always open. `A` / `D` (or the arrows) steer; hold `Space` /
+  `W` / `Up` to boost.
+* The river banks are the only walls. Drift past one and the bike beaches;
+  hit one of the rocks sticking out of the water and the run is over. `R`
+  re-runs the same river.
+* Glowing gates float over the water. Ride through the middle of one for a
+  burst of speed.
+* The finish gate spans the river at the far end. Cross it to clear the run
+  and return to the directory, exactly like reaching the door in a platformer.
+* The camera drops low and close to the water, Jet-Moto style, so the gates
+  read as a course instead of a flyover.
+
+## Galaga
+
+`.json` files open a **Galaga field** — the classic fixed-screen formation
+shooter, played with the lightcycle parked on the bottom edge of the ring.
+
+* `A` / `D` (or the arrows) slide the cycle along the bottom; `Space` or left
+  click fires upward.
+* A grid of bugs holds formation overhead, swaying side to side and stepping
+  lower. Bugs peel off one at a time and dive at you; a diver that misses
+  loops back into its slot.
+* Top rows are worth more points. Clear the whole formation to win the field
+  and return to the directory.
+* You have three lives. A bug reaching the cycle costs one (with a short mercy
+  window), and the formation marching all the way down ends the run.
+* `R` re-deals the same formation from the file's seed.
+
+## The Arcade Block
+
+Seven more file types open seven fixed-screen arcade games. Each one is seeded
+by the file it belongs to, played with the shared lightcycle, and `R` always
+re-deals the same board.
+
+### Pac-Man (`.go`)
+
+* Hold `A` / `D` / `W` / `S` to ride the corridors. The cycle turns at cell
+  centers, so hold the next direction a little early.
+* Eat every dot in the maze. Three garbage-collector ghosts chase you; touching
+  one costs a life (with a short mercy window) and losing all three ends the
+  run.
+
+### Columns (`.rb`)
+
+* `A` / `D` slide the falling gem stack, `W` rotates its colors, `Space` or
+  left click hard-drops it.
+* Three or more matching gems in a row (any direction) clear; everything above
+  falls. Empty the well to win, or lose if a stack buries the rim.
+
+### Tetris (`.yaml` / `.yml`)
+
+* `A` / `D` slide, `W` rotates, `S` soft-drops, `Space` or left click
+  hard-drops.
+* Clear `TETRIS_TARGET_LINES` lines to win. Locking a piece above the top row
+  ends the run.
+
+### Frogger (`.js`)
+
+* One keypress hops one cell: `W` / `S` forward and back, `A` / `D` side to
+  side.
+* Cross all five lanes of moving code to reach the far side. Obstacles wrap
+  around the row; touching one spends a life and returns you to the start.
+
+### Q*bert (`.zig`)
+
+* Four keys hop the pyramid diagonally: `A` down-left, `D` down-right, `W`
+  up-left, `S` up-right.
+* Land on every cube to light it. Falling off the edge is ignored (the cycle
+  stays put); the two enemies hopping between cubes cost a life on contact.
+  Light the whole pyramid to win.
+
+### Bomberman (`.php`)
+
+* Hold `W` / `A` / `S` / `D` to walk the room. `Space` or left click plants a
+  bomb under the cycle (two at a time).
+* Blasts clear crates in a cross pattern — and clear the cycle too if it is
+  still in the way. Destroy every crate to unlock the green exit, then reach
+  it to win.
+
+### Plinko (`.r`)
+
+* Hold `A` / `D` to slide the cycle along the top rail, `Space` or left click
+  drops a ball.
+* Balls bounce through seeded pins into eight scored buckets. After the rack
+  is spent, beat the seeded target to clear the board; fall short and the run
+  crashes out.
 
 ## Procedural Music
 

@@ -502,6 +502,15 @@ pub const DISC_PYTHON_ACCENT: Color = Color::srgb(0.2, 0.85, 0.25);
 pub const DISC_SLINT_ACCENT: Color = Color::srgb(0.55, 0.45, 1.0);
 pub const DISC_LUA_ACCENT: Color = Color::srgb(0.15, 0.35, 0.95);
 pub const DISC_SHELL_ACCENT: Color = Color::srgb(0.65, 0.75, 0.2);
+pub const DISC_TOML_ACCENT: Color = Color::srgb(0.95, 0.72, 0.28);
+pub const DISC_JSON_ACCENT: Color = Color::srgb(0.95, 0.25, 0.2);
+pub const DISC_GO_ACCENT: Color = Color::srgb(0.0, 0.65, 0.75);
+pub const DISC_RUBY_ACCENT: Color = Color::srgb(0.75, 0.05, 0.35);
+pub const DISC_YAML_ACCENT: Color = Color::srgb(0.6, 0.6, 0.65);
+pub const DISC_JS_ACCENT: Color = Color::srgb(0.95, 0.85, 0.05);
+pub const DISC_ZIG_ACCENT: Color = Color::srgb(0.9, 0.45, 0.02);
+pub const DISC_PHP_ACCENT: Color = Color::srgb(0.35, 0.25, 0.75);
+pub const DISC_R_ACCENT: Color = Color::srgb(0.55, 0.85, 0.9);
 
 /// Per-language arpeggiator tint while a ring is open: Rust arpeggiates harder,
 /// Python pumps slower. Multipliers on the folder theme, which stays the seed.
@@ -512,6 +521,15 @@ pub const MUSIC_DISC_PYTHON_ARP_RATE: f32 = 0.75;
 pub const MUSIC_DISC_SLINT_ARP_RATE: f32 = 0.9;
 pub const MUSIC_DISC_LUA_ARP_RATE: f32 = 1.15;
 pub const MUSIC_DISC_SHELL_ARP_RATE: f32 = 1.35;
+pub const MUSIC_DISC_TOML_ARP_RATE: f32 = 1.05;
+pub const MUSIC_DISC_JSON_ARP_RATE: f32 = 1.3;
+pub const MUSIC_DISC_GO_ARP_RATE: f32 = 1.1;
+pub const MUSIC_DISC_RUBY_ARP_RATE: f32 = 0.9;
+pub const MUSIC_DISC_YAML_ARP_RATE: f32 = 0.8;
+pub const MUSIC_DISC_JS_ARP_RATE: f32 = 1.4;
+pub const MUSIC_DISC_ZIG_ARP_RATE: f32 = 1.25;
+pub const MUSIC_DISC_PHP_ARP_RATE: f32 = 1.2;
+pub const MUSIC_DISC_R_ARP_RATE: f32 = 0.7;
 pub const MUSIC_DISC_RUST_ARP_GAIN: f32 = 1.2;
 pub const MUSIC_DISC_C_ARP_GAIN: f32 = 1.0;
 pub const MUSIC_DISC_CPP_ARP_GAIN: f32 = 1.1;
@@ -519,6 +537,15 @@ pub const MUSIC_DISC_PYTHON_ARP_GAIN: f32 = 0.85;
 pub const MUSIC_DISC_SLINT_ARP_GAIN: f32 = 0.95;
 pub const MUSIC_DISC_LUA_ARP_GAIN: f32 = 1.05;
 pub const MUSIC_DISC_SHELL_ARP_GAIN: f32 = 0.9;
+pub const MUSIC_DISC_TOML_ARP_GAIN: f32 = 1.0;
+pub const MUSIC_DISC_JSON_ARP_GAIN: f32 = 1.05;
+pub const MUSIC_DISC_GO_ARP_GAIN: f32 = 1.0;
+pub const MUSIC_DISC_RUBY_ARP_GAIN: f32 = 0.95;
+pub const MUSIC_DISC_YAML_ARP_GAIN: f32 = 0.85;
+pub const MUSIC_DISC_JS_ARP_GAIN: f32 = 1.1;
+pub const MUSIC_DISC_ZIG_ARP_GAIN: f32 = 1.15;
+pub const MUSIC_DISC_PHP_ARP_GAIN: f32 = 1.0;
+pub const MUSIC_DISC_R_ARP_GAIN: f32 = 0.8;
 
 pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
 pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
@@ -657,30 +684,37 @@ pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
 pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
 /// Height above the character's feet that the camera aims at.
 pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
-/// The view while backed against a wall: at the corner, looking back down the
-/// hallway at the figure.
-///
-/// Everything else fails for one reason. Cover is taller than the camera, so from
-/// anywhere behind the figure the wall itself hides the corner; and from past the
-/// corner looking onward, the figure drops out of shot. Looking BACK from the
-/// corner keeps both: he is in frame, the hallway runs away behind him, and the
-/// corner opening is in the foreground.
+/// The view while backed against a wall. The camera acts like an imaginary
+/// second figure standing off the wall and looking back at the real one, so the
+/// figure, the wall he is hugging, the corner and the corridor round the corner
+/// all share the frame instead of competing for it.
 ///
 /// It is low on purpose. The tension in this shot is being down at the figure's
 /// level rather than above the room, and at this height the wall reads as an edge
 /// across the corner of the frame instead of a wall through the middle of it.
 pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 2.8;
-/// Out from the wall's face at the corner, and how far past the corner to sit. A
-/// wall's face is just over a unit from the centre of its cell, so this clears it
-/// without standing so far off that the corner leaves the frame.
+/// Out from the hugged face of the wall, in world units, when the figure is right
+/// at the corner. A wall's face is just over a unit from the centre of its cell,
+/// so this clears it without standing so far off that the corner leaves the frame.
 pub const STEALTH_HUG_CAMERA_OUT: f32 = 2.6;
+/// Each extra cell of wall between the figure and the corner pushes the camera
+/// this much farther out, so the corner and the corridor behind it stay inside
+/// the frame instead of slipping past its edge.
+pub const STEALTH_HUG_CAMERA_OUT_STEP: f32 = 2.4;
+/// How far past the end of the wall the camera sits, looking back across the
+/// corner at the figure.
 pub const STEALTH_HUG_CAMERA_PAST: f32 = 1.5;
-/// How far the camera may travel to reach a corner. Past this the figure is too
-/// small in the frame for the shot to be worth anything.
-pub const STEALTH_HUG_CAMERA_MAX: f32 = 7.0;
-/// How far beyond the figure the view aims, down the hallway he came from. This is
-/// what frames him on one side of the screen rather than in the middle.
-pub const STEALTH_HUG_CAMERA_AIM: f32 = 4.0;
+/// A corner farther than this many cells away is not worth standing out for; the
+/// camera stays beside the figure and looks down the corridor instead, which is
+/// the same shot the wall hug uses until the figure reaches the edge.
+pub const STEALTH_HUG_CORNER_STEPS: i32 = 2;
+/// For that no-corner shot: how far behind the figure, along the wall, the camera
+/// sits. Far enough that the figure and the wall beside him both sit inside the
+/// frame while the corridor ahead runs away from them.
+pub const STEALTH_HUG_CAMERA_BACK: f32 = 3.5;
+/// And how far ahead of the figure the no-corner shot aims, so the corridor he is
+/// looking down stays in the middle of the frame rather than at its edge.
+pub const STEALTH_HUG_CAMERA_AIM: f32 = 1.5;
 /// How many cells of wall to follow looking for its corner.
 pub const STEALTH_PEEK_STEPS: i32 = 4;
 /// How far the figure is pushed toward a wall it is backed against, in world
@@ -738,6 +772,224 @@ const _: () = assert!(
 pub const STEALTH_CONE_REACH: f32 = STEALTH_VISION_RANGE * GRID_SPACING;
 // A cone shorter than the figure it belongs to would look detached.
 const _: () = assert!(STEALTH_CONE_REACH > STEALTH_CHARACTER_HEIGHT);
+
+// --- River surfer (TOML files) ----------------------------------------------
+//
+// A Jet-Moto-style hoverbike run down a procedural river on the X/Z plane. The
+// course is seeded from the file, so the same TOML always opens the same river.
+
+/// Metadata-only arena half-extent for the flat arena the surfer builds on.
+pub const SURFER_HALF_EXTENT: i32 = 16;
+/// Course length per source line, in world units, clamped below.
+pub const SURFER_METRES_PER_LINE: f32 = 0.5;
+pub const SURFER_MIN_LENGTH: f32 = 150.0;
+pub const SURFER_MAX_LENGTH: f32 = 380.0;
+/// Half width of the playable river ribbon. Wide enough that a rock and a
+/// passable gap on one side of it always fit.
+pub const SURFER_HALF_WIDTH: f32 = 6.5;
+/// The centreline sways with a seeded sine of this amplitude and wavelength.
+pub const SURFER_RIVER_AMP: f32 = 8.0;
+pub const SURFER_RIVER_WAVELENGTH: f32 = 95.0;
+/// The bike always has the throttle open; boost lifts it to this.
+pub const SURFER_BASE_SPEED: f32 = 14.0;
+pub const SURFER_BOOST_SPEED: f32 = 21.0;
+/// How quickly the bike eases between base and boost speed.
+pub const SURFER_ACCEL: f32 = 3.0;
+/// Steering authority, in radians per second at full stick.
+pub const SURFER_TURN_RATE: f32 = 2.3;
+/// Bike collision radius against rocks and banks. Kept small, so a rock only
+/// bites when the visible bike actually touches it.
+pub const SURFER_BOAT_RADIUS: f32 = 0.6;
+/// Hover height over the water, plus the wave bob below.
+pub const SURFER_HOVER_HEIGHT: f32 = 0.9;
+pub const SURFER_WAVE_AMPLITUDE: f32 = 0.22;
+pub const SURFER_WAVE_RATE: f32 = 3.2;
+pub const SURFER_WAVE_SPACE: f32 = 0.12;
+/// Clear water behind the start and beyond the finish line.
+pub const SURFER_START_CLEAR: f32 = 18.0;
+pub const SURFER_FINISH_MARGIN: f32 = 20.0;
+/// Obstacles and boost gates scattered down the course. Rocks are spaced by
+/// the distance below, so the field is never denser than one rock per stretch
+/// of clear water.
+pub const SURFER_ROCK_SPACING: f32 = 17.0;
+pub const SURFER_MAX_ROCKS: usize = 12;
+pub const SURFER_ROCK_RADIUS: f32 = 1.25;
+/// Minimum clear water kept open beside every rock, wider than the bike, so
+/// there is always a line through even when the boost is held.
+pub const SURFER_ROCK_CLEAR_GAP: f32 = 1.1;
+pub const SURFER_ROCK_HEIGHT: f32 = 2.4;
+pub const SURFER_GATES: usize = 7;
+/// Half width of a gate opening; ride through the middle to claim it.
+pub const SURFER_GATE_SPAN: f32 = 4.5;
+pub const SURFER_GATE_HEIGHT: f32 = 4.0;
+pub const SURFER_FINISH_HEIGHT: f32 = 6.0;
+/// River ribbon tessellation and how far it extends past each end.
+pub const SURFER_RIVER_SAMPLE: f32 = 2.0;
+pub const SURFER_RIVER_MARGIN: f32 = 12.0;
+/// Chase camera: low and close to the water, looking down the river.
+pub const SURFER_CAMERA_DISTANCE: f32 = 9.0;
+pub const SURFER_CAMERA_HEIGHT: f32 = 1.6;
+pub const SURFER_CAMERA_LOOKAHEAD: f32 = 5.0;
+
+pub const SURFER_WATER_COLOR: Color = Color::srgba(0.07, 0.42, 0.85, 0.85);
+pub const SURFER_ROCK_COLOR: Color = Color::srgb(0.24, 0.28, 0.34);
+pub const SURFER_GATE_COLOR: Color = Color::srgb(0.1, 0.9, 1.0);
+pub const SURFER_FINISH_COLOR: Color = Color::srgb(0.55, 1.0, 0.7);
+
+// The river and its banks must fit inside the flat arena built for the run.
+const _: () =
+    assert!(SURFER_HALF_EXTENT as f32 * GRID_SPACING > SURFER_RIVER_AMP + SURFER_HALF_WIDTH + 4.0);
+
+// --- Galaga (JSON files) ----------------------------------------------------
+//
+// A classic fixed-screen formation shooter: the cycle slides along the bottom
+// and fires upward while a grid of bugs sways, steps down, and peels off to
+// dive. The field is laid out in world units on the X/Z plane, with the cycle
+// on the bottom edge facing +Z.
+
+/// Metadata-only arena half-extent for the flat arena the field builds on.
+pub const GALAGA_HALF_EXTENT: i32 = 16;
+/// Half extents of the playable field, in world units.
+pub const GALAGA_HALF_X: f32 = 15.0;
+pub const GALAGA_HALF_Z: f32 = 11.0;
+/// The cycle's fixed Z on the bottom edge.
+pub const GALAGA_PLAYER_Z: f32 = -9.0;
+pub const GALAGA_PLAYER_SPEED: f32 = 14.0;
+pub const GALAGA_PLAYER_RADIUS: f32 = 0.9;
+pub const GALAGA_LIVES: u8 = 3;
+/// Mercy window after losing a life, and the starting grace.
+pub const GALAGA_INVULN: f32 = 1.2;
+pub const GALAGA_FIRE_COOLDOWN: f32 = 0.28;
+pub const GALAGA_MAX_BEAMS: usize = 8;
+pub const GALAGA_BEAM_SPEED: f32 = 34.0;
+pub const GALAGA_BEAM_RADIUS: f32 = 0.45;
+/// How far ahead of the cycle a beam spawns.
+pub const GALAGA_BEAM_MUZZLE: f32 = 1.1;
+/// Visual length of a beam bolt.
+pub const GALAGA_BEAM_LENGTH: f32 = 1.4;
+/// The formation: a `GALAGA_ROWS` by `GALAGA_COLS` grid.
+pub const GALAGA_ROWS: usize = 4;
+pub const GALAGA_COLS: usize = 8;
+pub const GALAGA_CELL_X: f32 = 3.0;
+pub const GALAGA_CELL_Z: f32 = 2.4;
+/// Top row's starting Z, and how far the whole grid sways side to side.
+pub const GALAGA_FORMATION_TOP: f32 = 8.0;
+pub const GALAGA_FORMATION_SWAY: f32 = 4.5;
+pub const GALAGA_FORMATION_SPEED: f32 = 2.2;
+/// How far the formation steps down, and the base seconds between steps.
+pub const GALAGA_FORMATION_STEP: f32 = 0.7;
+pub const GALAGA_FORMATION_STEP_SECONDS: f32 = 4.0;
+/// Divers: speed, seconds between dives, and how sharply they track the cycle.
+pub const GALAGA_DIVE_SPEED: f32 = 12.0;
+pub const GALAGA_DIVE_COOLDOWN: f32 = 1.4;
+pub const GALAGA_DIVE_STEER: f32 = 14.0;
+pub const GALAGA_BUG_RADIUS: f32 = 1.0;
+/// Visual height of a bug body, for the pooled cube.
+pub const GALAGA_BUG_HEIGHT: f32 = 1.2;
+/// Overhead camera, framed so the whole field stays in shot.
+pub const GALAGA_CAMERA_HEIGHT: f32 = 30.0;
+pub const GALAGA_CAMERA_LEAN: f32 = 0.25;
+
+pub const GALAGA_BUG_COLOR: Color = Color::srgb(0.95, 0.2, 0.85);
+pub const GALAGA_BEAM_COLOR: Color = Color::srgb(0.3, 0.95, 1.0);
+
+// The field must fit inside the flat arena built for the run. Half-Z is the
+// smaller extent, so checking the wider X axis covers both.
+const _: () = assert!(GALAGA_HALF_EXTENT as f32 * GRID_SPACING > GALAGA_HALF_X);
+
+// --- Arcade block (Go/Ruby/YAML/JS/Zig/PHP/R files) ------------------------
+//
+// Seven fixed-screen arcade games sharing the flat arena and the parked cycle.
+// Each keeps its own world units and camera, so the constants below only need
+// to agree with the game's own sim and its spawn/sync code.
+
+pub const ARCADE_HALF_EXTENT: i32 = 16;
+
+// Pac-Man (`.go`): a maze on the X/Z grid, the cycle chased by ghosts.
+pub const PAC_COLS: i32 = 9;
+pub const PAC_ROWS: i32 = 7;
+pub const PAC_PLAYER_SPEED: f32 = 9.0;
+pub const PAC_GHOST_SPEED: f32 = 6.5;
+pub const PAC_LIVES: u8 = 3;
+pub const PAC_INVULN: f32 = 1.4;
+pub const PAC_CAMERA_HEIGHT: f32 = 26.0;
+pub const PAC_CAMERA_LEAN: f32 = 0.15;
+
+// Columns (`.rb`): falling gem stacks matched in a vertical well.
+pub const COLUMNS_COLS: usize = 6;
+pub const COLUMNS_ROWS: usize = 12;
+pub const COLUMNS_GEM_COLORS: usize = 4;
+pub const COLUMNS_FALL_SECONDS: f32 = 0.55;
+pub const COLUMNS_SEED_ROWS: usize = 4;
+pub const COLUMNS_CAMERA_BACK: f32 = 24.0;
+pub const COLUMNS_GEM_COLORS_LIST: [Color; 4] = [
+    Color::srgb(0.95, 0.2, 0.4),
+    Color::srgb(0.2, 0.85, 0.9),
+    Color::srgb(0.9, 0.85, 0.25),
+    Color::srgb(0.7, 0.3, 1.0),
+];
+
+// Tetris (`.yaml`): falling indentation blocks cleared in lines.
+pub const TETRIS_COLS: usize = 10;
+pub const TETRIS_ROWS: usize = 20;
+pub const TETRIS_TARGET_LINES: u32 = 10;
+pub const TETRIS_FALL_SECONDS: f32 = 0.5;
+pub const TETRIS_CAMERA_BACK: f32 = 26.0;
+pub const TETRIS_COLORS: [Color; 7] = [
+    Color::srgb(0.9, 0.2, 0.4),
+    Color::srgb(0.2, 0.8, 0.9),
+    Color::srgb(0.9, 0.8, 0.2),
+    Color::srgb(0.7, 0.3, 1.0),
+    Color::srgb(0.3, 0.9, 0.4),
+    Color::srgb(1.0, 0.55, 0.1),
+    Color::srgb(0.4, 0.5, 1.0),
+];
+
+// Frogger (`.js`): hop across a highway of moving code.
+pub const FROGGER_COLS: i32 = 9;
+pub const FROGGER_ROWS: i32 = 7;
+pub const FROGGER_LANES: i32 = 5;
+pub const FROGGER_LIVES: u8 = 3;
+pub const FROGGER_INVULN: f32 = 0.9;
+pub const FROGGER_CAMERA_HEIGHT: f32 = 24.0;
+pub const FROGGER_CAMERA_LEAN: f32 = 0.2;
+
+// Q*bert (`.zig`): diagonal hops that light a cube pyramid.
+pub const QBERT_ROWS: usize = 4;
+pub const QBERT_CUBE_SPACING: f32 = 2.2;
+pub const QBERT_CUBE_HEIGHT: f32 = 1.1;
+pub const QBERT_ENEMY_STEP: f32 = 0.55;
+pub const QBERT_LIVES: u8 = 3;
+pub const QBERT_INVULN: f32 = 1.2;
+pub const QBERT_CAMERA_HEIGHT: f32 = 20.0;
+pub const QBERT_CAMERA_LEAN: f32 = 0.55;
+pub const QBERT_CUBE_DIM_COLOR: Color = Color::srgb(0.25, 0.22, 0.45);
+pub const QBERT_CUBE_LIT_COLOR: Color = Color::srgb(0.2, 0.95, 0.85);
+pub const QBERT_ENEMY_COLOR: Color = Color::srgb(1.0, 0.3, 0.25);
+
+// Bomberman (`.php`): blast crates, reach the unlocked exit.
+pub const BOMBER_COLS: i32 = 11;
+pub const BOMBER_ROWS: i32 = 9;
+pub const BOMBER_CRATES: usize = 22;
+pub const BOMBER_FUSE: f32 = 1.8;
+pub const BOMBER_BLAST: i32 = 2;
+pub const BOMBER_MAX_BOMBS: usize = 2;
+pub const BOMBER_LIVES: u8 = 3;
+pub const BOMBER_INVULN: f32 = 1.2;
+pub const BOMBER_CAMERA_HEIGHT: f32 = 26.0;
+pub const BOMBER_CAMERA_LEAN: f32 = 0.2;
+pub const BOMBER_CRATE_COLOR: Color = Color::srgb(0.55, 0.35, 0.2);
+pub const BOMBER_BOMB_COLOR: Color = Color::srgb(0.15, 0.15, 0.2);
+
+// Plinko (`.r`): balls dropped through seeded pins into scored buckets.
+pub const PLINKO_WIDTH: f32 = 16.0;
+pub const PLINKO_HEIGHT: f32 = 24.0;
+pub const PLINKO_BALLS: usize = 10;
+pub const PLINKO_TARGET: u32 = 500;
+pub const PLINKO_PIN_ROWS: usize = 8;
+pub const PLINKO_CAMERA_BACK: f32 = 26.0;
+pub const PLINKO_PIN_COLOR: Color = Color::srgb(0.85, 0.9, 1.0);
+pub const PLINKO_BALL_COLOR: Color = Color::srgb(0.95, 0.75, 0.3);
 
 // --- The on-foot walk ------------------------------------------------------
 //

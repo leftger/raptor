@@ -148,7 +148,8 @@ pub struct StealthSim {
     /// The wall the player is pressing into, if any. Pressing into a solid is how
     /// a wall is hugged: the character turns to face it and stays put.
     pub hug: Option<Heading>,
-    /// The open direction along that wall, which a corner camera can look down.
+    /// The direction along that wall a corner camera should look down: the way
+    /// the player is creeping, or the side with more floor when standing still.
     pub peek: Option<Heading>,
     /// Cells walked, for the HUD.
     pub steps: usize,
@@ -410,14 +411,21 @@ impl StealthSim {
         if let Some(wall) = hugging {
             self.hug = Some(wall);
             self.heading = wall.opposite();
-            // The side with more floor: a camera looking past the corner wants the
-            // open way, and which side that is changes as the player creeps.
-            self.peek = along_wall(wall)
-                .into_iter()
-                .map(|across| (self.open_run(across), across))
-                .max_by_key(|(run, _)| *run)
-                .filter(|(run, _)| *run > 0)
-                .map(|(_, across)| across);
+            // Which way a corner camera should look along the wall. While the
+            // player is creeping along it, the camera leads toward the corner he
+            // is moving toward; standing still falls back to the side with more
+            // open floor, so there is always something to look past.
+            let along = along_wall(wall);
+            self.peek = wanted
+                .filter(|heading| along.contains(heading) && self.open_run(*heading) > 0)
+                .or_else(|| {
+                    along
+                        .into_iter()
+                        .map(|across| (self.open_run(across), across))
+                        .max_by_key(|(run, _)| *run)
+                        .filter(|(run, _)| *run > 0)
+                        .map(|(_, across)| across)
+                });
         }
 
         // Sweep the cones, and watch, every frame.
@@ -866,6 +874,39 @@ mod tests {
         room.cover.insert((0, -1));
         room.update(config::STEALTH_STEP_SECONDS);
         assert_eq!(room.peek, Some(Heading::PosZ));
+    }
+
+    #[test]
+    fn the_peek_leads_toward_the_way_the_player_is_creeping() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        room.character = (0, 0);
+        room.cover.insert((1, 0)); // the wall being hugged
+        // +Z has only one open cell before cover; -Z is wide open. Standing
+        // still the camera would pick -Z, but creeping toward +Z has to lead
+        // the camera that way, toward the corner the player is approaching.
+        room.cover.insert((0, 2));
+        // Press into the wall first: that is what starts the hug. A frame time
+        // short of one step keeps the creep below from walking the character
+        // before the peek is read.
+        room.set_input(1, 0);
+        room.update(1.0 / 60.0);
+        assert_eq!(room.hug, Some(Heading::PosX));
+        // Then creep along it toward +Z while still holding the hug.
+        room.set_input(0, 1);
+        room.update(1.0 / 60.0);
+        assert_eq!(room.hug, Some(Heading::PosX));
+        assert_eq!(
+            room.peek,
+            Some(Heading::PosZ),
+            "the held direction leads, not the longer floor"
+        );
+
+        // Let go of the key and the same room falls back to the longer floor.
+        room.set_input(1, 0);
+        room.update(1.0 / 60.0);
+        assert_eq!(room.peek, Some(Heading::NegZ));
     }
 
     #[test]
