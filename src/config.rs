@@ -657,27 +657,31 @@ pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
 pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
 /// Height above the character's feet that the camera aims at.
 pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
-/// The view while backed against a wall: behind the figure and out to one side,
-/// looking down the corridor and round the corner.
+/// The view while backed against a wall: at the corner, looking back down the
+/// hallway at the figure.
 ///
-/// The figure stays in shot, at the edge of the frame, and that is the point of
-/// the reference rather than a side effect. What buys the view round the corner is
-/// standing OUT from the wall's face: tucked in close, the sight line round the
-/// corner runs straight into the wall itself, which is why a camera behind the
-/// figure used to show nothing but wall.
+/// Everything else fails for one reason. Cover is taller than the camera, so from
+/// anywhere behind the figure the wall itself hides the corner; and from past the
+/// corner looking onward, the figure drops out of shot. Looking BACK from the
+/// corner keeps both: he is in frame, the hallway runs away behind him, and the
+/// corner opening is in the foreground.
 ///
-/// It is above the cover walls, so the wall reads as a low edge across the corner
-/// of the frame rather than a wall through the middle of it.
-pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 4.5;
-/// Behind the figure along the wall, and out from the wall's face at a corner.
-pub const STEALTH_HUG_CAMERA_BACK: f32 = 2.6;
-pub const STEALTH_HUG_CAMERA_OUT: f32 = 5.5;
-/// How far down the corridor the view aims. The aim is measured from the camera
-/// rather than from the figure, so this sets both how far ahead it looks and, with
-/// the camera standing out to one side, how sharply it turns the corner.
-pub const STEALTH_HUG_CAMERA_AIM: f32 = 6.0;
-/// How many cells of wall to follow before calling it a corner. A wall that runs
-/// on is not a corner, and looking round nothing is not worth standing out for.
+/// It is low on purpose. The tension in this shot is being down at the figure's
+/// level rather than above the room, and at this height the wall reads as an edge
+/// across the corner of the frame instead of a wall through the middle of it.
+pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 2.8;
+/// Out from the wall's face at the corner, and how far past the corner to sit. A
+/// wall's face is just over a unit from the centre of its cell, so this clears it
+/// without standing so far off that the corner leaves the frame.
+pub const STEALTH_HUG_CAMERA_OUT: f32 = 2.6;
+pub const STEALTH_HUG_CAMERA_PAST: f32 = 1.5;
+/// How far the camera may travel to reach a corner. Past this the figure is too
+/// small in the frame for the shot to be worth anything.
+pub const STEALTH_HUG_CAMERA_MAX: f32 = 7.0;
+/// How far beyond the figure the view aims, down the hallway he came from. This is
+/// what frames him on one side of the screen rather than in the middle.
+pub const STEALTH_HUG_CAMERA_AIM: f32 = 4.0;
+/// How many cells of wall to follow looking for its corner.
 pub const STEALTH_PEEK_STEPS: i32 = 4;
 /// How far the figure is pushed toward a wall it is backed against, in world
 /// units, so the pose reads as leaning on the wall rather than standing a cell
