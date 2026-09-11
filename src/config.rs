@@ -657,28 +657,27 @@ pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
 pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
 /// Height above the character's feet that the camera aims at.
 pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
-/// The view while backed against a wall: at the corner, looking round it.
+/// The view while backed against a wall: behind the figure and out to one side,
+/// looking down the corridor and round the corner.
 ///
-/// Not behind the figure, which cannot work. Cover is taller than this camera, so
-/// from behind the figure the wall sits between the two and hides everything past
-/// its end. The camera goes to the corner instead, outside the wall's face, and
-/// looks along the wall and around its end.
+/// The figure stays in shot, at the edge of the frame, and that is the point of
+/// the reference rather than a side effect. What buys the view round the corner is
+/// standing OUT from the wall's face: tucked in close, the sight line round the
+/// corner runs straight into the wall itself, which is why a camera behind the
+/// figure used to show nothing but wall.
 ///
-/// It is above the cover walls deliberately, so the wall reads as a low edge
-/// rather than a wall across the middle of the frame.
-pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 3.2;
-pub const STEALTH_HUG_CAMERA_AIM: f32 = 3.0;
-/// How far past the corner the wall-hug view sits, and how far out from the
-/// wall's face it stands.
-///
-/// The second one is what makes the shot work at all: sit close to the wall and
-/// the sight line round the corner runs into the wall's own face, which is why
-/// looking along a wall from behind the figure shows nothing but wall.
-pub const STEALTH_HUG_CAMERA_PAST: f32 = 1.6;
-pub const STEALTH_HUG_CAMERA_OUT: f32 = 2.4;
-/// How many cells of wall to follow before calling it a corner. A long wall is
-/// not a corner, and swinging along the whole of it would be a tour of the room
-/// rather than a glance round the end.
+/// It is above the cover walls, so the wall reads as a low edge across the corner
+/// of the frame rather than a wall through the middle of it.
+pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 4.5;
+/// Behind the figure along the wall, and out from the wall's face at a corner.
+pub const STEALTH_HUG_CAMERA_BACK: f32 = 2.6;
+pub const STEALTH_HUG_CAMERA_OUT: f32 = 5.5;
+/// How far down the corridor the view aims. The aim is measured from the camera
+/// rather than from the figure, so this sets both how far ahead it looks and, with
+/// the camera standing out to one side, how sharply it turns the corner.
+pub const STEALTH_HUG_CAMERA_AIM: f32 = 6.0;
+/// How many cells of wall to follow before calling it a corner. A wall that runs
+/// on is not a corner, and looking round nothing is not worth standing out for.
 pub const STEALTH_PEEK_STEPS: i32 = 4;
 /// How far the figure is pushed toward a wall it is backed against, in world
 /// units, so the pose reads as leaning on the wall rather than standing a cell

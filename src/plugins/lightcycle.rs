@@ -5100,28 +5100,34 @@ fn update_chase_camera(
         // Where the view should sit, and what it should look at, both as offsets
         // from the figure.
         //
-        // Backed against a wall, the camera goes to the corner: along the wall,
-        // just past its end, and out clear of its face, looking round it. That is
-        // the only position with a view of what lies beyond the wall. Cover is
-        // taller than this camera, so from behind the figure the wall sits between
-        // the two of them and the peek can only ever show wall.
-        //
-        // The figure drops out of frame doing this. It has to: the wall is what
-        // stands in the way, so any camera that can see past it is no longer
-        // behind the figure.
+        // Backed against a wall, the camera stands behind the figure and out to one
+        // side, so the figure sits at the edge of the frame and the corridor and
+        // its corner take the rest. Standing out is what makes the corner visible
+        // at all: close in, the sight line round it runs into the wall's own face,
+        // which is why this shot used to show nothing but wall.
         let (want_x, want_z, want_height, look) = match (room.hug, room.peek) {
             (Some(wall), Some(across)) => {
                 let (px, pz) = unit_of(across);
                 let (wx, wz) = unit_of(wall);
+                // A corner is where the wall runs out. Along a wall that carries
+                // on there is nothing to look round, so this stays close, which is
+                // the plain over-the-shoulder shot down the corridor.
                 let mut cell = room.character;
                 let mut run = 0;
                 while run < config::STEALTH_PEEK_STEPS && room.is_solid(step_cell(cell, across)) {
                     cell = step_cell(cell, across);
                     run += 1;
                 }
-                let along = run as f32 * config::GRID_SPACING + config::STEALTH_HUG_CAMERA_PAST;
-                let out = config::STEALTH_HUG_CAMERA_OUT;
-                let (want_x, want_z) = (px * along - wx * out, pz * along - wz * out);
+                let standing_out = if run < config::STEALTH_PEEK_STEPS {
+                    config::STEALTH_HUG_CAMERA_OUT
+                } else {
+                    config::STEALTH_HUG_CAMERA_OUT * 0.4
+                };
+                let back = config::STEALTH_HUG_CAMERA_BACK;
+                let (want_x, want_z) = (
+                    -px * back - wx * standing_out,
+                    -pz * back - wz * standing_out,
+                );
                 // Look on along the wall and round its end: the `wall` term is what
                 // turns the corner rather than running alongside it.
                 let reach = config::STEALTH_HUG_CAMERA_AIM;
