@@ -819,4 +819,95 @@ mod tests {
         assert!(escaped, "walking into the door should leave the room");
         assert_eq!(room.phase, StealthPhase::Escaped);
     }
+
+    #[test]
+    fn the_camera_peeks_down_the_side_with_more_floor() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        room.character = (0, 0);
+        room.cover.insert((1, 0)); // the wall being hugged
+        room.cover.insert((0, 1)); // so +Z runs into cover at once
+        room.set_input(1, 0);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.hug, Some(Heading::PosX));
+        assert_eq!(
+            room.peek,
+            Some(Heading::NegZ),
+            "-Z has the floor, and it is the second direction tried"
+        );
+
+        // Swap which side is shut off: the choice has to follow the floor rather
+        // than settle on a fixed preference.
+        room.cover.clear();
+        room.cover.insert((1, 0));
+        room.cover.insert((0, -1));
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.peek, Some(Heading::PosZ));
+    }
+
+    #[test]
+    fn hugging_a_corner_with_no_way_along_it_peeks_nowhere() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        room.character = (0, 0);
+        // A pocket: the wall being pushed against, with cover either side.
+        room.cover.insert((1, 0));
+        room.cover.insert((0, 1));
+        room.cover.insert((0, -1));
+        room.set_input(1, 0);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.hug, Some(Heading::PosX));
+        assert_eq!(room.peek, None, "nothing to look past");
+    }
+
+    #[test]
+    fn the_cone_is_cut_where_cover_blocks_it() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        // On the lane through the origin, facing +X, sweeping from zero phase.
+        room.guards.push(guard_at(0));
+        let segments = config::STEALTH_CONE_SEGMENTS;
+
+        let open = room.vision_radii(0, segments);
+        assert_eq!(
+            open.len(),
+            segments + 1,
+            "one ray per rim vertex, plus the origin"
+        );
+        assert!(
+            open.iter()
+                .all(|reach| *reach > config::STEALTH_VISION_RANGE - 0.5),
+            "with nothing in the way every ray should carry to the range, got {open:?}"
+        );
+
+        room.cover.insert((3, 0)); // straight ahead of the guard
+        let blocked = room.vision_radii(0, segments);
+        let middle = blocked[segments / 2];
+        assert!(
+            middle < config::STEALTH_VISION_RANGE,
+            "the blocked ray should stop short, got {middle}"
+        );
+        assert!(
+            middle < 3.0,
+            "and it should stop short of the cover itself, got {middle}"
+        );
+        assert!(
+            blocked[0] > middle,
+            "rays that miss the cover should carry on: {} vs {middle}",
+            blocked[0]
+        );
+    }
+
+    #[test]
+    fn a_cone_with_no_guard_behind_it_collapses() {
+        let room = sim(1);
+        assert_eq!(
+            room.vision_radii(usize::MAX, 4),
+            vec![0.0; 5],
+            "a missing guard should draw nothing rather than panic"
+        );
+    }
 }
