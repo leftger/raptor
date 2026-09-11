@@ -78,7 +78,7 @@ impl TetrisSim {
             piece: 0,
             rotation: 0,
             x: config::TETRIS_COLS as i32 / 2 - 1,
-            y: config::TETRIS_ROWS as i32 - 2,
+            y: 0,
             lines: 0,
             phase: TetrisPhase::Falling,
             input: TetrisInput::default(),
@@ -87,7 +87,7 @@ impl TetrisSim {
             seed,
             file_lines: lines,
         };
-        sim.piece = sim.next_piece();
+        sim.spawn_piece();
         sim
     }
 
@@ -134,6 +134,42 @@ impl TetrisSim {
         })
     }
 
+    /// Places the next piece at the top of the board; losing happens here if
+    /// the stack already reaches the spawn rows.
+    fn spawn_piece(&mut self) -> bool {
+        self.piece = self.next_piece();
+        self.rotation = 0;
+        self.x = config::TETRIS_COLS as i32 / 2 - 1;
+        // Row 0 is the top; spawn one row of headroom below it so every piece
+        // can still rotate without poking above the rim.
+        self.y = TETROMINOES[self.piece]
+            .iter()
+            .map(|&(_, cy)| cy)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        if !self.fits(self.piece, self.rotation, self.x, self.y) {
+            self.phase = TetrisPhase::Lost;
+            return false;
+        }
+        true
+    }
+
+    /// The board with the falling piece overlaid, for the renderer.
+    pub fn render_board(&self) -> Vec<Option<u8>> {
+        let mut rendered = self.board.clone();
+        for (cx, cy) in self.cells(self.piece, self.rotation, self.x, self.y) {
+            if cx >= 0
+                && cx < config::TETRIS_COLS as i32
+                && cy >= 0
+                && cy < config::TETRIS_ROWS as i32
+            {
+                rendered[cx as usize + cy as usize * config::TETRIS_COLS] = Some(self.piece as u8);
+            }
+        }
+        rendered
+    }
+
     fn lock(&mut self) -> bool {
         for (cx, cy) in self.cells(self.piece, self.rotation, self.x, self.y) {
             if cy < 0 {
@@ -142,11 +178,7 @@ impl TetrisSim {
             }
             self.board[cx as usize + cy as usize * config::TETRIS_COLS] = Some(self.piece as u8);
         }
-        self.piece = self.next_piece();
-        self.rotation = 0;
-        self.x = config::TETRIS_COLS as i32 / 2 - 1;
-        self.y = config::TETRIS_ROWS as i32 - 2;
-        true
+        self.spawn_piece()
     }
 
     /// Clears full lines and drops everything above them.
@@ -251,13 +283,12 @@ mod tests {
 
     #[test]
     fn all_seven_pieces_fit_at_spawn() {
-        for piece in 0..TETROMINOES.len() {
-            let mut game = sim();
-            game.piece = piece;
-            game.rotation = 0;
+        for (piece, offsets) in TETROMINOES.iter().enumerate() {
+            let game = sim();
+            let y = offsets.iter().map(|&(_, cy)| cy).max().unwrap_or(0) + 1;
             assert!(
-                game.fits(piece, 0, game.x, game.y),
-                "piece {piece} should fit at spawn"
+                game.fits(piece, 0, game.x, y),
+                "piece {piece} should fit at its spawn row"
             );
         }
     }

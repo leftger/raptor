@@ -1653,12 +1653,14 @@ fn spawn_pac_maze(
 
 /// Spawns the pooled gem cells of a Columns well.
 fn spawn_gem_well(commands: &mut Commands, assets: &LightcycleAssets, sim: &ColumnsSim) {
-    for index in 0..config::COLUMNS_COLS * config::COLUMNS_ROWS {
+    let rendered = sim.render_board();
+    for (index, colour) in rendered.iter().copied().enumerate() {
         let col = index % config::COLUMNS_COLS;
         let row = index / config::COLUMNS_COLS;
         let x = (col as f32 - (config::COLUMNS_COLS - 1) as f32 * 0.5) * 1.6;
-        let y = row as f32 * 1.6 - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8);
-        let colour = sim.board[index];
+        // Row 0 is the top of the well, so higher rows sit lower on screen.
+        let y = ((config::COLUMNS_ROWS - 1) - row) as f32 * 1.6
+            - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8);
         commands.spawn((
             LightcycleSceneRoot,
             GemEntity { index },
@@ -1680,12 +1682,14 @@ fn spawn_gem_well(commands: &mut Commands, assets: &LightcycleAssets, sim: &Colu
 
 /// Spawns the pooled block cells of a Tetris board.
 fn spawn_tetris_board(commands: &mut Commands, assets: &LightcycleAssets, sim: &TetrisSim) {
-    for index in 0..config::TETRIS_COLS * config::TETRIS_ROWS {
+    let rendered = sim.render_board();
+    for (index, colour) in rendered.iter().copied().enumerate() {
         let col = index % config::TETRIS_COLS;
         let row = index / config::TETRIS_COLS;
         let x = (col as f32 - (config::TETRIS_COLS - 1) as f32 * 0.5) * 1.2;
-        let y = row as f32 * 1.2 - (config::TETRIS_ROWS as f32 * 0.5 - 0.6);
-        let colour = sim.board[index];
+        // Row 0 is the top of the board, so higher rows sit lower on screen.
+        let y = ((config::TETRIS_ROWS - 1) - row) as f32 * 1.2
+            - (config::TETRIS_ROWS as f32 * 0.5 - 0.6);
         commands.spawn((
             LightcycleSceneRoot,
             BlockEntity { index },
@@ -2713,14 +2717,16 @@ fn sync_columns_entities(
     let Some(sim) = state.run.as_ref().and_then(|run| run.source_columns()) else {
         return;
     };
+    let rendered = sim.render_board();
     for (entity, mut transform, mut visibility, mut material) in &mut gems {
-        match sim.board.get(entity.index) {
+        match rendered.get(entity.index) {
             Some(Some(colour)) => {
                 let col = entity.index % config::COLUMNS_COLS;
                 let row = entity.index / config::COLUMNS_COLS;
                 transform.translation = Vec3::new(
                     (col as f32 - (config::COLUMNS_COLS - 1) as f32 * 0.5) * 1.6,
-                    row as f32 * 1.6 - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8),
+                    ((config::COLUMNS_ROWS - 1) - row) as f32 * 1.6
+                        - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8),
                     0.0,
                 );
                 material.0 =
@@ -2750,14 +2756,16 @@ fn sync_tetris_entities(
     let Some(sim) = state.run.as_ref().and_then(|run| run.source_tetris()) else {
         return;
     };
+    let rendered = sim.render_board();
     for (entity, mut transform, mut visibility, mut material) in &mut blocks {
-        match sim.board.get(entity.index) {
+        match rendered.get(entity.index) {
             Some(Some(colour)) => {
                 let col = entity.index % config::TETRIS_COLS;
                 let row = entity.index / config::TETRIS_COLS;
                 transform.translation = Vec3::new(
                     (col as f32 - (config::TETRIS_COLS - 1) as f32 * 0.5) * 1.2,
-                    row as f32 * 1.2 - (config::TETRIS_ROWS as f32 * 0.5 - 0.6),
+                    ((config::TETRIS_ROWS - 1) - row) as f32 * 1.2
+                        - (config::TETRIS_ROWS as f32 * 0.5 - 0.6),
                     0.0,
                 );
                 material.0 = assets.tetris_materials[*colour as usize % 7].clone();
@@ -4534,7 +4542,7 @@ fn read_lightcycle_input(
             sim.set_input(
                 i32::from(right) - i32::from(left),
                 hop_z > 0,
-                move_z < 0,
+                move_z > 0,
                 throw,
             );
         } else if let Some(sim) = run.source_frogger_mut() {

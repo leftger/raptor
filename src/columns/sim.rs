@@ -67,7 +67,7 @@ impl ColumnsSim {
             board: vec![None; config::COLUMNS_COLS * config::COLUMNS_ROWS],
             col: config::COLUMNS_COLS as i32 / 2,
             piece: [0, 1, 2],
-            bottom: config::COLUMNS_ROWS as i32 - 1,
+            bottom: 2,
             phase: ColumnsPhase::Falling,
             score: 0,
             input: ColumnsInput::default(),
@@ -103,17 +103,17 @@ impl ColumnsSim {
         ]
     }
 
-    /// Adds one seeded row at the bottom, pushing the rest up.
+    /// Adds one seeded row at the bottom, pushing the rest toward the top.
     fn seed_row(&mut self) {
         let cols = config::COLUMNS_COLS;
         let rows = config::COLUMNS_ROWS;
-        for row in (0..rows - 1).rev() {
+        for row in 1..rows {
             for col in 0..cols {
-                self.board[col + row * cols + cols] = self.board[col + row * cols];
+                self.board[col + (row - 1) * cols] = self.board[col + row * cols];
             }
         }
         for col in 0..cols {
-            self.board[col] = Some(
+            self.board[col + (rows - 1) * cols] = Some(
                 (self.unit() * config::COLUMNS_GEM_COLORS as f32) as u8
                     % config::COLUMNS_GEM_COLORS as u8,
             );
@@ -154,17 +154,34 @@ impl ColumnsSim {
 
     fn land(&mut self) -> bool {
         for (index, (col, row)) in self.piece_cells().into_iter().enumerate() {
-            if row < 0 {
-                self.phase = ColumnsPhase::Lost;
-                return false;
-            }
             self.board[col as usize + row as usize * config::COLUMNS_COLS] =
                 Some(self.piece[index]);
         }
         self.col = config::COLUMNS_COLS as i32 / 2;
-        self.bottom = config::COLUMNS_ROWS as i32 - 1;
+        self.bottom = 2;
         self.piece = self.next_piece();
+        // The stack reached the spawn rows: the next piece has nowhere to go.
+        if self
+            .piece_cells()
+            .iter()
+            .any(|&(col, row)| self.cell(col, row).is_some())
+        {
+            self.phase = ColumnsPhase::Lost;
+            return false;
+        }
         true
+    }
+
+    /// The well with the falling stack overlaid, for the renderer.
+    pub fn render_board(&self) -> Vec<Option<u8>> {
+        let mut rendered = self.board.clone();
+        for (index, &(col, row)) in self.piece_cells().iter().enumerate() {
+            if row >= 0 && row < config::COLUMNS_ROWS as i32 {
+                rendered[col as usize + row as usize * config::COLUMNS_COLS] =
+                    Some(self.piece[index]);
+            }
+        }
+        rendered
     }
 
     /// Removes every run of three or more, lets the rest fall, and repeats.
