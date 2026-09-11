@@ -405,7 +405,7 @@ fn update_footer_text(
         )
     } else {
         (
-            "LIGHTCYCLE  |  A/D: Turn, Pivot, Walk or Slide  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  source: .rs/.cpp fight, .c rocks, .py snake, .slint platformer, .lua breaker, .sh stealth (Space: throw/fire/jump/serve/wait)  |  Shift: bullet time  |  Q: recall  |  Gate: parent/close",
+            "LIGHTCYCLE  |  A/D: Turn, Pivot, Walk or Slide  |  WASD: walk in stealth  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  source: .rs/.cpp fight, .c rocks, .py snake, .slint platformer, .lua breaker, .sh stealth (Space: throw/fire/jump/serve)  |  Shift: bullet time  |  Q: recall  |  Gate: parent/close",
             "MOUSE: Hold right-drag to look around  |  u/-: Parent directory or close  |  Breadcrumb: jump to folder  |  Approach text for the folio panel",
         )
     };

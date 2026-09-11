@@ -2,8 +2,10 @@
 //!
 //! The room is a cell grid on the `X`/`Z` plane, so the walk and the guards'
 //! sight lines are the same kind of lookup the rest of the game already does.
-//! The character creeps one cell per tick and is turned with the usual left /
-//! right controls; holding the action key waits in place. Each guard sweeps a
+//! The character walks one cell per tick in whatever direction the keys are
+//! holding: hold a direction and it keeps walking that way, let go and it stops
+//! where it is, which is how you wait for a patrol to pass. It turns to face
+//! the way it is walking. Each guard sweeps a
 //! cone of vision as it walks its lane, and anything solid between the two
 //! breaks the line of sight. Standing in a cone fills a detection meter; filling
 //! it ends the run. Reaching the door at the far side leaves it.
@@ -113,10 +115,17 @@ pub struct StealthEvents {
 /// One input frame: a tap to turn, and a hold to wait.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StealthInput {
-    /// `-1` turns left, `1` turns right, `0` keeps the current heading.
-    pub turn: i32,
-    /// Hold to stay put instead of creeping forward.
-    pub wait: bool,
+    /// `1` walks east, `-1` west.
+    pub move_x: i32,
+    /// `1` walks toward the camera, `-1` away from it.
+    pub move_z: i32,
+}
+
+impl StealthInput {
+    /// True when no direction is held, so the character stands still.
+    fn idle(&self) -> bool {
+        self.move_x == 0 && self.move_z == 0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,6 +142,9 @@ pub struct StealthSim {
     /// Whether a guard saw the character on the previous step, for the "!" cue.
     pub seen: bool,
     pub input: StealthInput,
+    /// True while the held direction is actually walkable, so the renderer can
+    /// run a steady gait instead of one tied to the grid clock.
+    pub walking: bool,
     /// Cells walked, for the HUD.
     pub steps: usize,
     bounds: (i32, i32),
@@ -190,6 +202,7 @@ impl StealthSim {
             detection: 0.0,
             seen: false,
             input: StealthInput::default(),
+            walking: false,
             steps: 0,
             bounds: (half_w, half_h),
             move_clock: 0.0,
@@ -198,8 +211,39 @@ impl StealthSim {
     }
 
     /// Latches a frame's input.
-    pub fn set_input(&mut self, turn: i32, wait: bool) {
-        self.input = StealthInput { turn, wait };
+    pub fn set_input(&mut self, move_x: i32, move_z: i32) {
+        self.input = StealthInput { move_x, move_z };
+    }
+
+    /// The direction the held keys ask for. With two axes held the one already
+    /// being walked keeps it, so adding a second key mid-stride does not make
+    /// the character stutter sideways.
+    fn desired_heading(&self) -> Option<Heading> {
+        let (x, z) = (
+            self.input.move_x.clamp(-1, 1),
+            self.input.move_z.clamp(-1, 1),
+        );
+        match (x, z) {
+            (0, 0) => None,
+            (x, 0) => Some(if x > 0 { Heading::PosX } else { Heading::NegX }),
+            (0, z) => Some(if z > 0 { Heading::PosZ } else { Heading::NegZ }),
+            _ => Some(match self.heading {
+                Heading::PosX | Heading::NegX => {
+                    if x > 0 {
+                        Heading::PosX
+                    } else {
+                        Heading::NegX
+                    }
+                }
+                Heading::PosZ | Heading::NegZ => {
+                    if z > 0 {
+                        Heading::PosZ
+                    } else {
+                        Heading::NegZ
+                    }
+                }
+            }),
+        }
     }
 
     /// How far the detection meter has filled, as a percentage.
@@ -265,16 +309,19 @@ impl StealthSim {
     /// guards each creep a cell every `STEALTH_STEP_SECONDS`.
     pub fn update(&mut self, dt: f32) -> StealthEvents {
         let mut events = StealthEvents::default();
+        self.walking = false;
         if self.phase != StealthPhase::Sneaking {
             return events;
         }
 
-        // Turning is immediate, so the character can duck around a corner
-        // without waiting for the next tick.
-        let turn = self.input.turn.clamp(-1, 1);
-        if turn != 0 {
-            self.heading = turn_heading(self.heading, turn);
+        // Facing is immediate, so the character turns on the spot the moment a
+        // key goes down, even if the next step is still due or blocked.
+        let wanted = self.desired_heading();
+        if let Some(heading) = wanted {
+            self.heading = heading;
         }
+        self.walking =
+            wanted.is_some_and(|heading| !self.is_solid(step_cell(self.character, heading)));
 
         // Sweep the cones, and watch, every frame.
         for guard in &mut self.guards {
@@ -317,8 +364,12 @@ impl StealthSim {
 
     /// One quantised step of everyone on the floor.
     fn tick(&mut self, events: &mut StealthEvents) {
-        if !self.input.wait {
-            let ahead = step_cell(self.character, self.heading);
+        // Walking is simply the held direction: no keys, no movement, so the
+        // character waits for a patrol by standing still.
+        if !self.input.idle()
+            && let Some(heading) = self.desired_heading()
+        {
+            let ahead = step_cell(self.character, heading);
             if !self.is_solid(ahead) {
                 self.character = ahead;
                 self.steps += 1;
@@ -379,20 +430,6 @@ pub fn step_cell(cell: (i32, i32), heading: Heading) -> (i32, i32) {
         Heading::NegX => (cell.0 - 1, cell.1),
         Heading::PosZ => (cell.0, cell.1 + 1),
         Heading::NegZ => (cell.0, cell.1 - 1),
-    }
-}
-
-/// A quarter turn in place: left is counter-clockwise on the `X`/`Z` plane.
-fn turn_heading(heading: Heading, turn: i32) -> Heading {
-    match (heading, turn > 0) {
-        (Heading::PosX, true) => Heading::PosZ,
-        (Heading::PosX, false) => Heading::NegZ,
-        (Heading::PosZ, true) => Heading::NegX,
-        (Heading::PosZ, false) => Heading::PosX,
-        (Heading::NegX, true) => Heading::NegZ,
-        (Heading::NegX, false) => Heading::PosZ,
-        (Heading::NegZ, true) => Heading::PosX,
-        (Heading::NegZ, false) => Heading::NegX,
     }
 }
 
@@ -478,23 +515,6 @@ mod tests {
     }
 
     #[test]
-    fn walking_out_of_the_room_is_impossible() {
-        let mut room = sim(1);
-        // March at the west wall for a long time; the walk must stop at the edge.
-        room.heading = Heading::NegX;
-        for _ in 0..200 {
-            room.set_input(0, false);
-            room.update(config::STEALTH_STEP_SECONDS);
-        }
-        assert!(
-            room.in_bounds(room.character),
-            "the character left the room at {:?}",
-            room.character
-        );
-        assert_eq!(room.character.0, -room.bounds.0 + 1);
-    }
-
-    #[test]
     fn a_guard_sees_down_its_cone_and_not_behind_it() {
         let mut room = sim(1);
         room.cover.clear();
@@ -572,15 +592,105 @@ mod tests {
     }
 
     #[test]
+    fn the_keys_set_the_way_the_character_faces() {
+        let mut room = sim(1);
+        for (keys, expected) in [
+            ((1, 0), Heading::PosX),
+            ((0, 1), Heading::PosZ),
+            ((-1, 0), Heading::NegX),
+            ((0, -1), Heading::NegZ),
+        ] {
+            room.set_input(keys.0, keys.1);
+            room.update(config::STEALTH_STEP_SECONDS);
+            assert_eq!(room.heading, expected, "input {keys:?}");
+        }
+    }
+
+    #[test]
+    fn holding_a_key_walks_a_cell_per_step() {
+        let mut room = sim(2);
+        room.guards.clear();
+        room.cover.clear();
+        let (x, z) = room.character;
+        room.set_input(1, 0);
+        let events = room.update(config::STEALTH_STEP_SECONDS);
+        assert!(events.stepped, "the step should have landed");
+        assert!(room.walking, "and it should read as walking");
+        assert_eq!(room.character, (x + 1, z), "one cell east");
+        assert_eq!(room.heading, Heading::PosX);
+    }
+
+    #[test]
+    fn letting_go_of_the_keys_holds_position() {
+        let mut room = sim(1);
+        room.guards.clear();
+        let before = room.character;
+        for _ in 0..30 {
+            room.set_input(0, 0);
+            room.update(config::STEALTH_STEP_SECONDS);
+        }
+        assert_eq!(room.character, before, "standing still should not drift");
+        assert!(!room.walking);
+    }
+
+    #[test]
+    fn cover_stops_the_walk_but_not_the_facing() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        let (x, z) = room.character;
+        room.cover.insert((x + 1, z));
+        room.set_input(1, 0);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.character, (x, z), "cover should block the step");
+        assert!(!room.walking, "and it is not walking into it either");
+        assert_eq!(room.heading, Heading::PosX, "but it still turns to face it");
+    }
+
+    #[test]
+    fn a_second_key_does_not_flip_the_walk_mid_stride() {
+        let mut room = sim(1);
+        room.guards.clear();
+        room.cover.clear();
+        room.set_input(1, 0);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.heading, Heading::PosX);
+        // Adding south while still holding east keeps walking east.
+        room.set_input(1, 1);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.heading, Heading::PosX);
+        // Letting go of east hands over to the axis still held.
+        room.set_input(0, 1);
+        room.update(config::STEALTH_STEP_SECONDS);
+        assert_eq!(room.heading, Heading::PosZ);
+    }
+
+    #[test]
+    fn walking_out_of_the_room_is_impossible() {
+        let mut room = sim(1);
+        room.guards.clear();
+        // Push at the west wall for a long time.
+        for _ in 0..200 {
+            room.set_input(-1, 0);
+            room.update(config::STEALTH_STEP_SECONDS);
+        }
+        assert!(
+            room.in_bounds(room.character),
+            "the character left the room at {:?}",
+            room.character
+        );
+        assert_eq!(room.character.0, -room.bounds.0 + 1);
+    }
+
+    #[test]
     fn reaching_the_door_ends_the_run() {
         let mut room = sim(1);
         room.guards.clear();
         let exit = room.exit;
         room.character = (exit.0 - 1, exit.1);
-        room.heading = Heading::PosX;
         let mut escaped = false;
         for _ in 0..60 {
-            room.set_input(0, false);
+            room.set_input(1, 0);
             if room.update(config::STEALTH_STEP_SECONDS).escaped {
                 escaped = true;
                 break;
@@ -588,35 +698,5 @@ mod tests {
         }
         assert!(escaped, "walking into the door should leave the room");
         assert_eq!(room.phase, StealthPhase::Escaped);
-    }
-
-    #[test]
-    fn holding_position_waits_for_the_patrol_to_pass() {
-        let mut room = sim(1);
-        room.guards.clear();
-        let before = room.character;
-        for _ in 0..30 {
-            room.set_input(0, true);
-            room.update(config::STEALTH_STEP_SECONDS);
-        }
-        assert_eq!(
-            room.character, before,
-            "holding should not move the character"
-        );
-    }
-
-    #[test]
-    fn turning_left_and_right_are_mirror_images() {
-        let mut room = sim(1);
-        room.heading = Heading::PosX;
-        room.set_input(1, true);
-        room.update(config::STEALTH_STEP_SECONDS);
-        assert_eq!(room.heading, Heading::PosZ);
-        room.set_input(-1, true);
-        room.update(config::STEALTH_STEP_SECONDS);
-        assert_eq!(room.heading, Heading::PosX);
-        room.set_input(-1, true);
-        room.update(config::STEALTH_STEP_SECONDS);
-        assert_eq!(room.heading, Heading::NegZ);
     }
 }

@@ -78,9 +78,14 @@ impl Plugin for LightcyclePlugin {
                         update_document_focus.run_if(in_lightcycle_mode),
                         update_disc_focus.run_if(in_lightcycle_mode),
                         sync_disc_entities.run_if(in_lightcycle_mode),
+                    ),
+                    (
                         sync_asteroid_entities.run_if(in_lightcycle_mode),
                         sync_snake_entities.run_if(in_lightcycle_mode),
                         sync_character_entities.run_if(in_lightcycle_mode),
+                        tag_character_model.run_if(in_lightcycle_mode),
+                        prepare_character_walk.run_if(in_lightcycle_mode),
+                        drive_character_walk.run_if(in_lightcycle_mode),
                         sync_breaker_entities.run_if(in_lightcycle_mode),
                         sync_stealth_entities.run_if(in_lightcycle_mode),
                         animate_disc_pickups.run_if(in_lightcycle_mode),
@@ -148,6 +153,8 @@ struct LightcycleAssets {
     snake_lock_material: Handle<StandardMaterial>,
     /// The Tron runner, and the slabs and door of a platformer level.
     tron_scene: Handle<WorldAsset>,
+    /// The same file as a `Gltf`, for the walk clip the scene cannot expose.
+    tron_gltf: Handle<Gltf>,
     platform_material: Handle<StandardMaterial>,
     exit_material: Handle<StandardMaterial>,
     /// Bricks, ball and court walls for the breaker.
@@ -263,6 +270,37 @@ struct SnakeGateLock;
 /// The Tron runner, on a platformer level or a stealth run.
 #[derive(Component)]
 struct CharacterEntity;
+
+/// Easing state for the on-foot character.
+///
+/// The walk itself is the asset's animation clip, so the only thing left to
+/// track here is `base`: the ground position the figure is easing toward, which
+/// smooths the stealth sim's whole-cell steps into a glide.
+#[derive(Component)]
+struct CharacterAnim {
+    base: Vec3,
+}
+
+impl CharacterAnim {
+    fn at(base: Vec3) -> Self {
+        Self { base }
+    }
+}
+
+/// The character's walk clip, once its animation graph has been built.
+///
+/// The glTF loader creates the `AnimationPlayer` but no graph, so one is built
+/// from the clip the asset carries.
+#[derive(Component)]
+struct CharacterWalk(AnimationNodeIndex);
+
+/// Marks everything spawned beneath an on-foot character.
+///
+/// The loader creates the `AnimationPlayer` deep inside the scene, so there is
+/// nothing to tag at spawn time: the character's subtree is walked instead,
+/// which also picks up descendants that only appear a frame or two later.
+#[derive(Component)]
+struct CharacterModel;
 
 /// The breaker's ball.
 #[derive(Component)]
@@ -497,6 +535,7 @@ fn setup_lightcycle_assets(
         }),
         tron_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::TRON_MODEL_ASSET)),
+        tron_gltf: asset_server.load(config::TRON_MODEL_ASSET),
         platform_material: materials.add(unlit_material(config::PLATFORMER_PLATFORM_COLOR)),
         exit_material: materials.add(StandardMaterial {
             base_color: config::PLATFORMER_EXIT_COLOR,
@@ -1382,6 +1421,7 @@ fn spawn_platformer_level(
     commands.spawn((
         LightcycleSceneRoot,
         CharacterEntity,
+        CharacterAnim::at(Vec3::new(level.runner.x, level.runner.y, 0.0)),
         Transform::from_translation(Vec3::new(level.runner.x, level.runner.y, 0.0)),
         Visibility::default(),
         Pickable::IGNORE,
@@ -1531,6 +1571,7 @@ fn spawn_stealth_room(
     commands.spawn((
         LightcycleSceneRoot,
         CharacterEntity,
+        CharacterAnim::at(start),
         Transform::from_translation(start).with_rotation(facing(room.heading.angle())),
         Visibility::default(),
         Pickable::IGNORE,
@@ -1869,34 +1910,190 @@ fn sync_snake_entities(
 /// Poses the on-foot character, whichever game it belongs to.
 fn sync_character_entities(
     state: Res<LightcycleState>,
-    mut character: Query<&mut Transform, (With<CharacterEntity>, Without<CycleEntity>)>,
+    time: Res<Time>,
+    mut character: Query<(&mut Transform, &mut CharacterAnim), Without<CycleEntity>>,
 ) {
     let Some(run) = state.run.as_ref() else {
         return;
     };
-    let pose = if let Some(level) = run.source_platformer() {
-        Some((
-            Vec3::new(level.runner.x, level.runner.y, 0.0),
-            if level.runner.facing >= 0.0 {
-                0.0
-            } else {
-                std::f32::consts::PI
-            },
-        ))
-    } else {
-        run.source_stealth().map(|room| {
-            (
-                config::ground_position(room.character.0, room.character.1),
-                heading_angle(room.heading),
-            )
-        })
-    };
-    let Some((translation, angle)) = pose else {
+    let Some(pose) = character_pose(run) else {
         return;
     };
-    for mut transform in &mut character {
-        transform.translation = translation;
-        transform.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2 - angle);
+
+    let dt = time.delta_secs();
+    for (mut transform, mut anim) in &mut character {
+        // The stealth sim moves in whole cells; easing toward the cell turns
+        // that into a glide, and the walk clip supplies the limbs. The
+        // platformer's physics is already continuous.
+        let base = if pose.smooth {
+            anim.base
+                .lerp(pose.target, 1.0 - (-config::WALK_CATCH_UP * dt).exp())
+        } else {
+            pose.target
+        };
+        anim.base = base;
+        transform.translation = base;
+        transform.rotation = Quat::from_rotation_y(pose.yaw);
+    }
+}
+
+/// Where the on-foot character should be and which way it faces.
+struct CharacterPose {
+    /// Ground position the figure is walking toward.
+    target: Vec3,
+    yaw: f32,
+    /// True when the sim moves in grid steps that need easing out.
+    smooth: bool,
+}
+
+fn character_pose(run: &ActiveRun) -> Option<CharacterPose> {
+    if let Some(level) = run.source_platformer() {
+        return Some(CharacterPose {
+            target: Vec3::new(level.runner.x, level.runner.y, 0.0),
+            // A quarter turn each way, not a half: the model's forward is
+            // `+Z`, so facing along the level's `X` axis means pointing it at
+            // `+X` or `-X`.
+            yaw: if level.runner.facing >= 0.0 {
+                std::f32::consts::FRAC_PI_2
+            } else {
+                -std::f32::consts::FRAC_PI_2
+            },
+            smooth: false,
+        });
+    }
+    run.source_stealth().map(|room| CharacterPose {
+        target: config::ground_position(room.character.0, room.character.1),
+        yaw: std::f32::consts::FRAC_PI_2 - heading_angle(room.heading),
+        smooth: true,
+    })
+}
+
+/// Builds the walk graph for the character's player and attaches it. The glTF
+/// loader makes the `AnimationPlayer` but leaves the graph to us.
+fn prepare_character_walk(
+    mut commands: Commands,
+    assets: Res<LightcycleAssets>,
+    gltfs: Res<Assets<Gltf>>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+    players: Query<Entity, (With<AnimationPlayer>, Without<CharacterWalk>)>,
+) {
+    if players.is_empty() {
+        return;
+    }
+    let Some(clip) = gltfs
+        .get(&assets.tron_gltf)
+        .and_then(|gltf| gltf.named_animations.get(config::WALK_CLIP))
+        .cloned()
+    else {
+        return;
+    };
+    for entity in &players {
+        let (graph, nodes) = AnimationGraph::from_clips([clip.clone()]);
+        if let Some(index) = nodes.first().copied() {
+            commands.entity(entity).insert((
+                AnimationGraphHandle(graphs.add(graph)),
+                CharacterWalk(index),
+            ));
+        }
+    }
+}
+
+/// Plays the walk while the character is moving and rewinds it when it stops,
+/// so it never stands mid-stride. The rate is matched to ground speed: a clip
+/// run at the wrong speed makes the feet skate.
+fn drive_character_walk(
+    state: Res<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    gltfs: Res<Assets<Gltf>>,
+    mut reported: Local<bool>,
+    mut character: Query<(&mut AnimationPlayer, &CharacterWalk), With<CharacterModel>>,
+    mut guards: Query<(&mut AnimationPlayer, &CharacterWalk), Without<CharacterModel>>,
+) {
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+    // Say once, when the character's player first exists, what the animation
+    // plumbing actually found. If the character ever walks without animating,
+    // this line is the first thing to look at.
+    if !*reported && !(character.is_empty() && guards.is_empty()) {
+        *reported = true;
+        let clips: Vec<Box<str>> = gltfs
+            .get(&assets.tron_gltf)
+            .map(|gltf| gltf.named_animations.keys().cloned().collect())
+            .unwrap_or_default();
+        info!(
+            "walk animation: {} character player(s), {} other, {:?} clip, asset carries {clips:?}",
+            character.iter().len(),
+            guards.iter().len(),
+            config::WALK_CLIP,
+        );
+    }
+    // The patrol step rate, and the character's own ground speed in world units
+    // per second. The guards walk continuously, so their clip must not stop
+    // just because the player is waiting for them to pass.
+    let step_speed = config::GRID_SPACING / config::STEALTH_STEP_SECONDS;
+    let character_speed = if let Some(room) = run.source_stealth() {
+        if room.walking { step_speed } else { 0.0 }
+    } else if let Some(level) = run.source_platformer() {
+        level.runner.vx.abs()
+    } else {
+        0.0
+    };
+    let guard_speed = if run.source_stealth().is_some() {
+        step_speed
+    } else {
+        0.0
+    };
+
+    // The character's own player is tagged; every other player in the scene
+    // belongs to a guard, which keeps walking while the player waits.
+    walk_players(character.iter_mut(), character_speed);
+    walk_players(guards.iter_mut(), guard_speed);
+}
+
+/// Tags every entity under an on-foot character, however deep.
+fn tag_character_model(
+    mut commands: Commands,
+    characters: Query<Entity, With<CharacterEntity>>,
+    children: Query<&Children>,
+    tagged: Query<(), With<CharacterModel>>,
+) {
+    for character in &characters {
+        let mut stack = vec![character];
+        while let Some(entity) = stack.pop() {
+            if tagged.get(entity).is_err() {
+                commands.entity(entity).insert(CharacterModel);
+            }
+            if let Ok(kids) = children.get(entity) {
+                stack.extend(kids.iter());
+            }
+        }
+    }
+}
+
+/// Drives one set of players at a ground speed in world units per second. Zero
+/// stops them, which is what standing still has to look like.
+fn walk_players<'a>(
+    players: impl Iterator<Item = (Mut<'a, AnimationPlayer>, &'a CharacterWalk)>,
+    speed: f32,
+) {
+    for (mut player, walk) in players {
+        if speed <= 0.05 {
+            if player.is_playing_animation(walk.0) {
+                player.stop(walk.0);
+            }
+            continue;
+        }
+        let rate = (speed / config::WALK_CLIP_GROUND).clamp(0.3, 2.5);
+        let active = player.play(walk.0);
+        // Bevy's default repeat mode is `Never`: the clip plays once and then
+        // parks on its last frame, which reads as a character sliding along
+        // frozen mid-stride. Loop it, and rewind it if a previous pass already
+        // completed, since `play` never restarts an active animation.
+        if active.is_finished() {
+            active.replay();
+        }
+        active.set_speed(rate).repeat();
     }
 }
 
@@ -3185,9 +3382,10 @@ fn read_lightcycle_input(
     let go_up = keys.just_pressed(KeyCode::KeyU) || keys.just_pressed(KeyCode::Minus);
     let throw = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
     let recall = keys.just_pressed(KeyCode::KeyQ);
-    // Held, not tapped: waiting in place during a stealth run lasts as long as
-    // the key is down.
-    let hold = keys.pressed(KeyCode::Space) || mouse.pressed(MouseButton::Left);
+    // Stealth walks on WASD: `steer` is the held east/west axis, so only the
+    // other pair is needed here.
+    let move_z = i32::from(keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown))
+        - i32::from(keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp));
     // Steering is continuous: the asteroid field pivots while the key is held.
     let steer = i32::from(keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight))
         - i32::from(keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft));
@@ -3237,8 +3435,8 @@ fn read_lightcycle_input(
             // Held to slide the bike along the bottom, tapped to serve.
             level.set_input(steer as f32, throw);
         } else if let Some(room) = run.source_stealth_mut() {
-            // Tapped to turn, held to wait for the patrol to pass.
-            room.set_input(steer, hold);
+            // Hold a direction to keep walking it; let go to stop.
+            room.set_input(steer, move_z);
         } else if run.source_game() == Some(SourceGame::DiscWars) {
             // Disc wars: throw and recall. The cycle's movement is unchanged.
             let snapshot = PlayerSnapshot {
@@ -4725,6 +4923,9 @@ fn field_camera_focus(run: &ActiveRun) -> Option<(Vec3, f32)> {
     Some((Vec3::new(sim.center.0, 0.0, sim.center.1), sim.radius))
 }
 
+// A Bevy system: the queries are the reason for both of these, and folding them
+// into a SystemParam struct would only move the noise.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update_chase_camera(
     state: Res<LightcycleState>,
     transition: Res<ModeTransition>,
@@ -4732,6 +4933,14 @@ fn update_chase_camera(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mut camera: Single<&mut Transform, (With<Camera3d>, Without<CycleEntity>)>,
+    character: Query<
+        &Transform,
+        (
+            With<CharacterEntity>,
+            Without<Camera3d>,
+            Without<ChaseCamera>,
+        ),
+    >,
     mut cycle: Query<(&Transform, &mut ChaseCamera), Without<Camera3d>>,
 ) {
     let Ok((cycle, mut chase)) = cycle.single_mut() else {
@@ -4767,17 +4976,23 @@ fn update_chase_camera(
     }
 
     // The stealth run is played from above, like a stakeout.
-    if state
-        .run
-        .as_ref()
-        .and_then(|run| run.source_stealth())
-        .is_some()
-    {
-        let centre = Vec3::ZERO;
-        let radius = config::STEALTH_HEIGHT as f32 * 0.5 * config::GRID_SPACING;
-        let height = radius * config::STEALTH_CAMERA_FIT + 4.0;
-        camera.translation = centre + Vec3::new(0.0, height, height * 0.5);
-        camera.look_at(centre, Vec3::Y);
+    if let Some(room) = state.run.as_ref().and_then(|run| run.source_stealth()) {
+        // Follow where the figure is actually drawn, not the cell it is walking
+        // toward: the sim moves in whole cells, so tracking the cell would lurch
+        // the whole view once per step.
+        let focus = character
+            .single()
+            .map(|transform| transform.translation)
+            .unwrap_or_else(|_| config::ground_position(room.character.0, room.character.1));
+        let target = focus
+            + Vec3::new(
+                0.0,
+                config::STEALTH_CAMERA_HEIGHT,
+                config::STEALTH_CAMERA_DISTANCE,
+            );
+        let blend = 1.0 - (-config::STEALTH_CAMERA_LERP * time.delta_secs()).exp();
+        camera.translation = camera.translation.lerp(target, blend);
+        camera.look_at(focus + Vec3::Y * config::STEALTH_CAMERA_LOOK, Vec3::Y);
         return;
     }
 

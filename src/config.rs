@@ -432,23 +432,26 @@ pub const SNAKE_GATE_COLOR: Color = Color::srgb(1.0, 0.22, 0.25);
 
 /// The Tron runner. CC-BY-4.0: see the credits in the README.
 pub const TRON_MODEL_ASSET: &str = "models/tron_character/scene.gltf";
-/// Height of the loaded scene in world units, with the glTF's own node
-/// transforms applied.
+/// Height of the loaded character in world units, feet on the origin.
 ///
-/// The mesh is authored in inches: its `POSITION` bounds span 929 units and the
-/// scene's root node matrices scale that by 0.0254 (inches to metres), so the
-/// model arrives 23.607 units tall with its feet on the origin. Dividing by the
-/// raw mesh height instead is a 39x error, which once left the runner a
-/// twentieth of a unit tall: present, glowing, and invisible.
+/// The asset is a rigged re-export: 19 joints, one walk clip, and the original
+/// inch-scale node matrices baked into the vertex data, so the vertices now
+/// span 23.607 units on their own. Measured from the `POSITION` accessor
+/// bounds. Dividing by the raw authored mesh height instead is a 39x error,
+/// which once left the runner a twentieth of a unit tall: present, glowing, and
+/// invisible.
 pub const TRON_MODEL_HEIGHT: f32 = 23.607;
 // Fail the build, not the render: reading the raw mesh bounds instead of the
 // loaded scene is a 39x error that leaves the character invisible.
 const _: () = assert!(TRON_MODEL_HEIGHT > 1.0 && TRON_MODEL_HEIGHT < 100.0);
 /// Scaled so the runner stands exactly as tall as its collision box.
 pub const TRON_MODEL_SCALE: f32 = PLATFORMER_RUNNER_HEIGHT / TRON_MODEL_HEIGHT;
-/// The model faces along its thin axis; flip this a half turn if the runner
-/// ends up looking backwards.
-pub const TRON_MODEL_YAW: f32 = std::f32::consts::PI;
+/// Extra yaw applied to the character model on top of the entity's facing.
+///
+/// The asset's own forward is `+Z`, which is what the facing yaws in the plugin
+/// already target, so this stays at zero. A half turn here points the runner
+/// exactly backwards, which is how it walked until it was noticed.
+pub const TRON_MODEL_YAW: f32 = 0.0;
 
 pub const PLATFORMER_RUNNER_WIDTH: f32 = 0.8;
 pub const PLATFORMER_RUNNER_HEIGHT: f32 = 1.7;
@@ -642,8 +645,15 @@ pub const STEALTH_DECAY: f32 = 0.45;
 /// Cell spacing of the line-of-sight samples.
 pub const STEALTH_SIGHT_SAMPLE: f32 = 0.4;
 pub const STEALTH_CONE_SEGMENTS: usize = 18;
-/// Frames the whole room, including the corner the character starts in.
-pub const STEALTH_CAMERA_FIT: f32 = 2.4;
+/// Third-person stealth camera: close over the shoulder, but high enough to
+/// still read the patrols ahead. The bearing is fixed rather than following the
+/// character's facing, so turning a corner does not whip the view around.
+pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
+pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
+/// Height above the character's feet that the camera aims at.
+pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
+/// How quickly the camera catches up with the character, per second.
+pub const STEALTH_CAMERA_LERP: f32 = 5.0;
 pub const STEALTH_WALL_HEIGHT: f32 = 2.4;
 /// Guards as a fraction of the character's height.
 pub const STEALTH_GUARD_SCALE: f32 = 0.85;
@@ -661,6 +671,23 @@ const _: () = assert!(
 pub const STEALTH_CONE_REACH: f32 = STEALTH_VISION_RANGE * GRID_SPACING;
 // A cone shorter than the figure it belongs to would look detached.
 const _: () = assert!(STEALTH_CONE_REACH > STEALTH_CHARACTER_HEIGHT);
+
+// --- The on-foot walk ------------------------------------------------------
+//
+// The character asset carries a real walk cycle now: 19 joints, skinned in
+// Blender, exported as the "Walk" clip. Playback speed is matched to how fast
+// the figure is actually moving, because a clip played at the wrong rate makes
+// the feet skate.
+
+/// Name of the walk clip the character asset carries.
+pub const WALK_CLIP: &str = "Walk";
+/// Ground the clip covers in one cycle. Measured from the foot's travel in the
+/// rigged cycle (24 frames at 24 fps), and used to convert ground speed into
+/// clip playback speed.
+pub const WALK_CLIP_GROUND: f32 = 7.3;
+/// How quickly the rendered figure catches up with its grid cell, so the
+/// stealth walk glides instead of teleporting a cell at a time.
+pub const WALK_CATCH_UP: f32 = 14.0;
 
 pub const STEALTH_FLOOR_COLOR: Color = Color::srgb(0.1, 0.13, 0.19);
 pub const STEALTH_WALL_COLOR: Color = Color::srgb(0.28, 0.38, 0.52);
