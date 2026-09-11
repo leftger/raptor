@@ -360,6 +360,7 @@ mod tests {
             &std::collections::HashMap::new(),
             |_| false,
             |_| false,
+            |_| false,
         );
         assert_eq!(content, crate::lightcycle::logic::CellContent::ClosePortal);
         let approach = arena.parent_gate_approaches()[arena.parent_gate_approaches().len() / 2];
@@ -376,6 +377,7 @@ mod tests {
                 &arena,
                 sim,
                 &std::collections::HashMap::new(),
+                |_| false,
                 |_| false,
                 |_| false,
             )

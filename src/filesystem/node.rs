@@ -1,4 +1,5 @@
 use crate::config;
+use crate::disc::SourceLanguage;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -91,6 +92,19 @@ impl FileNode {
     pub fn is_markdown(&self) -> bool {
         !self.is_dir && is_markdown_path(&self.path)
     }
+
+    /// Source files open a disc-wars ring in Lightcycle mode. This is the
+    /// allowlist the plan describes: `.rs`, `.c` / `.h`, `.cpp` family, `.py`.
+    pub fn is_source(&self) -> bool {
+        !self.is_dir && self.source_language().is_some()
+    }
+
+    /// Which language a source file belongs to, or `None` when it is not one.
+    pub fn source_language(&self) -> Option<SourceLanguage> {
+        (!self.is_dir)
+            .then(|| SourceLanguage::from_path(&self.path))
+            .flatten()
+    }
 }
 
 /// True for `.md` and `.markdown` files, case-insensitive.
@@ -149,5 +163,22 @@ mod tests {
         let mut directory = FileNode::new("docs.md".into(), PathBuf::from("docs.md"), true, 0, 0);
         directory.is_dir = true;
         assert!(!directory.is_markdown());
+    }
+
+    #[test]
+    fn source_files_are_detected_by_the_allowlist() {
+        for name in ["main.rs", "lib.c", "api.h", "engine.cpp", "tool.py"] {
+            assert!(node_with_name(name).is_source(), "{name}");
+        }
+        for name in ["README.md", "notes.txt", "Cargo.lock", "archive.tar.gz"] {
+            assert!(!node_with_name(name).is_source(), "{name}");
+        }
+        let mut directory = FileNode::new("src.rs".into(), PathBuf::from("src.rs"), true, 0, 0);
+        directory.is_dir = true;
+        assert!(!directory.is_source());
+        assert_eq!(
+            node_with_name("main.rs").source_language(),
+            Some(crate::disc::SourceLanguage::Rust)
+        );
     }
 }

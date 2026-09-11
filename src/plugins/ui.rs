@@ -1,4 +1,6 @@
+use crate::asteroids::AsteroidsPhase;
 use crate::config;
+use crate::disc::{DiscPhase, SourceGame};
 use crate::document::DocumentLoadState;
 use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
 use crate::lightcycle::{LightcycleState, RunEnvironment};
@@ -403,8 +405,8 @@ fn update_footer_text(
         )
     } else {
         (
-            "LIGHTCYCLE  |  A/D: Turn  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  Files/trail/wall: crash  |  Gate: parent/close",
-            "MOUSE: Hold right-drag to look around  |  u/-: Parent directory or close document  |  Breadcrumb: jump to folder  |  Approach text for the folio panel",
+            "LIGHTCYCLE  |  A/D: Turn or Pivot  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  source: fight, or .py rocks (Space: throw/fire)  |  Shift: bullet time  |  Q: recall  |  Files/trail/wall: crash  |  Gate: parent/close",
+            "MOUSE: Hold right-drag to look around  |  u/-: Parent directory or close  |  Breadcrumb: jump to folder  |  Approach text for the folio panel",
         )
     };
 
@@ -459,6 +461,62 @@ fn update_status_text(
                     }
                     if let Some(heading) = layout.current_heading(run.sim.cell) {
                         status = format!("{status} | {heading}");
+                    }
+                    if layout.lossy_utf8 {
+                        status = format!("{status} | lossy utf-8");
+                    }
+                }
+                if let RunEnvironment::Source {
+                    name,
+                    layout,
+                    disc,
+                    asteroids,
+                    game,
+                    language,
+                    ..
+                } = &run.environment
+                {
+                    match game {
+                        SourceGame::Asteroids => {
+                            status = format!(
+                                "ASTEROIDS {} | LIVES {} | RING: {name} | {} | {status}",
+                                asteroids.score,
+                                asteroids.lives,
+                                language.name(),
+                            );
+                            if asteroids.phase == AsteroidsPhase::Flying {
+                                status = format!("{status} | rocks: {}", asteroids.rocks.len());
+                            } else {
+                                status = format!(
+                                    "{status} | ASTEROIDS: {} | drive out the gate",
+                                    asteroids.phase.label()
+                                );
+                            }
+                        }
+                        SourceGame::DiscWars => {
+                            status = format!(
+                                "DISC {}-{} | RING: {name} | {} | {status}",
+                                disc.player_score,
+                                disc.opponent_score,
+                                language.compiler(),
+                            );
+                            if disc.phase != DiscPhase::Fighting {
+                                status = format!("{status} | DISC: {}", disc.phase.label());
+                            }
+                            if let Some(pickup) = disc.last_pickup {
+                                status = format!("{status} | pickup: {}", pickup.label());
+                            }
+                            // LOCK means a throw would currently line up a clear shot.
+                            if disc.has_clear_shot(run.sim.cell, &run.arena) {
+                                status = format!("{status} | LOCK");
+                            }
+                        }
+                    }
+                    if lightcycle.slow_motion {
+                        status = format!("{status} | BULLET TIME");
+                    }
+                    if layout.truncated {
+                        status = format!("{status} | truncated");
                     }
                     if layout.lossy_utf8 {
                         status = format!("{status} | lossy utf-8");
@@ -630,6 +688,18 @@ fn update_folio_panel(
                 })
             }),
             RunEnvironment::Directory { .. } => None,
+            RunEnvironment::Source {
+                name,
+                path,
+                layout,
+                focused_block,
+                ..
+            } => focused_block.and_then(|index| {
+                layout
+                    .blocks
+                    .get(index)
+                    .map(|block| format!("{name}\n{}\nSIGNATURE\n\n{}", path.display(), block.text))
+            }),
         });
 
     if let Some(content) = content {

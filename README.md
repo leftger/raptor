@@ -48,6 +48,11 @@ RAPTOR turns your directories and files into a neon-green cyber-grid of chunky b
 * **Cool glowing wireframes because aesthetics**
 * **TRON-style Lightcycle Mode** (press `M` in the 3D view), entered by a
   satellite-style zoom out over the city and back down into the road you start on
+* **Disc Wars** — ride into a `.rs` / `.c` / `.h` / `.cpp` file to fight a
+  Recognizer in a ring generated from that file, best of three (`Space` / click
+  to throw, `Q` to recall)
+* **Asteroid Field** — ride into a `.py` file to pivot a parked cycle in a ring
+  and blast the drifting rocks (`A`/`D` to aim, `Space` to fire)
 * **Procedural music** seeded by your folders (`N` to toggle)
 
 ## Navigation
@@ -100,6 +105,9 @@ the same directory grid.
 * `u` / `-` / breadcrumbs → Directory jumps (the run resets when the new folder loads)
 * Folders → Enter them and load the directory
 * Markdown files → Enter a readable page arena
+* Source files (`.rs`, `.c`, `.h`, `.cpp`) → Enter a **disc wars ring**
+* Python files (`.py`, `.pyi`) → Enter an **asteroid field**: `A`/`D` pivot, `Space` fire
+* In a ring: `Space` / left click → Throw your disc; `Q` → Recall it
 * Other files, your own trail, and the arena walls → Crash
 * Pulsing gold gate → Go to the parent directory (inactive at `/`)
 * Folio gate (inside a document) → Close the file and restore the folder city
@@ -193,6 +201,76 @@ restarts the page; `M` leaves Lightcycle entirely.
 Large files are capped (about 256 KiB / 256 blocks) so a huge markdown dump
 cannot stall a frame or spawn an unbounded mesh. Truncation is shown in the
 status line.
+
+## Disc Wars
+
+Source files are a fifth collision type. Ride into a `.rs`, `.c`, `.h`, `.cpp`,
+or `.py` tower and the city gives way to a fighting ring generated from that
+file's own bytes — the same path-seeded fingerprint the cities and the music
+use, so the same file always produces the same ring.
+
+* The ring's radius follows the file's size and function count. Functions raise
+  gallery alcoves, `unsafe` / `TODO` / panic sites seed red hazard tiles, tests
+  become recharging safe pads, and constructs map to pickups: a `TODO` gives a
+  wall-phasing glitch disc, `async` a longer throw, `match` a disc that forks at
+  a wall, generics a heavy disc, `pub` extra range, `panic!` a spike, doc
+  comments a shield, and `cfg` a short phase floor.
+* A Recognizer opponent glides through the ring, throws along line of sight, and
+  only flinches at a disc that is about to reach it. A dense file fields an
+  aggressive fighter; a comment-heavy one hangs back.
+* Your disc grazes: a body within one cell of its path still counts as a hit, so
+  a target that steps a whole cell at a time is beatable. The Recognizer's own
+  disc keeps the exact-cell rule, so dodging its shots still matters.
+* `Space` / left click throws your disc. The throw auto-aims at the Recognizer,
+  so you do not have to be facing it; `Q` recalls the disc. Only an outbound disc
+  (or a returning one carrying Spike) derezzes the opponent.
+* Hold `Shift` for **bullet time**: the whole ring slows to 40% while you line up
+  a turn or a shot. The status line shows `LOCK` whenever a throw would have a
+  clear shot.
+* The Recognizer telegraphs. It holds still and swells for a beat before firing,
+  and each round opens with a short grace period so a fresh spawn is not
+  immediately punished.
+* Best of three: first to two rounds wins, the gate lights up, a rising fanfare
+  plays, and the status line reads `DISC: WIN`. Losing still leaves the gate open
+  so you can ride out; `R` rematches.
+* The folder's music keeps playing, tinted per language — Rust arpeggiates
+  harder, Python pumps slower.
+* The ring is capped like a document (about 256 KiB), and the tokenizer only
+  walks a few thousand lines, so a generated source dump cannot stall a frame.
+
+As with markdown pages, the navigator stays on the containing folder, so
+closing the ring rebuilds the city that was already loaded. Explorer still opens
+files with the system default app.
+
+## Asteroid Field
+
+Python files are not a disc ring. A `.py` file opens an **asteroid field**: the
+cycle is parked at the middle of a small ring and never moves, but it pivots on
+the spot and fires beams. Same ring geometry, close gate and restore path as
+disc wars — only the game inside changes.
+
+* `A` / `D` (or the arrows) pivot the parked cycle; `Space` / left click fires a
+  beam along the facing, on a short cooldown.
+* Rocks drift, bounce off the ring wall, and split when hit: large → two medium →
+  two small. The smallest just derezzes. Score climbs with the tier.
+* You have three lives. A rock that reaches the cycle costs one, then a
+  shockwave clears the rocks around you and a mercy window opens. Lose all three
+  and the field is lost.
+* Clear every rock to win; a fanfare plays and the status line reads
+  `ASTEROIDS: WIN`.
+* Hold `Shift` for bullet time, exactly as in a disc ring — it slows the rocks
+  and your pivot together.
+* The camera pulls up to a single top-down shot while the rocks are live, so
+  aiming never swings the view around. When the field ends it settles back down
+  behind the cycle.
+* The field is capped at a small ring (about nine cells) however long the file
+  is, and its wave is seeded from the file's fingerprint: the same file always
+  fields the same opening rocks.
+
+Once the field is **won or lost the cycle is handed back** and drives normally,
+keeping the facing you were aiming, so you can ride out through the gate to the
+parent directory. `U` / `-` leaves immediately from anywhere, `M` returns to
+Explorer, and `R` restarts the field.
 
 ## Procedural Music
 

@@ -10,8 +10,8 @@
 //!   turned into per-entry voice parameters by the proximity mixer.
 
 use crate::config;
-use crate::lightcycle::LightcycleState;
 use crate::lightcycle::logic::stable_path_seed;
+use crate::lightcycle::{LightcycleState, RunEnvironment};
 use crate::load::DirectoryLoaded;
 use crate::music::engine::AudioHandle;
 use crate::music::proximity::{Listener, NodePoint};
@@ -218,10 +218,19 @@ fn update_proximity(
     let dt = time.delta_secs();
     let targets = mixer.update(listener, nodes, theme, *profile, dt);
 
+    // While a disc-wars ring is open the folder theme stays the seed, but the
+    // language tints the arpeggiator: Rust steps harder, Python pumps slower.
+    let (arp_rate, arp_gain) = match lightcycle.run.as_ref().map(|run| &run.environment) {
+        Some(RunEnvironment::Source { language, .. }) => {
+            (language.arp_rate_scale(), language.arp_gain_scale())
+        }
+        _ => (1.0, 1.0),
+    };
+
     // The evolving melody plus a slow filter sweep on the base voices. The
     // mixer and arp advance every frame, but the payload is only published at a
     // fixed rate so a fast frame loop cannot starve the audio thread.
-    let arp_voice = arp.update(dt, theme, *profile);
+    let arp_voice = arp.update(dt * arp_rate, theme, *profile);
     let sweep = 0.5 + 0.5 * (time.elapsed_secs() * profile.sweep_rate() * TAU).sin();
 
     let publish_interval = 1.0 / config::MUSIC_PARAMS_HZ.max(1.0);
@@ -255,7 +264,12 @@ fn update_proximity(
     let _ = write!(
         params,
         "{}{}",
-        arp_message(arp_voice.freq, arp_cutoff, arp_voice.gain, arp_voice.pan),
+        arp_message(
+            arp_voice.freq,
+            arp_cutoff,
+            arp_voice.gain * arp_gain,
+            arp_voice.pan
+        ),
         base_filter_message(theme, *profile, sweep)
     );
     if params != last_params {

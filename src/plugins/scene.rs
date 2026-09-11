@@ -49,6 +49,7 @@ pub struct RaptorAssets {
     pub grid_material: Handle<StandardMaterial>,
     pub dir_body: Handle<StandardMaterial>,
     pub file_body: Handle<StandardMaterial>,
+    pub source_body: Handle<StandardMaterial>,
     pub hover_glow: Handle<StandardMaterial>,
     pub hover_file_glow: Handle<StandardMaterial>,
     pub selected_glow: Handle<StandardMaterial>,
@@ -89,6 +90,7 @@ fn setup_assets(
         grid_material: materials.add(unlit_material(config::GRID_COLOR, Some(0.35))),
         dir_body: materials.add(unlit_material(config::DIR_COLOR, None)),
         file_body: materials.add(unlit_material(config::FILE_COLOR, None)),
+        source_body: materials.add(unlit_material(config::SOURCE_TOWER_COLOR, None)),
         hover_glow: materials.add(unlit_material(config::HOVER_DIR_COLOR, Some(0.30))),
         hover_file_glow: materials.add(unlit_material(config::HOVER_FILE_COLOR, Some(0.30))),
         selected_glow: materials.add(unlit_material(config::SELECTED_COLOR, Some(0.30))),
@@ -164,31 +166,48 @@ fn spawn_grid(commands: &mut Commands, assets: &RaptorAssets) {
     }
 }
 
+/// One material plus the predicate selecting the nodes that wear it.
+type BlockGroup = (Handle<StandardMaterial>, fn(&FileNode) -> bool);
+
 fn spawn_blocks(
     commands: &mut Commands,
     assets: &RaptorAssets,
     meshes: &mut Assets<Mesh>,
     nodes: &[FileNode],
 ) {
-    for is_dir in [true, false] {
-        let material = if is_dir {
-            assets.dir_body.clone()
-        } else {
-            assets.file_body.clone()
-        };
-        let matching: Vec<_> = nodes.iter().filter(|node| node.is_dir == is_dir).collect();
+    // Directories, source files, and everything else each get their own body,
+    // so a rideable `.rs` tower reads differently from a plain file.
+    let groups: [BlockGroup; 3] = [
+        (assets.dir_body.clone(), |node| node.is_dir),
+        (assets.source_body.clone(), |node| {
+            !node.is_dir && node.is_source()
+        }),
+        (assets.file_body.clone(), |node| {
+            !node.is_dir && !node.is_source()
+        }),
+    ];
+    for (material, matches) in groups {
+        let matching: Vec<_> = nodes.iter().filter(|node| matches(node)).collect();
+        spawn_block_chunks(commands, meshes, &matching, material);
+    }
+}
 
-        for chunk in matching.chunks(config::MESH_CHUNK_SIZE) {
-            let Some(mesh) = build_chunk_mesh(chunk) else {
-                continue;
-            };
-            commands.spawn((
-                DirectorySceneRoot,
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(material.clone()),
-                Pickable::IGNORE,
-            ));
-        }
+fn spawn_block_chunks(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    matching: &[&FileNode],
+    material: Handle<StandardMaterial>,
+) {
+    for chunk in matching.chunks(config::MESH_CHUNK_SIZE) {
+        let Some(mesh) = build_chunk_mesh(chunk) else {
+            continue;
+        };
+        commands.spawn((
+            DirectorySceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(material.clone()),
+            Pickable::IGNORE,
+        ));
     }
 }
 

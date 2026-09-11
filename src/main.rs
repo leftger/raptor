@@ -1,8 +1,10 @@
 use bevy::prelude::*;
 
+mod asteroids;
 mod cli;
 mod command;
 mod config;
+mod disc;
 mod document;
 mod filesystem;
 mod lightcycle;
@@ -14,6 +16,7 @@ mod state;
 
 use cli::Options;
 use config::{WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
+use disc::SourceLoadState;
 use document::DocumentLoadState;
 use load::DirectoryLoadState;
 use plugins::RaptorPlugins;
@@ -48,6 +51,7 @@ fn main() {
         .insert_resource(UiNotice::default())
         .insert_resource(DirectoryLoadState::default())
         .insert_resource(DocumentLoadState::default())
+        .insert_resource(SourceLoadState::default())
         .insert_resource(OrbitCameraResource::default())
         .insert_resource(SelectionState::default())
         .insert_resource(ScanEffectResource::default())

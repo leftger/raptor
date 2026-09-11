@@ -43,6 +43,16 @@ impl Heading {
             (Heading::NegZ, Turn::Right) => Heading::PosX,
         }
     }
+
+    /// The heading directly opposite this one, used when a disc turns back.
+    pub fn opposite(self) -> Self {
+        match self {
+            Heading::PosX => Heading::NegX,
+            Heading::NegX => Heading::PosX,
+            Heading::PosZ => Heading::NegZ,
+            Heading::NegZ => Heading::PosZ,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +77,12 @@ pub enum CrashReason {
     File,
     Trail,
     Wall,
+    /// Rode into the Recognizer opponent's body.
+    Opponent,
+    /// Rode into a live disc.
+    Disc,
+    /// Lingered on too many hazard tiles in a row.
+    Hazard,
 }
 
 /// Result of one or more cell-boundary crossings during an advance.
@@ -76,6 +92,7 @@ pub enum StepOutcome {
     Crashed(CrashReason),
     EnteringDir(usize),
     EnteringDocument(usize),
+    EnteringSource(usize),
     GoToParent,
     CloseDocument,
 }
@@ -87,10 +104,16 @@ pub enum CellContent {
     File(usize),
     Dir(usize),
     Markdown(usize),
+    /// A rideable source file: entering starts a disc-wars ring.
+    Source(usize),
     Trail,
     Wall,
     ParentPortal,
     ClosePortal,
+    /// The opponent's body.
+    Opponent,
+    /// A live opponent disc.
+    OpponentDisc,
 }
 
 /// Which external navigation request a run is waiting on.
@@ -98,6 +121,7 @@ pub enum CellContent {
 pub enum EntryRequest {
     Directory(usize),
     Document(usize),
+    Source(usize),
     Parent,
 }
 
@@ -258,13 +282,15 @@ fn expand_axis(min: i32, max: i32, span: i32) -> (i32, i32) {
     (min - before, max + (extra - before))
 }
 
-/// Directory cities and markdown pages share bounds and portals, but the
-/// kind decides which generator and palette may run.
+/// Directory cities, markdown pages, and disc-wars rings share bounds and
+/// portals, but the kind decides which generator and palette may run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ArenaKind {
     #[default]
     Directory,
     Document,
+    /// A circular source-file ring. Its close gate behaves like a document's.
+    Disc,
 }
 
 /// `min`/`max` are inclusive cell coordinates inside the arena. Everything one
@@ -916,6 +942,11 @@ impl LightcycleSim {
                     self.pending_request = Some(EntryRequest::Document(index));
                     return StepOutcome::EnteringDocument(index);
                 }
+                CellContent::Source(index) => {
+                    self.phase = RunPhase::EnteringDir;
+                    self.pending_request = Some(EntryRequest::Source(index));
+                    return StepOutcome::EnteringSource(index);
+                }
                 CellContent::File(_) => {
                     return self.crash(CrashReason::File);
                 }
@@ -924,6 +955,12 @@ impl LightcycleSim {
                 }
                 CellContent::Wall => {
                     return self.crash(CrashReason::Wall);
+                }
+                CellContent::Opponent => {
+                    return self.crash(CrashReason::Opponent);
+                }
+                CellContent::OpponentDisc => {
+                    return self.crash(CrashReason::Disc);
                 }
                 CellContent::ParentPortal => {
                     self.phase = RunPhase::EnteringDir;
@@ -950,6 +987,9 @@ impl LightcycleSim {
 }
 
 /// Convenience classifier shared by the Bevy plugin and unit tests.
+///
+/// The three predicates separate the enterable file types: markdown opens a
+/// page, source opens a disc-wars ring, and anything else is a hard crash.
 pub fn classify_next_content(
     cell: (i32, i32),
     arena: &Arena,
@@ -957,12 +997,13 @@ pub fn classify_next_content(
     cells: &HashMap<(i32, i32), usize>,
     is_dir: impl Fn(usize) -> bool,
     is_markdown: impl Fn(usize) -> bool,
+    is_source: impl Fn(usize) -> bool,
 ) -> CellContent {
     if arena
         .parent_portal
         .is_some_and(|portal| portal.contains(cell))
     {
-        return if arena.kind == ArenaKind::Document {
+        return if matches!(arena.kind, ArenaKind::Document | ArenaKind::Disc) {
             CellContent::ClosePortal
         } else {
             CellContent::ParentPortal
@@ -982,6 +1023,8 @@ pub fn classify_next_content(
             CellContent::Dir(index)
         } else if is_markdown(index) {
             CellContent::Markdown(index)
+        } else if is_source(index) {
+            CellContent::Source(index)
         } else {
             CellContent::File(index)
         };
@@ -1068,6 +1111,7 @@ mod tests {
                     sim,
                     &self.cells,
                     |index| self.is_dir[index],
+                    |_| false,
                     |_| false,
                 )
             }
@@ -1336,11 +1380,57 @@ mod tests {
         let layout = TestLayout::new(&[(1, 0)], &[], None);
         let mut sim = LightcycleSim::start((0, 0), Heading::PosX);
         let outcome = sim.advance(1.0, |cell, sim| {
-            classify_next_content(cell, &layout.arena, sim, &layout.cells, |_| false, |_| true)
+            classify_next_content(
+                cell,
+                &layout.arena,
+                sim,
+                &layout.cells,
+                |_| false,
+                |_| true,
+                |_| false,
+            )
         });
         assert_eq!(outcome, StepOutcome::EnteringDocument(0));
         assert_eq!(sim.pending_request, Some(EntryRequest::Document(0)));
         assert_eq!(sim.phase, RunPhase::EnteringDir);
+    }
+
+    #[test]
+    fn next_cell_is_source_requests_a_ring_not_a_crash() {
+        let layout = TestLayout::new(&[(1, 0)], &[], None);
+        let mut sim = LightcycleSim::start((0, 0), Heading::PosX);
+        let outcome = sim.advance(1.0, |cell, sim| {
+            classify_next_content(
+                cell,
+                &layout.arena,
+                sim,
+                &layout.cells,
+                |_| false,
+                |_| false,
+                |_| true,
+            )
+        });
+        assert_eq!(outcome, StepOutcome::EnteringSource(0));
+        assert_eq!(sim.pending_request, Some(EntryRequest::Source(0)));
+        assert_eq!(sim.phase, RunPhase::EnteringDir);
+    }
+
+    #[test]
+    fn a_source_file_still_crashes_when_the_source_predicate_is_absent() {
+        let layout = TestLayout::new(&[(1, 0)], &[], None);
+        let mut sim = LightcycleSim::start((0, 0), Heading::PosX);
+        let outcome = sim.advance(1.0, |cell, sim| {
+            classify_next_content(
+                cell,
+                &layout.arena,
+                sim,
+                &layout.cells,
+                |_| false,
+                |_| false,
+                |_| false,
+            )
+        });
+        assert_eq!(outcome, StepOutcome::Crashed(CrashReason::File));
     }
 
     #[test]
@@ -1764,7 +1854,15 @@ mod tests {
         let wall = *arena.street_walls.iter().next().unwrap();
         let sim = LightcycleSim::start(arena.center(), Heading::PosX);
         assert_eq!(
-            classify_next_content(wall, &arena, &sim, &HashMap::new(), |_| false, |_| false),
+            classify_next_content(
+                wall,
+                &arena,
+                &sim,
+                &HashMap::new(),
+                |_| false,
+                |_| false,
+                |_| false,
+            ),
             CellContent::Wall
         );
     }

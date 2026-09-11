@@ -18,6 +18,10 @@ pub enum MusicSfx {
     Beam,
     /// Bright shimmer for the parent portal / leaving a document.
     Portal,
+    /// Rising fanfare when the Recognizer is beaten.
+    Victory,
+    /// Snappy falling zap for an asteroid-field beam.
+    Zap,
 }
 
 /// One frame of effect output. `freq` is ignored by effects whose oscillator is
@@ -33,7 +37,14 @@ pub struct SfxVoice {
 impl MusicSfx {
     /// Every effect, in graph order. The score walks this to declare and mix the
     /// chains, so a new variant cannot be forgotten in the output.
-    pub const ALL: [Self; 4] = [Self::Crash, Self::Turn, Self::Beam, Self::Portal];
+    pub const ALL: [Self; 6] = [
+        Self::Crash,
+        Self::Turn,
+        Self::Beam,
+        Self::Portal,
+        Self::Victory,
+        Self::Zap,
+    ];
 
     /// Glicol reference chain this effect drives.
     pub fn chain(self) -> &'static str {
@@ -42,6 +53,8 @@ impl MusicSfx {
             Self::Turn => "~sfx_turn",
             Self::Beam => "~sfx_beam",
             Self::Portal => "~sfx_portal",
+            Self::Victory => "~sfx_victory",
+            Self::Zap => "~sfx_zap",
         }
     }
 
@@ -55,6 +68,10 @@ impl MusicSfx {
             Self::Turn => format!("{chain}: squ 1200.0 >> lpf 3200.0 0.7 >> mul 0.0 >> pan -0.15;"),
             Self::Beam => format!("{chain}: saw 180.0 >> lpf 600.0 0.7 >> mul 0.0 >> pan 0.0;"),
             Self::Portal => format!("{chain}: tri 660.0 >> lpf 2500.0 0.7 >> mul 0.0 >> pan 0.1;"),
+            Self::Victory => {
+                format!("{chain}: squ 523.25 >> lpf 2600.0 0.7 >> mul 0.0 >> pan 0.0;")
+            }
+            Self::Zap => format!("{chain}: squ 1800.0 >> lpf 5200.0 0.7 >> mul 0.0 >> pan 0.0;"),
         }
     }
 
@@ -64,6 +81,8 @@ impl MusicSfx {
             Self::Turn => 0.16,
             Self::Beam => 1.15,
             Self::Portal => 0.5,
+            Self::Victory => 1.8,
+            Self::Zap => 0.12,
         }
     }
 
@@ -103,6 +122,26 @@ impl MusicSfx {
                 cutoff: 2500.0,
                 gain: 0.28 * (1.0 - p).powf(1.2),
                 pan: 0.1,
+            },
+            Self::Victory => {
+                // A stepped major arpeggio (C-E-G-C) that holds the top note:
+                // an arcade fanfare rather than a smooth sweep.
+                const NOTES: [f32; 4] = [523.25, 659.25, 783.99, 1046.50];
+                let step = ((p * NOTES.len() as f32) as usize).min(NOTES.len() - 1);
+                let attack = (p / 0.05).min(1.0);
+                SfxVoice {
+                    freq: NOTES[step],
+                    cutoff: 2600.0 + 3600.0 * p,
+                    gain: 0.32 * attack * (1.0 - p).powf(0.6),
+                    pan: 0.0,
+                }
+            }
+            Self::Zap => SfxVoice {
+                // A short, bright pew: high, fast drop with a snappy envelope.
+                freq: 1800.0 - 1500.0 * p,
+                cutoff: 5200.0,
+                gain: 0.24 * (1.0 - p).powf(1.4),
+                pan: 0.0,
             },
         }
     }
@@ -159,5 +198,26 @@ mod tests {
         let end = MusicSfx::Turn.voice(1.0);
         assert!(start.freq > end.freq);
         assert!(start.gain > end.gain);
+    }
+
+    #[test]
+    fn the_victory_climbs_a_fanfare_and_releases() {
+        let early = MusicSfx::Victory.voice(0.1);
+        let middle = MusicSfx::Victory.voice(0.4);
+        let late = MusicSfx::Victory.voice(0.9);
+        assert!(middle.freq > early.freq, "the fanfare should climb");
+        assert!(late.freq > middle.freq, "the fanfare should keep climbing");
+        assert!(
+            MusicSfx::Victory.duration() > MusicSfx::Beam.duration(),
+            "the win deserves the longest cue"
+        );
+        assert!(
+            MusicSfx::Victory.voice(0.0).gain < 0.01,
+            "no click at the start"
+        );
+        assert!(
+            MusicSfx::Victory.voice(1.0).gain < 0.01,
+            "it should release"
+        );
     }
 }

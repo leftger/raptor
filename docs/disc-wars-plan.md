@@ -1,6 +1,6 @@
 # RAPTOR — Disc wars mini-game plan
 
-Status: proposal
+Status: implemented (phases 1–5)
 Owner: —
 Last updated: 2026-09-10
 
@@ -174,18 +174,55 @@ its alcove — reading still exists, fight is the foreground.
   the matching `.c` sits in the same folder — fun, but phase 2. Phase 1: every
   listed extension is a self-contained ring.
 
-## 8. Suggested build order
+## 8. Build order
 
-1. **Collision + stub arena** — source towers enter, load bytes, spawn an
-   empty round ring with a close gate, no AI. Proves the load/restore path.
-2. **Throw / recall / hit cells** — you vs a stationary dummy. Restart and
-   close still work.
-3. **Tokenizer → layout** — functions, hazards, pickups from the fingerprint.
-   Determinism tests like city generation.
-4. **Opponent AI** — line-of-sight throw, simple dodge. Best of three.
-5. **Language palettes + HUD + music tint** — the thematic layer, after the
-   loop is fun.
+1. **Collision + stub arena** — DONE. Source towers enter, load bytes, spawn a
+   ring with a close gate, and restore the folder city on close. Proves the
+   load/restore path.
+2. **Throw / recall / hit cells** — DONE. Space throws, `Q` recalls, a live disc
+   or the opponent's body is a lethal cell in the same grid model the cycle
+   already uses. Restart and close still work.
+3. **Tokenizer → layout** — DONE. `disc/layout.rs` fingerprints the bytes into
+   functions, hazards, pickups, safe pads, and gate placement, with determinism
+   tests like city generation.
+4. **Opponent AI** — DONE. A disc-wielding Recognizer walks the ring, takes
+   line-of-sight shots, sidesteps an incoming disc, and fields an aggressive or
+   defensive stance from the file's density. Best of three.
+5. **Language palettes + HUD + music tint** — DONE. Per-language ring accents,
+   the `DISC 1–0 | RING … | rustc` status line and folio panel, and a
+   per-language arpeggiator tint over the folder theme.
 
 The first slice that would feel real is (1)+(2): riding into `main.rs` and
 actually throwing a disc, even on a blank ring. Everything else is the file
 talking back.
+
+## 9. As built
+
+- New Bevy-free module `src/disc/` (`language`, `layout`, `combat`, `load`) plus
+  wiring in `plugins/lightcycle.rs`, `plugins/ui.rs`, `plugins/scene.rs`, and a
+  music tint in `plugins/music.rs`.
+- The ring is a circular playable disc carved out of a square arena: the lethal
+  fill outside the radius is a wall band plus a low corner plinth, and the close
+  gate is a corridor cut through the ring at a path-seeded cardinal. This reuses
+  the existing arena bounds, spawn search, crash FX, chase camera, and restore
+  path unchanged.
+- The player's movement stays in `LightcycleSim`; `DiscSim` adds only the thrown
+  discs, the opponent, pickup effects, the hazard fuse, and round bookkeeping,
+  stepped on the same `LIGHTCYCLE_FIXED_STEP`.
+- Controls are decoupled from riding: a throw auto-aims at the opponent (clear
+  shot first, dominant axis otherwise), `Shift` holds bullet time to slow the
+  ring, and the Recognizer holds still and swells for a beat before each shot.
+- Balance: the player's disc has a one-cell graze radius so a target that steps
+  whole cells can still be hit; the opponent is slower, only dodges a disc that
+  is already close, and its rendered body glides between cells instead of
+  snapping. Its own disc keeps the exact-cell rule.
+- The match win plays a dedicated `~sfx_victory` fanfare (a stepped C-E-G-C
+  arpeggio) in place of the derezz crash, so the final blow lands clean.
+- Keys: `Space` / left click throws (aimed), `Q` recalls, `Shift` bullet time,
+  `R` rematches, `U` / `-` or the gate closes the ring.
+- Sibling game: `.py` files skip the ring fight and open an asteroid field
+  (`crate::asteroids`), sharing the ring geometry, close gate and restore path.
+  The cycle is parked while the rocks are live and handed back — facing the way
+  you were aiming — once the field is won or lost, so you can drive out the
+  gate. See the README's "Asteroid Field" section.
+

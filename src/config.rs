@@ -272,6 +272,155 @@ pub const MUSIC_ACTION_ARP_GAIN: f32 = 0.17;
 pub const MUSIC_CALM_SWEEP_RATE: f32 = 0.05;
 pub const MUSIC_ACTION_SWEEP_RATE: f32 = 0.12;
 
+// --- Disc wars --------------------------------------------------------------
+
+/// Source arena byte cap, mirroring the document cap. Bigger files are read up
+/// to this and then truncated with a status-line note.
+pub const SOURCE_MAX_BYTES: usize = 256 * 1024;
+/// Lines the cheap tokenizer ever looks at. The rest of the file only feeds the
+/// fingerprint hash, so a huge generated source cannot stall a frame.
+pub const SOURCE_MAX_LINES: usize = 4_000;
+
+/// Smallest and largest ring radius, in cells. A stub file gets a tiny practice
+/// ring; a long one gets a full coliseum.
+pub const DISC_RADIUS_MIN: i32 = 8;
+pub const DISC_RADIUS_MAX: i32 = 18;
+/// How far the close gate corridor runs outward from the ring wall.
+pub const DISC_GATE_DEPTH: i32 = 3;
+pub const DISC_MAX_GALLERIES: usize = 12;
+pub const DISC_MAX_HAZARDS: usize = 24;
+pub const DISC_MAX_SAFE_PADS: usize = 24;
+pub const DISC_MAX_PICKUPS: usize = 6;
+
+/// Rounds won needed to take the match (best of three).
+pub const DISC_WIN_SCORE: u8 = 2;
+/// Pause between rounds before both fighters respawn.
+pub const DISC_ROUND_DELAY: f32 = 1.6;
+/// Cells a disc flies before it turns back.
+pub const DISC_RANGE: i32 = 8;
+/// Extra range granted by Split / Widen.
+pub const DISC_RANGE_BONUS: i32 = 2;
+/// Disc flight speed, in cells per second.
+pub const DISC_SPEED: f32 = 9.0;
+/// Opponent ground speed, in cells per second. Slower than the bike so the
+/// Recognizer can be lined up and hit, but still a moving target.
+pub const DISC_OPPONENT_SPEED: f32 = 1.7;
+/// The opponent only bothers dodging a disc this close (Chebyshev cells). A
+/// distant disc leaves it advancing instead of sliding off its own firing line.
+pub const DISC_OPPONENT_DODGE_RANGE: i32 = 4;
+/// Cells of slack around the opponent's body that still count as a hit for the
+/// player's disc. The Recognizer moves in grid steps, so an exact-cell rule
+/// makes a moving target nearly impossible to land on. Its own disc keeps an
+/// exact rule, so dodging its shots still matters.
+pub const DISC_PLAYER_HIT_SLACK: i32 = 1;
+/// Seconds between opponent throws while it has line of sight.
+pub const DISC_OPPONENT_THROW_COOLDOWN: f32 = 1.05;
+/// Seconds the Recognizer winds up after acquiring line of sight, before it
+/// fires. Its dais swells while charging, so the shot is telegraphed.
+pub const DISC_OPPONENT_WINDUP: f32 = 0.45;
+/// Quiet time at the start of a round before the opponent may line up a shot,
+/// so a fresh spawn is not immediately punished.
+pub const DISC_SPAWN_GRACE: f32 = 1.2;
+/// Bullet time: while Shift is held in a ring, everything steps at this
+/// fraction of real time, giving the rider room to line up a turn or a throw.
+pub const DISC_BULLET_TIME_SCALE: f32 = 0.4;
+/// Hazard cells a rider may cross in a row before the fuse burns out. Stepping
+/// off the hazard resets it, so one or two are survivable.
+pub const DISC_HAZARD_FUSE: i32 = 3;
+/// How long a Phase pickup leaves the rider untouchable.
+pub const DISC_PHASE_SECONDS: f32 = 1.2;
+pub const DISC_SHIELD_MAX: u8 = 2;
+/// Heavy disc speed multiplier.
+pub const DISC_HEAVY_SPEED_SCALE: f32 = 0.6;
+
+pub const DISC_FLOOR_COLOR: Color = Color::srgb(0.02, 0.03, 0.05);
+/// Explorer/lightcycle tower body for a rideable source file. Amber keeps it
+/// distinct from the green directory and cyan plain-file towers.
+pub const SOURCE_TOWER_COLOR: Color = Color::srgb(1.0, 0.5, 0.05);
+pub const DISC_RING_COLOR: Color = Color::srgb(0.05, 0.09, 0.14);
+pub const DISC_HAZARD_COLOR: Color = Color::srgb(1.0, 0.18, 0.12);
+pub const DISC_PICKUP_COLOR: Color = Color::srgb(0.95, 0.9, 0.3);
+pub const DISC_OPPONENT_COLOR: Color = Color::srgb(1.0, 0.55, 0.08);
+pub const DISC_PLAYER_DISC_COLOR: Color = Color::srgb(0.6, 0.98, 1.0);
+pub const DISC_SAFE_PAD_COLOR: Color = Color::srgb(0.1, 0.5, 0.3);
+/// Flat cylinder used for a thrown disc.
+pub const DISC_MESH_RADIUS: f32 = 0.55;
+pub const DISC_MESH_THICKNESS: f32 = 0.14;
+/// Stubby cylinder body for the Recognizer opponent.
+pub const RECOGNIZER_RADIUS: f32 = 0.6;
+pub const RECOGNIZER_HEIGHT: f32 = 1.5;
+
+// --- Asteroids (Python source files) ---------------------------------------
+//
+// A second source-file game: the cycle is parked in the middle of a small ring
+// and only pivots, shooting beams at drifting rocks. See `crate::asteroids`.
+
+/// Ring radius, in cells, for an asteroid field. Big enough that rocks have to
+/// cross some ground before they reach the parked cycle, and still small enough
+/// that the camera can frame the whole playfield from above.
+pub const ASTEROIDS_RADIUS_CELLS: i32 = 9;
+/// Pivot speed of the parked cycle, in radians per second.
+pub const ASTEROIDS_TURN_RATE: f32 = 2.6;
+/// Seconds between shots.
+pub const ASTEROIDS_FIRE_COOLDOWN: f32 = 0.22;
+/// Beam speed, in world units per second.
+pub const ASTEROIDS_BEAM_SPEED: f32 = 26.0;
+/// How long a beam lives before it fizzles.
+pub const ASTEROIDS_BEAM_LIFE: f32 = 1.3;
+/// Rendered beam length and collision thickness.
+pub const ASTEROIDS_BEAM_LENGTH: f32 = 1.1;
+pub const ASTEROIDS_BEAM_RADIUS: f32 = 0.18;
+/// Collision radius of the parked cycle.
+pub const ASTEROIDS_BIKE_RADIUS: f32 = 1.0;
+/// Lives before the field is lost.
+pub const ASTEROIDS_LIVES: u8 = 3;
+/// Mercy window after losing a life.
+pub const ASTEROIDS_INVULN: f32 = 1.8;
+/// Rocks within this radius are derezzed by the respawn shockwave.
+pub const ASTEROIDS_SHOCKWAVE: f32 = 7.5;
+/// Rock radius per size tier, in world units. Kept well under the cycle's own
+/// radius: a rock you can see around is a rock you can shoot.
+pub const ASTEROIDS_ROCK_LARGE: f32 = 1.5;
+pub const ASTEROIDS_ROCK_MEDIUM: f32 = 0.95;
+pub const ASTEROIDS_ROCK_SMALL: f32 = 0.5;
+/// Drift speed range for a fresh rock. Slow enough to line up a shot across the
+/// field before it arrives.
+pub const ASTEROIDS_ROCK_SPEED_MIN: f32 = 1.3;
+pub const ASTEROIDS_ROCK_SPEED_MAX: f32 = 2.8;
+/// Half-angle a split sends its two children away from the parent's path.
+pub const ASTEROIDS_SPLIT_SPREAD: f32 = 0.7;
+/// Large rocks in the opening wave.
+pub const ASTEROIDS_WAVE_SIZE: usize = 4;
+/// Entity pool caps; the sim never grows past these by design.
+pub const ASTEROIDS_MAX_ROCKS: usize = 32;
+pub const ASTEROIDS_MAX_BEAMS: usize = 16;
+/// Top-down camera height as a multiple of the ring radius.
+pub const ASTEROIDS_CAMERA_FIT: f32 = 2.4;
+/// How far back from straight-down the field camera leans, as a fraction of its
+/// height. A little lean reads as 3D without distorting the aim.
+pub const ASTEROIDS_CAMERA_LEAN: f32 = 0.5;
+
+pub const ASTEROIDS_ROCK_COLOR: Color = Color::srgb(0.44, 0.5, 0.6);
+pub const ASTEROIDS_ROCK_CORE_COLOR: Color = Color::srgb(1.0, 0.66, 0.26);
+pub const ASTEROIDS_BEAM_COLOR: Color = Color::srgb(0.6, 1.0, 1.0);
+
+/// One ring identity per source language, mirroring the plan's table.
+pub const DISC_RUST_ACCENT: Color = Color::srgb(0.0, 0.9, 1.0);
+pub const DISC_C_ACCENT: Color = Color::srgb(1.0, 0.56, 0.07);
+pub const DISC_CPP_ACCENT: Color = Color::srgb(1.0, 0.03, 0.72);
+pub const DISC_PYTHON_ACCENT: Color = Color::srgb(0.2, 0.85, 0.25);
+
+/// Per-language arpeggiator tint while a ring is open: Rust arpeggiates harder,
+/// Python pumps slower. Multipliers on the folder theme, which stays the seed.
+pub const MUSIC_DISC_RUST_ARP_RATE: f32 = 1.25;
+pub const MUSIC_DISC_C_ARP_RATE: f32 = 1.0;
+pub const MUSIC_DISC_CPP_ARP_RATE: f32 = 1.1;
+pub const MUSIC_DISC_PYTHON_ARP_RATE: f32 = 0.75;
+pub const MUSIC_DISC_RUST_ARP_GAIN: f32 = 1.2;
+pub const MUSIC_DISC_C_ARP_GAIN: f32 = 1.0;
+pub const MUSIC_DISC_CPP_ARP_GAIN: f32 = 1.1;
+pub const MUSIC_DISC_PYTHON_ARP_GAIN: f32 = 0.85;
+
 pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
 pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
 pub const LIGHTCYCLE_CAMERA_LOOKAHEAD: f32 = 4.0;

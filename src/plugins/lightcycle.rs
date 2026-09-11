@@ -1,4 +1,10 @@
+use crate::asteroids::{AsteroidsPhase, AsteroidsSim};
 use crate::config;
+use crate::disc::{
+    DiscEvents, DiscLayout, DiscPhase, DiscSim, PlayerSnapshot, SourceGame, SourceLanguage,
+    SourceLoadFailed, SourceLoadState, SourceLoaded, SourceRequested, build_capped_disc_arena,
+    build_disc_arena,
+};
 use crate::document::{
     DocumentLayout, DocumentLoadFailed, DocumentLoadState, DocumentLoaded, DocumentRequested,
     build_document_arena_from_parse,
@@ -6,8 +12,9 @@ use crate::document::{
 };
 use crate::filesystem::FileNode;
 use crate::lightcycle::logic::{
-    Arena, ArenaKind, CityStructure, CityStructureKind, CityTheme, CrashReason, GatePlacement,
-    Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall, classify_next_content,
+    Arena, ArenaKind, CellContent, CityStructure, CityStructureKind, CityTheme, CrashReason,
+    GatePlacement, Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall,
+    classify_next_content,
 };
 use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
@@ -33,30 +40,45 @@ impl Plugin for LightcyclePlugin {
             .add_message::<DocumentRequested>()
             .add_message::<DocumentLoaded>()
             .add_message::<DocumentLoadFailed>()
+            .add_message::<SourceRequested>()
+            .add_message::<SourceLoaded>()
+            .add_message::<SourceLoadFailed>()
             .add_systems(Startup, setup_lightcycle_assets)
             .add_systems(
                 Update,
                 (
-                    toggle_mode,
-                    apply_mode_swap,
-                    reset_on_directory_loaded,
-                    start_document_loads,
-                    poll_document_loads,
-                    reset_on_document_loaded,
-                    apply_load_failure,
-                    apply_document_load_failure,
-                    sync_directory_scene_visibility,
-                    read_lightcycle_input.run_if(in_lightcycle_mode),
-                    step_lightcycle.run_if(in_lightcycle_mode),
-                    restore_directory_arena.run_if(in_lightcycle_mode),
-                    spawn_crash_effect.run_if(in_lightcycle_mode),
-                    update_crash_effects.run_if(in_lightcycle_mode),
-                    update_trail_mesh.run_if(in_lightcycle_mode),
-                    animate_parent_gate.run_if(in_lightcycle_mode),
-                    animate_city_beacons.run_if(in_lightcycle_mode),
-                    update_document_focus.run_if(in_lightcycle_mode),
-                    update_cycle_transform.run_if(in_lightcycle_mode),
-                    update_chase_camera.run_if(in_lightcycle_mode),
+                    (
+                        toggle_mode,
+                        apply_mode_swap,
+                        reset_on_directory_loaded,
+                        start_document_loads,
+                        poll_document_loads,
+                        reset_on_document_loaded,
+                        start_source_loads,
+                        poll_source_loads,
+                        reset_on_source_loaded,
+                        apply_load_failure,
+                        apply_document_load_failure,
+                        apply_source_load_failure,
+                        sync_directory_scene_visibility,
+                    ),
+                    (
+                        read_lightcycle_input.run_if(in_lightcycle_mode),
+                        step_lightcycle.run_if(in_lightcycle_mode),
+                        restore_directory_arena.run_if(in_lightcycle_mode),
+                        spawn_crash_effect.run_if(in_lightcycle_mode),
+                        update_crash_effects.run_if(in_lightcycle_mode),
+                        update_trail_mesh.run_if(in_lightcycle_mode),
+                        animate_parent_gate.run_if(in_lightcycle_mode),
+                        animate_city_beacons.run_if(in_lightcycle_mode),
+                        update_document_focus.run_if(in_lightcycle_mode),
+                        update_disc_focus.run_if(in_lightcycle_mode),
+                        sync_disc_entities.run_if(in_lightcycle_mode),
+                        sync_asteroid_entities.run_if(in_lightcycle_mode),
+                        animate_disc_pickups.run_if(in_lightcycle_mode),
+                        update_cycle_transform.run_if(in_lightcycle_mode),
+                        update_chase_camera.run_if(in_lightcycle_mode),
+                    ),
                 )
                     .chain()
                     .after(crate::plugins::filesystem::apply_loaded),
@@ -95,6 +117,24 @@ struct LightcycleAssets {
     dir_tower_material: Handle<StandardMaterial>,
     file_tower_material: Handle<StandardMaterial>,
     markdown_tower_material: Handle<StandardMaterial>,
+    source_tower_material: Handle<StandardMaterial>,
+    disc_floor_material: Handle<StandardMaterial>,
+    disc_ring_material: Handle<StandardMaterial>,
+    disc_plinth_material: Handle<StandardMaterial>,
+    disc_hazard_material: Handle<StandardMaterial>,
+    disc_opponent_material: Handle<StandardMaterial>,
+    disc_player_disc_material: Handle<StandardMaterial>,
+    disc_pickup_material: Handle<StandardMaterial>,
+    disc_safe_pad_material: Handle<StandardMaterial>,
+    /// One accent per [`SourceLanguage`], indexed by [`disc_language_index`].
+    disc_accent_materials: [Handle<StandardMaterial>; 4],
+    /// Flat cylinder thrown and returned during a fight.
+    disc_mesh: Handle<Mesh>,
+    /// Taller cylinder body for the Recognizer opponent.
+    recognizer_mesh: Handle<Mesh>,
+    /// Blocky rock body and beam tracer for the asteroid field.
+    rock_material: Handle<StandardMaterial>,
+    beam_material: Handle<StandardMaterial>,
     document_floor_material: Handle<StandardMaterial>,
     document_rule_material: Handle<StandardMaterial>,
     document_margin_material: Handle<StandardMaterial>,
@@ -152,6 +192,37 @@ struct CityBeacon {
 
 #[derive(Component)]
 struct DocumentFocusMarker;
+
+/// The player's thrown disc.
+#[derive(Component)]
+struct PlayerDiscEntity;
+
+/// The Recognizer opponent's body.
+#[derive(Component)]
+struct OpponentEntity;
+
+/// The opponent's disc.
+#[derive(Component)]
+struct OpponentDiscEntity;
+
+/// One pickup waiting on a ring floor, keyed into `DiscLayout::pickups`.
+#[derive(Component)]
+struct DiscPickupEntity {
+    index: usize,
+    phase: f32,
+}
+
+/// One pooled rock in the asteroid field, keyed into `AsteroidsSim::rocks`.
+#[derive(Component)]
+struct RockEntity {
+    index: usize,
+}
+
+/// One pooled beam in the asteroid field, keyed into `AsteroidsSim::beams`.
+#[derive(Component)]
+struct BeamEntity {
+    index: usize,
+}
 
 /// Direction the chase camera is currently following.
 ///
@@ -275,6 +346,14 @@ fn city_theme_index(theme: CityTheme) -> usize {
     }
 }
 
+/// Index into [`LightcycleAssets::disc_accent_materials`].
+fn disc_language_index(language: SourceLanguage) -> usize {
+    SourceLanguage::ALL
+        .iter()
+        .position(|candidate| *candidate == language)
+        .unwrap_or(0)
+}
+
 /// Lit transmissive sheet: the directional light and the arena behind it show
 /// through, with a cyan tint and a hard specular so it reads as glass rather
 /// than an unlit neon brick.
@@ -320,6 +399,27 @@ fn setup_lightcycle_assets(
             config::LIGHTCYCLE_ENTRY_HALO_INNER_RADIUS,
             config::LIGHTCYCLE_ENTRY_HALO_OUTER_RADIUS,
         )),
+        disc_mesh: meshes.add(Cylinder::new(
+            config::DISC_MESH_RADIUS,
+            config::DISC_MESH_THICKNESS,
+        )),
+        recognizer_mesh: meshes.add(Cylinder::new(
+            config::RECOGNIZER_RADIUS,
+            config::RECOGNIZER_HEIGHT,
+        )),
+        rock_material: materials.add(StandardMaterial {
+            base_color: config::ASTEROIDS_ROCK_COLOR,
+            emissive: LinearRgba::from(config::ASTEROIDS_ROCK_CORE_COLOR) * 0.3,
+            perceptual_roughness: 0.92,
+            ..default()
+        }),
+        beam_material: materials.add(StandardMaterial {
+            base_color: config::ASTEROIDS_BEAM_COLOR,
+            emissive: LinearRgba::from(config::ASTEROIDS_BEAM_COLOR) * 3.4,
+            unlit: true,
+            alpha_mode: AlphaMode::Add,
+            ..default()
+        }),
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
@@ -356,6 +456,10 @@ fn setup_lightcycle_assets(
         dir_tower_material: materials.add(unlit_material(config::DIR_COLOR)),
         file_tower_material: materials.add(unlit_material(config::FILE_COLOR)),
         markdown_tower_material: materials.add(unlit_material(config::MARKDOWN_TOWER_COLOR)),
+        source_tower_material: materials.add(neon_material(
+            config::SOURCE_TOWER_COLOR,
+            LinearRgba::rgb(2.2, 0.9, 0.05),
+        )),
         document_floor_material: materials.add(unlit_material(config::DOCUMENT_FLOOR_COLOR)),
         document_rule_material: materials.add(unlit_material(config::DOCUMENT_RULE_COLOR)),
         document_margin_material: materials.add(unlit_material(config::DOCUMENT_MARGIN_COLOR)),
@@ -388,6 +492,36 @@ fn setup_lightcycle_assets(
             alpha_mode: AlphaMode::Add,
             unlit: true,
             ..default()
+        }),
+        disc_floor_material: materials.add(unlit_material(config::DISC_FLOOR_COLOR)),
+        disc_ring_material: materials.add(neon_material(
+            config::DISC_RING_COLOR,
+            LinearRgba::rgb(0.05, 0.4, 0.62),
+        )),
+        disc_plinth_material: materials.add(unlit_material(config::DISC_RING_COLOR)),
+        disc_hazard_material: materials.add(neon_material(
+            config::DISC_HAZARD_COLOR,
+            LinearRgba::rgb(2.4, 0.2, 0.1),
+        )),
+        disc_opponent_material: materials.add(neon_material(
+            config::DISC_OPPONENT_COLOR,
+            LinearRgba::rgb(2.4, 1.1, 0.1),
+        )),
+        disc_player_disc_material: materials.add(neon_material(
+            config::DISC_PLAYER_DISC_COLOR,
+            LinearRgba::rgb(0.6, 2.6, 3.0),
+        )),
+        disc_pickup_material: materials.add(neon_material(
+            config::DISC_PICKUP_COLOR,
+            LinearRgba::rgb(2.4, 2.1, 0.3),
+        )),
+        disc_safe_pad_material: materials.add(neon_material(
+            config::DISC_SAFE_PAD_COLOR,
+            LinearRgba::rgb(0.1, 1.4, 0.5),
+        )),
+        disc_accent_materials: std::array::from_fn(|index| {
+            let accent = SourceLanguage::ALL[index].accent();
+            materials.add(neon_material(accent, LinearRgba::from(accent)))
         }),
     });
 }
@@ -466,6 +600,52 @@ fn build_document_run(path: &Path, bytes: &[u8]) -> ActiveRun {
                 .unwrap_or("document")
                 .to_string(),
             layout,
+            focused_block: None,
+        },
+        crash_label: None,
+        entering_label: None,
+    }
+}
+
+/// Builds the fight for a source file: a fresh player cycle at the ring center
+/// and a fresh [`DiscSim`] beside it.
+fn build_source_run(path: &Path, language: SourceLanguage, bytes: &[u8]) -> ActiveRun {
+    let game = language.game();
+    let (arena, layout) = match game {
+        // The field wants a small, fully visible ring whatever the file size.
+        SourceGame::Asteroids => {
+            build_capped_disc_arena(path, language, bytes, config::ASTEROIDS_RADIUS_CELLS)
+        }
+        SourceGame::DiscWars => build_disc_arena(path, language, bytes),
+    };
+    let sim = LightcycleSim::start(layout.player_spawn, layout.player_spawn_heading);
+    let disc = DiscSim::new(&layout);
+    let mut asteroids = Box::new(AsteroidsSim::new(
+        layout.seed,
+        (
+            layout.center.0 as f32 * config::GRID_SPACING,
+            layout.center.1 as f32 * config::GRID_SPACING,
+        ),
+        layout.radius as f32 * config::GRID_SPACING,
+    ));
+    // The parked cycle starts facing the way it will drive once the field ends,
+    // so the handover is seamless and the gate is straight ahead.
+    asteroids.angle = heading_facing(layout.player_spawn_heading);
+    ActiveRun {
+        sim,
+        arena,
+        environment: RunEnvironment::Source {
+            path: path.to_path_buf(),
+            name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("source")
+                .to_string(),
+            language,
+            game,
+            layout: Box::new(layout),
+            disc,
+            asteroids,
             focused_block: None,
         },
         crash_label: None,
@@ -637,6 +817,29 @@ fn spawn_run_entities(
             spawn_arena_walls(commands, assets, &run.arena);
             spawn_document_focus_marker(commands, assets, run);
         }
+        RunEnvironment::Source {
+            language,
+            game,
+            layout,
+            disc,
+            asteroids,
+            ..
+        } => {
+            match game {
+                // The field shares the ring and its gate, but stands alone: no
+                // hazards, pickups or opponent, and its own pooled rocks/beams.
+                SourceGame::Asteroids => {
+                    spawn_ring_shell(commands, meshes, assets, &run.arena, layout, *language);
+                    spawn_asteroid_field(commands, assets, asteroids);
+                }
+                SourceGame::DiscWars => {
+                    spawn_disc_arena(
+                        commands, assets, meshes, &run.arena, layout, *language, disc,
+                    );
+                    spawn_disc_focus_marker(commands, assets, run);
+                }
+            }
+        }
     }
     spawn_trail_ribbon(commands, assets, meshes, run);
 }
@@ -672,10 +875,10 @@ fn spawn_city_floor(
     let mesh = Mesh::from(Cuboid::default()).transformed_by(
         Transform::from_translation(center).with_scale(Vec3::new(span_x, 0.12, span_z)),
     );
-    let material = if arena.kind == ArenaKind::Document {
-        assets.document_floor_material.clone()
-    } else {
-        assets.city_floor_material.clone()
+    let material = match arena.kind {
+        ArenaKind::Document => assets.document_floor_material.clone(),
+        ArenaKind::Disc => assets.disc_floor_material.clone(),
+        ArenaKind::Directory => assets.city_floor_material.clone(),
     };
     commands.spawn((
         LightcycleSceneRoot,
@@ -683,6 +886,491 @@ fn spawn_city_floor(
         MeshMaterial3d(material),
         Pickable::IGNORE,
     ));
+}
+
+/// Builds a disc-wars ring: circular floor, ring wall, plinth, hazards, safe
+/// pads, close gate, pickups, and the two fighters.
+#[allow(clippy::too_many_arguments)]
+/// Ring wall, corner plinth and close gate. Shared by every source arena, so
+/// the asteroid field gets the same containment and the same way out.
+fn spawn_ring_shell(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    assets: &LightcycleAssets,
+    arena: &Arena,
+    layout: &DiscLayout,
+    language: SourceLanguage,
+) {
+    let accent = assets.disc_accent_materials[disc_language_index(language)].clone();
+    let center = layout.center;
+    let radius = layout.radius as f32;
+
+    // Split the lethal fill into the ring band and the corner fill, so the
+    // ring reads as a wall and the rest as ground the ring sits in.
+    let mut ring_cells = Vec::new();
+    let mut plinth_cells = Vec::new();
+    for &cell in &arena.street_walls {
+        let dx = (cell.0 - center.0) as f32;
+        let dz = (cell.1 - center.1) as f32;
+        if (dx * dx + dz * dz).sqrt() <= radius + 1.0 {
+            ring_cells.push(cell);
+        } else {
+            plinth_cells.push(cell);
+        }
+    }
+    spawn_disc_cube_layer(
+        commands,
+        meshes,
+        &ring_cells,
+        assets.disc_ring_material.clone(),
+        1.7,
+        1.7,
+    );
+    spawn_disc_cube_layer(
+        commands,
+        meshes,
+        &plinth_cells,
+        assets.disc_plinth_material.clone(),
+        0.08,
+        2.0,
+    );
+
+    spawn_disc_gate(commands, assets, arena, layout, &accent);
+}
+
+fn spawn_disc_arena(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    arena: &Arena,
+    layout: &DiscLayout,
+    language: SourceLanguage,
+    disc: &DiscSim,
+) {
+    let center = layout.center;
+    spawn_ring_shell(commands, meshes, assets, arena, layout, language);
+
+    let hazards: Vec<_> = layout.hazards.iter().copied().collect();
+    spawn_disc_cube_layer(
+        commands,
+        meshes,
+        &hazards,
+        assets.disc_hazard_material.clone(),
+        0.06,
+        1.5,
+    );
+    let pads: Vec<_> = layout.safe_pads.iter().copied().collect();
+    spawn_disc_cube_layer(
+        commands,
+        meshes,
+        &pads,
+        assets.disc_safe_pad_material.clone(),
+        0.05,
+        1.3,
+    );
+
+    for (index, spot) in layout.pickups.iter().enumerate() {
+        let taken = disc.taken.contains(&index);
+        let phase = index as f32 / layout.pickups.len().max(1) as f32;
+        commands.spawn((
+            LightcycleSceneRoot,
+            DiscPickupEntity { index, phase },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.disc_pickup_material.clone()),
+            Transform::from_translation(
+                config::ground_position(spot.cell.0, spot.cell.1) + Vec3::Y * 0.45,
+            )
+            .with_scale(Vec3::splat(0.3)),
+            if taken {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            },
+            Pickable::IGNORE,
+        ));
+    }
+
+    let opponent_visible = if disc.opponent.alive {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    commands.spawn((
+        LightcycleSceneRoot,
+        OpponentEntity,
+        Mesh3d(assets.recognizer_mesh.clone()),
+        MeshMaterial3d(assets.disc_opponent_material.clone()),
+        Transform::from_translation(
+            config::ground_position(disc.opponent.cell.0, disc.opponent.cell.1)
+                + Vec3::Y * (config::RECOGNIZER_HEIGHT * 0.5),
+        ),
+        opponent_visible,
+        Pickable::IGNORE,
+    ));
+
+    let player_disc_visible = if disc.player_disc.is_some() {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    commands.spawn((
+        LightcycleSceneRoot,
+        PlayerDiscEntity,
+        Mesh3d(assets.disc_mesh.clone()),
+        MeshMaterial3d(assets.disc_player_disc_material.clone()),
+        Transform::from_translation(config::ground_position(center.0, center.1)),
+        player_disc_visible,
+        Pickable::IGNORE,
+    ));
+
+    let opponent_disc_visible = if disc.opponent.disc.is_some() {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    commands.spawn((
+        LightcycleSceneRoot,
+        OpponentDiscEntity,
+        Mesh3d(assets.disc_mesh.clone()),
+        MeshMaterial3d(assets.disc_opponent_material.clone()),
+        Transform::from_translation(config::ground_position(center.0, center.1)),
+        opponent_disc_visible,
+        Pickable::IGNORE,
+    ));
+}
+
+/// Spawns the pooled rock and beam bodies for an asteroid field.
+///
+/// The sim drives visibility and transforms; the pool is fixed because a rock
+/// only ever splits into a bounded number of children.
+fn spawn_asteroid_field(commands: &mut Commands, assets: &LightcycleAssets, sim: &AsteroidsSim) {
+    let rock_count = config::ASTEROIDS_MAX_ROCKS.max(sim.rocks.len());
+    for index in 0..rock_count {
+        let live = sim.rocks.get(index);
+        let radius = live.map_or(1.0, |rock| rock.size.radius());
+        commands.spawn((
+            LightcycleSceneRoot,
+            RockEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.rock_material.clone()),
+            Transform::from_xyz(0.0, radius, 0.0).with_scale(Vec3::splat(radius * 2.0)),
+            if live.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            Pickable::IGNORE,
+        ));
+    }
+    for index in 0..config::ASTEROIDS_MAX_BEAMS {
+        let live = sim.beams.get(index);
+        commands.spawn((
+            LightcycleSceneRoot,
+            BeamEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.beam_material.clone()),
+            Transform::from_xyz(0.0, 0.35, 0.0),
+            if live.is_some() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Merges same-sized cuboids at `cells` and spawns them as one batched entity.
+fn spawn_disc_cube_layer(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    cells: &[(i32, i32)],
+    material: Handle<StandardMaterial>,
+    height: f32,
+    footprint: f32,
+) {
+    for chunk in cells.chunks(config::MESH_CHUNK_SIZE) {
+        let mut chunk = chunk.iter();
+        let Some(&first) = chunk.next() else {
+            continue;
+        };
+        let mut mesh = disc_cube(first, height, footprint);
+        for &cell in chunk {
+            mesh.merge(&disc_cube(cell, height, footprint))
+                .expect("disc cuboid meshes must be merge-compatible");
+        }
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(material.clone()),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+fn disc_cube(cell: (i32, i32), height: f32, footprint: f32) -> Mesh {
+    Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(
+            config::ground_position(cell.0, cell.1) + Vec3::Y * (height * 0.5),
+        )
+        .with_scale(Vec3::new(footprint, height, footprint)),
+    )
+}
+
+/// Posts and lintel framing the corridor mouth, so the close gate reads as a
+/// door in the ring wall.
+fn spawn_disc_gate(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    arena: &Arena,
+    layout: &DiscLayout,
+    accent: &Handle<StandardMaterial>,
+) {
+    let Some(portal) = arena.parent_portal else {
+        return;
+    };
+    let center = layout.center;
+    let span_of = |cell: (i32, i32)| (cell.0 - center.0).abs() + (cell.1 - center.1).abs();
+    let outer = if span_of(portal.from) > span_of(portal.to) {
+        portal.from
+    } else {
+        portal.to
+    };
+    let base = config::ground_position(outer.0, outer.1);
+    // The corridor runs along the axis from the center to the outer cell, so
+    // the door opening is perpendicular to it.
+    let opening_axis = if (outer.0 - center.0) == 0 {
+        Vec3::X
+    } else {
+        Vec3::Z
+    };
+    let post = Vec3::new(0.24, 2.2, 0.24);
+    for side in [-1.0_f32, 1.0] {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(accent.clone()),
+            Transform::from_translation(base + opening_axis * (side * 1.05) + Vec3::Y * 1.1)
+                .with_scale(post),
+            Pickable::IGNORE,
+        ));
+    }
+    let lintel_scale = if opening_axis == Vec3::X {
+        Vec3::new(2.5, 0.22, 0.24)
+    } else {
+        Vec3::new(0.24, 0.22, 2.5)
+    };
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(accent.clone()),
+        Transform::from_translation(base + Vec3::Y * 2.25).with_scale(lintel_scale),
+        Pickable::IGNORE,
+    ));
+}
+
+fn spawn_disc_focus_marker(commands: &mut Commands, assets: &LightcycleAssets, run: &ActiveRun) {
+    let RunEnvironment::Source { language, .. } = &run.environment else {
+        return;
+    };
+    let pose = cycle_cell_pose(&run.sim);
+    commands.spawn((
+        LightcycleSceneRoot,
+        DocumentFocusMarker,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.disc_accent_materials[disc_language_index(*language)].clone()),
+        Transform::from_translation(pose_world_position(&pose) + Vec3::Y * 0.08)
+            .with_scale(Vec3::new(1.4, 0.08, 1.4)),
+        Pickable::IGNORE,
+    ));
+}
+
+/// Keeps the disc, opponent, opponent disc, and pickups glued to the sim.
+#[allow(clippy::type_complexity)]
+fn sync_disc_entities(
+    state: Res<LightcycleState>,
+    mut player_disc: Query<
+        (&mut Transform, &mut Visibility),
+        (
+            With<PlayerDiscEntity>,
+            Without<OpponentEntity>,
+            Without<OpponentDiscEntity>,
+        ),
+    >,
+    mut opponent: Query<
+        (&mut Transform, &mut Visibility),
+        (
+            With<OpponentEntity>,
+            Without<PlayerDiscEntity>,
+            Without<OpponentDiscEntity>,
+        ),
+    >,
+    mut opponent_disc: Query<
+        (&mut Transform, &mut Visibility),
+        (
+            With<OpponentDiscEntity>,
+            Without<PlayerDiscEntity>,
+            Without<OpponentEntity>,
+        ),
+    >,
+    mut pickups: Query<
+        (&DiscPickupEntity, &mut Visibility),
+        (
+            Without<PlayerDiscEntity>,
+            Without<OpponentEntity>,
+            Without<OpponentDiscEntity>,
+        ),
+    >,
+) {
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+    let RunEnvironment::Source { disc, .. } = &run.environment else {
+        return;
+    };
+
+    if let Ok((mut transform, mut visibility)) = player_disc.single_mut() {
+        match disc.player_disc.as_ref() {
+            Some(flying) => {
+                transform.translation = disc_entity_position(flying.cell);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+    if let Ok((mut transform, mut visibility)) = opponent.single_mut() {
+        if disc.opponent.alive {
+            // The opponent steps a whole cell at a time. Render it partway to the
+            // cell it is walking into so it glides instead of teleporting; while
+            // it charges it stands exactly on its cell, so the shot is readable.
+            let progress = if disc.opponent.windup > 0.0 {
+                0.0
+            } else {
+                disc.opponent.move_clock.clamp(0.0, 1.0)
+            };
+            let (dx, dz) = disc.opponent.heading.delta();
+            transform.translation =
+                config::ground_position(disc.opponent.cell.0, disc.opponent.cell.1)
+                    + Vec3::new(dx as f32, 0.0, dz as f32) * (progress * config::GRID_SPACING)
+                    + Vec3::Y * (config::RECOGNIZER_HEIGHT * 0.5);
+            // Swell while winding up, so its shot is telegraphed.
+            let charge = (disc.opponent.windup / config::DISC_OPPONENT_WINDUP).clamp(0.0, 1.0);
+            transform.scale =
+                Vec3::new(1.0 + charge * 0.35, 1.0 - charge * 0.2, 1.0 + charge * 0.35);
+            *visibility = Visibility::Visible;
+        } else {
+            *visibility = Visibility::Hidden;
+        }
+    }
+    if let Ok((mut transform, mut visibility)) = opponent_disc.single_mut() {
+        match disc.opponent.disc.as_ref() {
+            Some(flying) => {
+                transform.translation = disc_entity_position(flying.cell);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+    for (pickup, mut visibility) in &mut pickups {
+        *visibility = if disc.taken.contains(&pickup.index) {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+    }
+}
+
+/// Places the pooled rocks and beams of an asteroid field. Anything past the
+/// live end of the sim's vectors is hidden, so splits and pops need no spawning.
+#[allow(clippy::type_complexity)]
+fn sync_asteroid_entities(
+    state: Res<LightcycleState>,
+    mut rocks: Query<
+        (&RockEntity, &mut Transform, &mut Visibility),
+        (Without<BeamEntity>, Without<CycleEntity>),
+    >,
+    mut beams: Query<
+        (&BeamEntity, &mut Transform, &mut Visibility),
+        (Without<RockEntity>, Without<CycleEntity>),
+    >,
+) {
+    // Only an actual asteroid field owns rock entities; a disc-wars ring also
+    // carries a (never stepped) field sim, so check the game kind too.
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+    if run.source_game() != Some(SourceGame::Asteroids) {
+        return;
+    }
+    let Some(sim) = run.source_asteroids() else {
+        return;
+    };
+
+    for (entity, mut transform, mut visibility) in &mut rocks {
+        match sim.rocks.get(entity.index) {
+            Some(rock) => {
+                let radius = rock.size.radius();
+                transform.translation = Vec3::new(rock.x, radius, rock.z);
+                transform.rotation =
+                    Quat::from_rotation_y(rock.angle) * Quat::from_rotation_x(rock.angle * 0.61);
+                transform.scale = Vec3::splat(radius * 2.0);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+
+    for (entity, mut transform, mut visibility) in &mut beams {
+        match sim.beams.get(entity.index) {
+            Some(beam) => {
+                transform.translation = Vec3::new(beam.x, 0.35, beam.z);
+                transform.rotation = Quat::from_rotation_y(-beam.vz.atan2(beam.vx));
+                transform.scale = Vec3::new(config::ASTEROIDS_BEAM_LENGTH, 0.12, 0.12);
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+fn disc_entity_position(cell: (i32, i32)) -> Vec3 {
+    config::ground_position(cell.0, cell.1) + Vec3::Y * 0.35
+}
+
+/// Spin and bob the waiting pickups so they read as collectible.
+fn animate_disc_pickups(time: Res<Time>, mut pickups: Query<(&DiscPickupEntity, &mut Transform)>) {
+    let elapsed = time.elapsed_secs();
+    for (pickup, mut transform) in &mut pickups {
+        let bob = (elapsed * 2.2 + pickup.phase * std::f32::consts::TAU).sin() * 0.12;
+        transform.translation.y = 0.45 + bob;
+        transform.rotate_y(0.03);
+    }
+}
+
+/// Tracks which alcove the rider is beside, for the ring's folio panel.
+fn update_disc_focus(
+    mut state: ResMut<LightcycleState>,
+    mut marker: Query<&mut Transform, With<DocumentFocusMarker>>,
+) {
+    let Some(run) = state.run.as_mut() else {
+        return;
+    };
+    let RunEnvironment::Source {
+        layout,
+        focused_block,
+        ..
+    } = &mut run.environment
+    else {
+        return;
+    };
+    *focused_block = layout.focused_block(run.sim.cell);
+    let Some(index) = *focused_block else {
+        return;
+    };
+    let landmark = layout.blocks[index].landmark;
+    if let Ok(mut transform) = marker.single_mut() {
+        transform.translation = config::ground_position(landmark.0, landmark.1) + Vec3::Y * 0.08;
+    }
 }
 
 fn spawn_city_structures(
@@ -1235,11 +1923,15 @@ fn spawn_towers(
             assets.dir_tower_material.clone(),
         ),
         (
+            |node: &FileNode| !node.is_dir && node.is_source(),
+            assets.source_tower_material.clone(),
+        ),
+        (
             |node: &FileNode| !node.is_dir && node.is_markdown(),
             assets.markdown_tower_material.clone(),
         ),
         (
-            |node: &FileNode| !node.is_dir && !node.is_markdown(),
+            |node: &FileNode| !node.is_dir && !node.is_markdown() && !node.is_source(),
             assets.file_tower_material.clone(),
         ),
     ] {
@@ -1764,9 +2456,92 @@ fn apply_document_load_failure(
     }
 }
 
+fn start_source_loads(
+    mut requests: MessageReader<SourceRequested>,
+    mut sources: ResMut<SourceLoadState>,
+) {
+    for request in requests.read() {
+        let generation = sources.next_generation();
+        sources.begin_load(generation, request.path.clone());
+    }
+}
+
+fn poll_source_loads(
+    mut sources: ResMut<SourceLoadState>,
+    mut loaded: MessageWriter<SourceLoaded>,
+    mut failed: MessageWriter<SourceLoadFailed>,
+) {
+    while let Some(result) = sources.poll() {
+        if result.generation != sources.generation {
+            continue;
+        }
+        match result.result {
+            Ok(bytes) => {
+                loaded.write(SourceLoaded {
+                    path: result.path,
+                    bytes,
+                });
+            }
+            Err(message) => {
+                failed.write(SourceLoadFailed {
+                    path: result.path,
+                    message,
+                });
+            }
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn reset_on_source_loaded(
+    mut loaded: MessageReader<SourceLoaded>,
+    mode: Res<InteractionMode>,
+    mut state: ResMut<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+    old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
+) {
+    if *mode != InteractionMode::Lightcycle {
+        return;
+    }
+
+    for event in loaded.read() {
+        let Some(language) = SourceLanguage::from_path(&event.path) else {
+            continue;
+        };
+        despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
+        let run = build_source_run(&event.path, language, &event.bytes);
+        spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+        state.clock = 0.0;
+        state.crash_fx = None;
+        state.entry_fx = None;
+        state.restore_directory = false;
+        state.run = Some(run);
+    }
+}
+
+fn apply_source_load_failure(
+    mut failed: MessageReader<SourceLoadFailed>,
+    mut sources: ResMut<SourceLoadState>,
+    mut state: ResMut<LightcycleState>,
+) {
+    let Some(event) = failed.read().next() else {
+        return;
+    };
+    sources.last_error = Some(format!("{}: {}", event.path.display(), event.message));
+    if let Some(run) = state.run.as_mut() {
+        run.sim.pending_request = None;
+        run.entering_label = None;
+        run.sim.phase = RunPhase::Running;
+        run.crash_label = Some(format!("could not open {}", event.path.display()));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn read_lightcycle_input(
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     transition: Res<ModeTransition>,
     mut state: ResMut<LightcycleState>,
     mut navigator: ResMut<NavigatorResource>,
@@ -1775,6 +2550,7 @@ fn read_lightcycle_input(
 ) {
     // Riding controls belong to the run, not to the flight arriving at it.
     if transition.is_active() {
+        state.slow_motion = false;
         return;
     }
 
@@ -1782,15 +2558,72 @@ fn read_lightcycle_input(
     let right = keys.just_pressed(KeyCode::KeyD) || keys.just_pressed(KeyCode::ArrowRight);
     let restart = keys.just_pressed(KeyCode::KeyR);
     let go_up = keys.just_pressed(KeyCode::KeyU) || keys.just_pressed(KeyCode::Minus);
+    let throw = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
+    let recall = keys.just_pressed(KeyCode::KeyQ);
+    // Steering is continuous: the asteroid field pivots while the key is held.
+    let steer = i32::from(keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight))
+        - i32::from(keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft));
+    // Bullet time: hold Shift to slow the ring while lining up a turn or shot.
+    state.slow_motion = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
     let entering_tower = state.entry_fx.is_some();
     let Some(mut run) = state.run.take() else {
         return;
     };
 
-    if run.sim.phase == RunPhase::Running && (left || right) {
+    let asteroids = run.source_game() == Some(SourceGame::Asteroids);
+    // The field is only a turret fight while the rocks are live; after it is won
+    // or lost the bike is handed back and drives normally. Gated on the game
+    // kind as well, so a disc-wars ring keeps its turns and its disc.
+    let field_active = run.asteroid_field_active();
+
+    // A parked cycle pivots instead of queuing grid turns.
+    if !field_active && run.sim.phase == RunPhase::Running && (left || right) {
         run.sim.queue_turn_input(left, right);
         effects.write(MusicSfx::Turn);
+    }
+
+    if run.is_source() && run.sim.phase == RunPhase::Running {
+        if field_active {
+            // Pivot and shoot. `set_turn` persists for the fixed sub-steps that
+            // follow this frame.
+            let mut fired = false;
+            if let RunEnvironment::Source { asteroids, .. } = &mut run.environment {
+                asteroids.set_turn(steer as f32);
+                if throw {
+                    fired = asteroids.fire();
+                }
+            }
+            if fired {
+                effects.write(MusicSfx::Zap);
+            }
+        } else if !asteroids {
+            // Disc wars: throw and recall. The cycle's movement is unchanged.
+            let snapshot = PlayerSnapshot {
+                cell: run.sim.cell,
+                heading: run.sim.heading,
+                running: true,
+            };
+            if throw {
+                let mut events = DiscEvents::default();
+                // Aimed at the opponent, so riding and aiming stay separate.
+                if let RunEnvironment::Source { disc, .. } = &mut run.environment {
+                    disc.throw_player(snapshot, &run.arena, &mut events);
+                }
+                if events.player_threw {
+                    effects.write(MusicSfx::Beam);
+                }
+            }
+            if recall {
+                let mut events = DiscEvents::default();
+                if let Some(disc) = run.source_disc_mut() {
+                    disc.recall_player(&mut events);
+                }
+                if events.player_recalled {
+                    effects.write(MusicSfx::Turn);
+                }
+            }
+        }
     }
 
     if restart {
@@ -1802,7 +2635,7 @@ fn read_lightcycle_input(
 
     if go_up && !entering_tower {
         effects.write(MusicSfx::Portal);
-        if run.is_document() {
+        if run.is_document() || run.is_source() {
             state.restore_directory = true;
         } else if let Some(parent) = navigator.0.begin_go_to_parent() {
             run.sim.pause_for_directory_change();
@@ -1816,11 +2649,38 @@ fn read_lightcycle_input(
 }
 
 fn restart_run(run: &mut ActiveRun) {
-    let cells = match &run.environment {
-        RunEnvironment::Directory { cells, .. } => cells.clone(),
-        RunEnvironment::Document { .. } => HashMap::new(),
-    };
-    run.sim = spawn_sim(&run.arena, &cells);
+    match &run.environment {
+        RunEnvironment::Directory { cells, .. } => {
+            let cells = cells.clone();
+            run.sim = spawn_sim(&run.arena, &cells);
+        }
+        RunEnvironment::Document { .. } => {
+            run.sim = spawn_sim(&run.arena, &HashMap::new());
+        }
+        RunEnvironment::Source { layout, .. } => {
+            let spawn = layout.player_spawn;
+            let heading = layout.player_spawn_heading;
+            let fresh_disc = DiscSim::new(layout);
+            let fresh_field = AsteroidsSim::new(
+                layout.seed,
+                (
+                    layout.center.0 as f32 * config::GRID_SPACING,
+                    layout.center.1 as f32 * config::GRID_SPACING,
+                ),
+                layout.radius as f32 * config::GRID_SPACING,
+            );
+            let mut fresh_field = fresh_field;
+            fresh_field.angle = heading_facing(heading);
+            run.sim = LightcycleSim::start(spawn, heading);
+            if let RunEnvironment::Source {
+                disc, asteroids, ..
+            } = &mut run.environment
+            {
+                *disc = fresh_disc;
+                **asteroids = fresh_field;
+            }
+        }
+    }
     run.crash_label = None;
     run.entering_label = None;
 }
@@ -1847,6 +2707,7 @@ fn restore_directory_arena(
     state.run = Some(run);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn step_lightcycle(
     time: Res<Time>,
     transition: Res<ModeTransition>,
@@ -1854,6 +2715,7 @@ fn step_lightcycle(
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
     mut documents: MessageWriter<DocumentRequested>,
+    mut sources: MessageWriter<SourceRequested>,
     mut effects: MessageWriter<MusicSfx>,
 ) {
     // The arena exists from the top of the climb onward, but the camera is
@@ -1869,7 +2731,10 @@ fn step_lightcycle(
         return;
     };
 
-    if run.sim.phase != RunPhase::Running {
+    // A ring keeps ticking even while the player is crashed or waiting between
+    // rounds, so the fight can pay out its respawn. Other arenas hold still.
+    let source_run = run.is_source();
+    if run.sim.phase != RunPhase::Running && !source_run {
         state.run = Some(run);
         return;
     }
@@ -1881,6 +2746,13 @@ fn step_lightcycle(
     }
 
     let fixed_step = config::LIGHTCYCLE_FIXED_STEP;
+    // Bullet time stretches the simulated step without changing the real-time
+    // cadence, so the bike, its disc, and the opponent all slow together.
+    let step = if source_run && state.slow_motion {
+        fixed_step * config::DISC_BULLET_TIME_SCALE
+    } else {
+        fixed_step
+    };
     let mut substeps = 0;
 
     while state.clock >= fixed_step && substeps < config::LIGHTCYCLE_MAX_SUBSTEPS {
@@ -1891,9 +2763,8 @@ fn step_lightcycle(
             let arena = &run.arena;
             let sim = &mut run.sim;
             match &run.environment {
-                RunEnvironment::Directory { nodes, cells } => sim.advance(
-                    fixed_step * config::LIGHTCYCLE_CELLS_PER_SEC,
-                    |next, sim| {
+                RunEnvironment::Directory { nodes, cells } => {
+                    sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, sim| {
                         classify_next_content(
                             next,
                             arena,
@@ -1901,12 +2772,12 @@ fn step_lightcycle(
                             cells,
                             |index| nodes[index].is_dir,
                             |index| nodes[index].is_markdown(),
+                            |index| nodes[index].is_source(),
                         )
-                    },
-                ),
-                RunEnvironment::Document { .. } => sim.advance(
-                    fixed_step * config::LIGHTCYCLE_CELLS_PER_SEC,
-                    |next, sim| {
+                    })
+                }
+                RunEnvironment::Document { .. } => {
+                    sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, sim| {
                         classify_next_content(
                             next,
                             arena,
@@ -1914,9 +2785,58 @@ fn step_lightcycle(
                             &HashMap::new(),
                             |_| false,
                             |_| false,
+                            |_| false,
                         )
-                    },
-                ),
+                    })
+                }
+                RunEnvironment::Source {
+                    game,
+                    disc,
+                    asteroids,
+                    ..
+                } => match game {
+                    // Parked while the rocks are live: nothing to advance, and
+                    // the field itself is stepped after the loop.
+                    SourceGame::Asteroids if asteroids.is_active() => StepOutcome::Moved,
+                    // Once the field is decided the cycle is handed back, so it
+                    // drives again and can ride out through the gate.
+                    SourceGame::Asteroids => {
+                        sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, sim| {
+                            classify_next_content(
+                                next,
+                                arena,
+                                sim,
+                                &HashMap::new(),
+                                |_| false,
+                                |_| false,
+                                |_| false,
+                            )
+                        })
+                    }
+                    SourceGame::DiscWars => {
+                        // The opponent's body and its live disc are lethal cells
+                        // in the same grid model the cycle already uses.
+                        let opponent = disc.opponent_cell();
+                        let opponent_disc = disc.opponent_disc_cell();
+                        sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, sim| {
+                            if Some(next) == opponent {
+                                return CellContent::Opponent;
+                            }
+                            if Some(next) == opponent_disc {
+                                return CellContent::OpponentDisc;
+                            }
+                            classify_next_content(
+                                next,
+                                arena,
+                                sim,
+                                &HashMap::new(),
+                                |_| false,
+                                |_| false,
+                                |_| false,
+                            )
+                        })
+                    }
+                },
             }
         };
 
@@ -1935,9 +2855,14 @@ fn step_lightcycle(
                         })
                         .unwrap_or_else(|| "file".to_string()),
                     CrashReason::Trail => "your trail".to_string(),
+                    CrashReason::Opponent => "the recognizer".to_string(),
+                    CrashReason::Disc => "a disc".to_string(),
+                    CrashReason::Hazard => "a hazard tile".to_string(),
                     CrashReason::Wall if run.arena.street_walls.contains(&crash_cell) => {
                         if run.is_document() {
                             "paragraph".to_string()
+                        } else if run.is_source() {
+                            "ring wall".to_string()
                         } else {
                             "street barrier".to_string()
                         }
@@ -1980,6 +2905,21 @@ fn step_lightcycle(
                     run.crash_label = Some("missing document".to_string());
                 }
             }
+            StepOutcome::EnteringSource(index) => {
+                let details = run
+                    .directory_nodes()
+                    .and_then(|nodes| nodes.get(index))
+                    .map(|node| (node.name.clone(), node.path.clone()));
+                if let Some((name, path)) = details {
+                    run.entering_label = Some(name);
+                    run.crash_label = None;
+                    effects.write(MusicSfx::Beam);
+                    sources.write(SourceRequested { path });
+                } else {
+                    run.sim.phase = RunPhase::Running;
+                    run.crash_label = Some("missing source".to_string());
+                }
+            }
             StepOutcome::GoToParent => {
                 if let Some(parent) = navigator.0.begin_go_to_parent() {
                     run.entering_label = Some("parent directory".to_string());
@@ -1996,6 +2936,14 @@ fn step_lightcycle(
             }
         }
 
+        if source_run {
+            if run.source_game() == Some(SourceGame::Asteroids) {
+                step_asteroid_field(&mut run, step, &mut effects);
+            } else {
+                step_disc_fight(&mut run, step, &mut effects);
+            }
+        }
+
         if run.sim.phase == RunPhase::Crashed && state.crash_fx.is_none() {
             state.crash_fx = Some(crate::lightcycle::CrashFx::new(
                 config::LIGHTCYCLE_CRASH_FX_DURATION,
@@ -2003,12 +2951,128 @@ fn step_lightcycle(
             effects.write(MusicSfx::Crash);
         }
 
-        if run.sim.phase != RunPhase::Running {
+        if run.sim.phase != RunPhase::Running && !source_run {
             break;
         }
     }
 
     state.run = Some(run);
+}
+
+/// Steps the asteroid field and routes its feedback into sound and labels.
+fn step_asteroid_field(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) {
+    let events = {
+        let RunEnvironment::Source { asteroids, .. } = &mut run.environment else {
+            return;
+        };
+        asteroids.update(dt)
+    };
+
+    for _ in 0..events.destroyed {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.lost_life {
+        effects.write(MusicSfx::Crash);
+    }
+    if events.cleared {
+        run.crash_label = None;
+        run.entering_label = None;
+        effects.write(MusicSfx::Victory);
+    }
+
+    let lost = matches!(
+        &run.environment,
+        RunEnvironment::Source { asteroids, .. } if asteroids.phase == AsteroidsPhase::Lost
+    );
+    if lost {
+        run.crash_label = Some("the rock field".to_string());
+        run.entering_label = None;
+    }
+
+    if events.ended {
+        // Hand the wheel back on the frame the field is decided: the bike keeps
+        // the facing the player was holding and can drive to the gate to leave.
+        let facing = {
+            let RunEnvironment::Source { asteroids, .. } = &mut run.environment else {
+                return;
+            };
+            asteroids.set_turn(0.0);
+            nearest_heading(asteroids.angle)
+        };
+        run.sim.heading = facing;
+    }
+}
+
+/// Steps one ring's fight and folds its events back into the shared run.
+fn step_disc_fight(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) {
+    let snapshot = PlayerSnapshot {
+        cell: run.sim.cell,
+        heading: run.sim.heading,
+        running: run.sim.phase == RunPhase::Running,
+    };
+    let events = {
+        let arena = &run.arena;
+        let RunEnvironment::Source { disc, layout, .. } = &mut run.environment else {
+            return;
+        };
+        disc.update(dt, snapshot, arena, layout)
+    };
+
+    // On the final blow the fanfare replaces the crash, so the win lands clean
+    // instead of the derezz thud sitting on top of it.
+    let match_won = events.match_over == Some(DiscPhase::Won);
+    if (events.opponent_hit || events.player_derezz.is_some()) && !match_won {
+        effects.write(MusicSfx::Crash);
+    }
+    if events.shielded || events.player_recalled || events.opponent_threw {
+        effects.write(MusicSfx::Turn);
+    }
+    for _ in &events.collected {
+        effects.write(MusicSfx::Portal);
+    }
+
+    if let Some(reason) = events.player_derezz
+        && run.sim.phase == RunPhase::Running
+    {
+        run.sim.phase = RunPhase::Crashed;
+        run.sim.crash_reason = Some(reason);
+        run.crash_label = Some(disc_crash_label(reason));
+        run.entering_label = None;
+    }
+
+    if let Some((cell, heading)) = events.respawn {
+        run.sim = LightcycleSim::start(cell, heading);
+        run.crash_label = None;
+        run.entering_label = None;
+    }
+
+    if let Some(phase) = events.match_over {
+        match phase {
+            DiscPhase::Lost => {
+                if let RunEnvironment::Source { language, .. } = &run.environment {
+                    run.crash_label = Some(language.crash_flavor(0).to_string());
+                    run.entering_label = None;
+                }
+            }
+            DiscPhase::Won => {
+                run.crash_label = None;
+                run.entering_label = None;
+                effects.write(MusicSfx::Victory);
+            }
+            DiscPhase::Fighting => {}
+        }
+    }
+}
+
+fn disc_crash_label(reason: CrashReason) -> String {
+    match reason {
+        CrashReason::Hazard => "a hazard tile".to_string(),
+        CrashReason::Disc => "a disc".to_string(),
+        CrashReason::Opponent => "the recognizer".to_string(),
+        CrashReason::Wall => "ring wall".to_string(),
+        CrashReason::Trail => "your trail".to_string(),
+        CrashReason::File => "file".to_string(),
+    }
 }
 
 fn spawn_crash_effect(
@@ -2742,7 +3806,21 @@ fn update_cycle_transform(
 
     let pose = cycle_cell_pose(&run.sim);
     transform.translation = pose_world_position(&pose);
-    transform.rotation = pose_rotation(&pose);
+    // A parked cycle pivots on the spot: its facing is the field's aim angle,
+    // not a grid heading. Once the field ends it drives again, so the grid
+    // heading takes over — and a disc-wars ring never leaves it in the first
+    // place.
+    let aiming = if run.asteroid_field_active() {
+        run.source_asteroids()
+    } else {
+        None
+    };
+    transform.rotation = match aiming {
+        Some(sim) => {
+            Quat::from_rotation_arc(Vec3::X, Vec3::new(sim.angle.cos(), 0.0, sim.angle.sin()))
+        }
+        None => pose_rotation(&pose),
+    };
 }
 
 /// Eases the camera's follow direction toward `target` with a frame-rate
@@ -2788,6 +3866,45 @@ fn chase_rig_radius() -> f32 {
     .length()
 }
 
+/// Facing, in radians, for a grid heading, matching the field's aim convention
+/// (`0` is `+X`, growing toward `+Z`).
+fn heading_facing(heading: Heading) -> f32 {
+    match heading {
+        Heading::PosX => 0.0,
+        Heading::PosZ => std::f32::consts::FRAC_PI_2,
+        Heading::NegX => std::f32::consts::PI,
+        Heading::NegZ => -std::f32::consts::FRAC_PI_2,
+    }
+}
+
+/// The grid heading closest to an aim angle. Used when the field ends so the
+/// bike drives off in the direction the player was holding.
+fn nearest_heading(angle: f32) -> Heading {
+    let (x, z) = (angle.cos(), angle.sin());
+    if x.abs() >= z.abs() {
+        if x >= 0.0 {
+            Heading::PosX
+        } else {
+            Heading::NegX
+        }
+    } else if z >= 0.0 {
+        Heading::PosZ
+    } else {
+        Heading::NegZ
+    }
+}
+
+/// Focus point and ring radius while the field is live. Once it is decided the
+/// camera returns to the chase rig so the player can drive out, and a disc-wars
+/// ring keeps the chase rig throughout.
+fn field_camera_focus(run: &ActiveRun) -> Option<(Vec3, f32)> {
+    if !run.asteroid_field_active() {
+        return None;
+    }
+    let sim = run.source_asteroids()?;
+    Some((Vec3::new(sim.center.0, 0.0, sim.center.1), sim.radius))
+}
+
 fn update_chase_camera(
     state: Res<LightcycleState>,
     transition: Res<ModeTransition>,
@@ -2803,6 +3920,16 @@ fn update_chase_camera(
     // The flight owns the camera until it lands on this rig; easing the follow
     // direction or taking a look drag now would move the pose it is aiming for.
     if state.run.is_none() || transition.is_active() {
+        return;
+    }
+
+    // The asteroid field is played from above: the whole ring stays in frame, so
+    // pivoting the parked cycle does not whip the camera around with it.
+    if let Some((center, radius)) = state.run.as_ref().and_then(field_camera_focus) {
+        let height = radius * config::ASTEROIDS_CAMERA_FIT + 3.0;
+        camera.translation =
+            center + Vec3::new(0.0, height, height * config::ASTEROIDS_CAMERA_LEAN);
+        camera.look_at(center, Vec3::Y);
         return;
     }
 
@@ -2845,9 +3972,9 @@ mod tests {
         chase_camera_rig, chase_rig_radius, city_base_trim_mesh, city_body_height, city_body_mesh,
         city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
-        glyph_char_offset, glyph_pixel_offset, glyph_pixels, pose_forward, pose_rotation,
-        pose_world_position, rail_segments, road_marking_mesh, trail_centerline, trail_heights,
-        trim_polyline_end, wrap_angle,
+        glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing, nearest_heading,
+        pose_forward, pose_rotation, pose_world_position, rail_segments, road_marking_mesh,
+        trail_centerline, trail_heights, trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
@@ -3590,5 +4717,50 @@ mod tests {
         assert!(fx.progress() < config::LIGHTCYCLE_ENTRY_FX_REQUEST_AT);
         fx.elapsed = fx.duration * 0.9;
         assert!(fx.progress() >= config::LIGHTCYCLE_ENTRY_FX_REQUEST_AT);
+    }
+
+    #[test]
+    fn the_field_facing_round_trips_through_the_grid_headings() {
+        for heading in [Heading::PosX, Heading::PosZ, Heading::NegX, Heading::NegZ] {
+            assert_eq!(nearest_heading(heading_facing(heading)), heading);
+        }
+        // Near a diagonal the nearest cardinal leans toward the dominant axis.
+        assert_eq!(
+            nearest_heading(std::f32::consts::FRAC_PI_4 * 0.9),
+            Heading::PosX
+        );
+        assert_eq!(
+            nearest_heading(std::f32::consts::FRAC_PI_4 * 1.1),
+            Heading::PosZ
+        );
+    }
+
+    /// Every source run carries an asteroid sim, so the field-only behaviour
+    /// (parked bike, overhead camera, pivot input) must be gated on the game
+    /// kind. This is the regression test for the overhead camera leaking into
+    /// disc wars.
+    #[test]
+    fn a_disc_wars_ring_is_never_an_asteroid_field() {
+        let field = super::build_source_run(
+            std::path::Path::new("/tmp/field.py"),
+            crate::disc::SourceLanguage::Python,
+            b"print('hi')\n",
+        );
+        assert!(field.asteroid_field_active());
+        assert!(
+            super::field_camera_focus(&field).is_some(),
+            "the field plays from above"
+        );
+
+        let ring = super::build_source_run(
+            std::path::Path::new("/tmp/ring.rs"),
+            crate::disc::SourceLanguage::Rust,
+            b"fn main() {}\n",
+        );
+        assert!(!ring.asteroid_field_active());
+        assert!(
+            super::field_camera_focus(&ring).is_none(),
+            "a disc-wars ring must keep the chase camera"
+        );
     }
 }
