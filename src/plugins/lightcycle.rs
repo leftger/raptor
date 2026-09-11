@@ -2017,6 +2017,23 @@ struct CharacterPose {
     smooth: bool,
 }
 
+/// The unit vector a heading points along, in the `(x, z)` the world is built on.
+fn unit_of(heading: Heading) -> (f32, f32) {
+    let angle = heading_angle(heading);
+    (angle.cos(), angle.sin())
+}
+
+/// One cell along `heading`. This mirrors the sim's own step for a view-only
+/// walk along a wall, so a mismatch could only ever misplace the camera.
+fn step_cell(cell: (i32, i32), heading: Heading) -> (i32, i32) {
+    match heading {
+        Heading::PosX => (cell.0 + 1, cell.1),
+        Heading::NegX => (cell.0 - 1, cell.1),
+        Heading::PosZ => (cell.0, cell.1 + 1),
+        Heading::NegZ => (cell.0, cell.1 - 1),
+    }
+}
+
 fn character_pose(run: &ActiveRun) -> Option<CharacterPose> {
     if let Some(level) = run.source_platformer() {
         return Some(CharacterPose {
@@ -5080,23 +5097,50 @@ fn update_chase_camera(
         // the swing watchable: an ease puts nearly all the movement in the first
         // few frames, which is why the perspective read as changing instantly.
         // The radius and height still ease, so entering a run flies in as before.
-        let aim = room
-            .peek
-            .map(|heading| heading_angle(heading) + std::f32::consts::PI)
-            .unwrap_or(std::f32::consts::FRAC_PI_2);
-        // The view drops to hip height and closes in while the player is backed
-        // against a wall, and stands back up when they walk away. Easing rather
-        // than switching makes the drop a move the player can follow.
-        let (want_radius, want_height) = match room.hug {
-            Some(_) => (
-                config::STEALTH_HUG_CAMERA_DISTANCE,
-                config::STEALTH_HUG_CAMERA_HEIGHT,
-            ),
-            None => (
+        // Where the view should sit, and what it should look at, both as offsets
+        // from the figure.
+        //
+        // Backed against a wall, the camera goes to the corner: along the wall,
+        // just past its end, and out clear of its face, looking round it. That is
+        // the only position with a view of what lies beyond the wall. Cover is
+        // taller than this camera, so from behind the figure the wall sits between
+        // the two of them and the peek can only ever show wall.
+        //
+        // The figure drops out of frame doing this. It has to: the wall is what
+        // stands in the way, so any camera that can see past it is no longer
+        // behind the figure.
+        let (want_x, want_z, want_height, look) = match (room.hug, room.peek) {
+            (Some(wall), Some(across)) => {
+                let (px, pz) = unit_of(across);
+                let (wx, wz) = unit_of(wall);
+                let mut cell = room.character;
+                let mut run = 0;
+                while run < config::STEALTH_PEEK_STEPS && room.is_solid(step_cell(cell, across)) {
+                    cell = step_cell(cell, across);
+                    run += 1;
+                }
+                let along = run as f32 * config::GRID_SPACING + config::STEALTH_HUG_CAMERA_PAST;
+                let out = config::STEALTH_HUG_CAMERA_OUT;
+                let (want_x, want_z) = (px * along - wx * out, pz * along - wz * out);
+                // Look on along the wall and round its end: the `wall` term is what
+                // turns the corner rather than running alongside it.
+                let reach = config::STEALTH_HUG_CAMERA_AIM;
+                let look = Vec3::new(
+                    want_x + (px + wx) * reach,
+                    config::STEALTH_CAMERA_LOOK,
+                    want_z + (pz + wz) * reach,
+                );
+                (want_x, want_z, config::STEALTH_HUG_CAMERA_HEIGHT, look)
+            }
+            _ => (
+                0.0,
                 config::STEALTH_CAMERA_DISTANCE,
                 config::STEALTH_CAMERA_HEIGHT,
+                Vec3::Y * config::STEALTH_CAMERA_LOOK,
             ),
         };
+        let want_radius = (want_x * want_x + want_z * want_z).sqrt();
+        let aim = want_z.atan2(want_x);
         let offset = camera.translation - focus;
         let bearing = offset.z.atan2(offset.x);
         let radius = (offset.x * offset.x + offset.z * offset.z).sqrt();
@@ -5109,22 +5153,7 @@ fn update_chase_camera(
         let height = offset.y + (want_height - offset.y) * blend;
         camera.translation =
             focus + Vec3::new(bearing.cos() * radius, height, bearing.sin() * radius);
-        // Backed against a wall, the view looks down the wall toward the corner
-        // rather than at the figure. That is what pushes the figure to the edge of
-        // the frame and puts the corridor, and whatever is patrolling it, in the
-        // middle of the shot. Walking, it looks at the figure as it always has.
-        let ahead = match room.hug {
-            Some(_) => {
-                let reach = config::STEALTH_HUG_CAMERA_AIM;
-                Vec3::new(
-                    -aim.cos() * reach,
-                    config::STEALTH_CAMERA_LOOK,
-                    -aim.sin() * reach,
-                )
-            }
-            None => Vec3::Y * config::STEALTH_CAMERA_LOOK,
-        };
-        camera.look_at(focus + ahead, Vec3::Y);
+        camera.look_at(focus + look, Vec3::Y);
         return;
     }
 
