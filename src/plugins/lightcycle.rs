@@ -1659,8 +1659,8 @@ fn spawn_gem_well(commands: &mut Commands, assets: &LightcycleAssets, sim: &Colu
         let row = index / config::COLUMNS_COLS;
         let x = (col as f32 - (config::COLUMNS_COLS - 1) as f32 * 0.5) * 1.6;
         // Row 0 is the top of the well, so higher rows sit lower on screen.
-        let y = ((config::COLUMNS_ROWS - 1) - row) as f32 * 1.6
-            - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8);
+        // The whole well is lifted above the arena floor.
+        let y = ((config::COLUMNS_ROWS - 1) - row) as f32 * 1.6 + 0.8;
         commands.spawn((
             LightcycleSceneRoot,
             GemEntity { index },
@@ -1678,6 +1678,30 @@ fn spawn_gem_well(commands: &mut Commands, assets: &LightcycleAssets, sim: &Colu
             Pickable::IGNORE,
         ));
     }
+
+    // A visible frame marks the playfield: side walls plus a floor bar.
+    let board_half = config::COLUMNS_COLS as f32 * 0.8;
+    let wall_x = board_half + 0.55;
+    let board_height = config::COLUMNS_ROWS as f32 * 1.6;
+    let wall_scale = Vec3::new(0.4, board_height + 0.6, 0.5);
+    for x in [-wall_x, wall_x] {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.stealth_wall_material.clone()),
+            Transform::from_xyz(x, board_height * 0.5 + 0.3, 0.0).with_scale(wall_scale),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.stealth_wall_material.clone()),
+        Transform::from_xyz(0.0, 0.2, 0.0).with_scale(Vec3::new(wall_x * 2.0 + 0.8, 0.4, 0.5)),
+        Visibility::Visible,
+        Pickable::IGNORE,
+    ));
 }
 
 /// Spawns the pooled block cells of a Tetris board.
@@ -1688,8 +1712,8 @@ fn spawn_tetris_board(commands: &mut Commands, assets: &LightcycleAssets, sim: &
         let row = index / config::TETRIS_COLS;
         let x = (col as f32 - (config::TETRIS_COLS - 1) as f32 * 0.5) * 1.2;
         // Row 0 is the top of the board, so higher rows sit lower on screen.
-        let y = ((config::TETRIS_ROWS - 1) - row) as f32 * 1.2
-            - (config::TETRIS_ROWS as f32 * 0.5 - 0.6);
+        // The whole board is lifted above the arena floor.
+        let y = ((config::TETRIS_ROWS - 1) - row) as f32 * 1.2 + 0.6;
         commands.spawn((
             LightcycleSceneRoot,
             BlockEntity { index },
@@ -1704,6 +1728,30 @@ fn spawn_tetris_board(commands: &mut Commands, assets: &LightcycleAssets, sim: &
             Pickable::IGNORE,
         ));
     }
+
+    // A visible frame marks the playfield: side walls plus a floor bar.
+    let board_half = config::TETRIS_COLS as f32 * 0.6;
+    let wall_x = board_half + 0.55;
+    let board_height = config::TETRIS_ROWS as f32 * 1.2;
+    let wall_scale = Vec3::new(0.4, board_height + 0.6, 0.5);
+    for x in [-wall_x, wall_x] {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.stealth_wall_material.clone()),
+            Transform::from_xyz(x, board_height * 0.5 + 0.3, 0.0).with_scale(wall_scale),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.stealth_wall_material.clone()),
+        Transform::from_xyz(0.0, 0.15, 0.0).with_scale(Vec3::new(wall_x * 2.0 + 0.8, 0.3, 0.5)),
+        Visibility::Visible,
+        Pickable::IGNORE,
+    ));
 }
 
 /// Spawns the pooled obstacle cubes of a Frogger highway.
@@ -2725,8 +2773,7 @@ fn sync_columns_entities(
                 let row = entity.index / config::COLUMNS_COLS;
                 transform.translation = Vec3::new(
                     (col as f32 - (config::COLUMNS_COLS - 1) as f32 * 0.5) * 1.6,
-                    ((config::COLUMNS_ROWS - 1) - row) as f32 * 1.6
-                        - (config::COLUMNS_ROWS as f32 * 0.5 - 0.8),
+                    ((config::COLUMNS_ROWS - 1) - row) as f32 * 1.6 + 0.8,
                     0.0,
                 );
                 material.0 =
@@ -2764,8 +2811,7 @@ fn sync_tetris_entities(
                 let row = entity.index / config::TETRIS_COLS;
                 transform.translation = Vec3::new(
                     (col as f32 - (config::TETRIS_COLS - 1) as f32 * 0.5) * 1.2,
-                    ((config::TETRIS_ROWS - 1) - row) as f32 * 1.2
-                        - (config::TETRIS_ROWS as f32 * 0.5 - 0.6),
+                    ((config::TETRIS_ROWS - 1) - row) as f32 * 1.2 + 0.6,
                     0.0,
                 );
                 material.0 = assets.tetris_materials[*colour as usize % 7].clone();
@@ -6649,20 +6695,12 @@ fn update_chase_camera(
                 Vec3::ZERO,
             ),
             SourceGame::Columns => (
-                Vec3::new(
-                    0.0,
-                    config::COLUMNS_ROWS as f32 * 0.6,
-                    config::COLUMNS_CAMERA_BACK,
-                ),
-                Vec3::new(0.0, config::COLUMNS_ROWS as f32 * 0.6, 0.0),
+                Vec3::new(0.0, 10.4, config::COLUMNS_CAMERA_BACK),
+                Vec3::new(0.0, 10.4, 0.0),
             ),
             SourceGame::Tetris => (
-                Vec3::new(
-                    0.0,
-                    config::TETRIS_ROWS as f32 * 0.4,
-                    config::TETRIS_CAMERA_BACK,
-                ),
-                Vec3::new(0.0, config::TETRIS_ROWS as f32 * 0.4, 0.0),
+                Vec3::new(0.0, 12.0, config::TETRIS_CAMERA_BACK),
+                Vec3::new(0.0, 12.0, 0.0),
             ),
             SourceGame::Plinko => (Vec3::new(0.0, 0.0, config::PLINKO_CAMERA_BACK), Vec3::ZERO),
             _ => unreachable!("filtered to the arcade block above"),
