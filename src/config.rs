@@ -660,6 +660,15 @@ pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
 /// How quickly the camera catches up with the character, per second. Fast
 /// enough that its lag stays a steady offset rather than swinging the aim.
 pub const STEALTH_CAMERA_LERP: f32 = 10.0;
+/// How quickly the camera swings round a corner, per second: much quicker than
+/// the follow, because the point of peeking is a guard who is walking.
+pub const STEALTH_PEEK_LERP: f32 = 22.0;
+/// How far the camera's bearing has to be off before a move counts as a swing
+/// round a corner rather than the usual follow, in radians.
+pub const STEALTH_PEEK_SWING: f32 = 0.12;
+/// How far along a hugged wall to look when deciding which side has more floor
+/// to show, in cells. A bound on the search, not on what the player can see.
+pub const STEALTH_PEEK_RUN: i32 = 12;
 pub const STEALTH_WALL_HEIGHT: f32 = 2.4;
 /// Guards as a fraction of the character's height.
 pub const STEALTH_GUARD_SCALE: f32 = 0.85;

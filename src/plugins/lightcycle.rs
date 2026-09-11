@@ -88,6 +88,7 @@ impl Plugin for LightcyclePlugin {
                         drive_character_walk.run_if(in_lightcycle_mode),
                         sync_breaker_entities.run_if(in_lightcycle_mode),
                         sync_stealth_entities.run_if(in_lightcycle_mode),
+                        fit_guard_cones.run_if(in_lightcycle_mode),
                         animate_disc_pickups.run_if(in_lightcycle_mode),
                         update_cycle_transform.run_if(in_lightcycle_mode),
                         update_chase_camera.run_if(in_lightcycle_mode),
@@ -322,6 +323,10 @@ struct GuardEntity {
 #[derive(Component)]
 struct GuardConeEntity {
     index: usize,
+    /// This guard's own cone, because its shape is cut to what the guard can
+    /// actually see. It starts as the plain fan and is replaced once the sim's
+    /// rays are available, which is on the first frame.
+    mesh: Option<Handle<Mesh>>,
 }
 
 /// Direction the chase camera is currently following.
@@ -1595,7 +1600,7 @@ fn spawn_stealth_room(
         ));
         commands.spawn((
             LightcycleSceneRoot,
-            GuardConeEntity { index },
+            GuardConeEntity { index, mesh: None },
             Mesh3d(assets.vision_cone.clone()),
             MeshMaterial3d(assets.stealth_cone_material.clone()),
             Transform::from_translation(position + Vec3::Y * 0.08)
@@ -1606,14 +1611,29 @@ fn spawn_stealth_room(
     }
 }
 
-/// Unit-length flat cone with the stealth half-angle, opening along local `+Z`.
-fn vision_cone_mesh(half_angle: f32, segments: usize) -> Mesh {
-    let mut positions = vec![[0.0, 0.0, 0.0]];
-    for step in 0..=segments {
+/// A floor fan: a centre point, then one rim point per ray, each reaching as far
+/// as that ray can see. Radii are in the mesh's own units.
+fn cone_positions(half_angle: f32, radii: &[f32]) -> Vec<[f32; 3]> {
+    let segments = radii.len().saturating_sub(1).max(1);
+    let mut positions = Vec::with_capacity(radii.len() + 1);
+    positions.push([0.0, 0.0, 0.0]);
+    for (step, reach) in radii.iter().enumerate() {
         let t = step as f32 / segments as f32;
         let angle = -half_angle + t * half_angle * 2.0;
-        positions.push([angle.sin(), 0.0, angle.cos()]);
+        positions.push([angle.sin() * reach, 0.0, angle.cos() * reach]);
     }
+    positions
+}
+
+/// Moves an existing cone's rim out to `radii`, leaving its topology alone.
+fn refit_cone(mesh: &mut Mesh, half_angle: f32, radii: &[f32]) {
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, cone_positions(half_angle, radii));
+}
+
+/// A cone whose rays reach `radii`: the shape of what a guard can actually see.
+fn cone_mesh(half_angle: f32, radii: &[f32]) -> Mesh {
+    let positions = cone_positions(half_angle, radii);
+    let segments = radii.len().saturating_sub(1).max(1);
     let mut indices = Vec::new();
     for step in 0..segments as u32 {
         indices.extend_from_slice(&[0, step + 1, step + 2]);
@@ -1626,6 +1646,48 @@ fn vision_cone_mesh(half_angle: f32, segments: usize) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Unit-length flat cone with the stealth half-angle, opening along local `+Z`.
+///
+/// Used as a guard's cone until its real shape has been measured, so the first
+/// frame is not a hole in the floor.
+fn vision_cone_mesh(half_angle: f32, segments: usize) -> Mesh {
+    let radii = vec![1.0; segments + 1];
+    cone_mesh(half_angle, &radii)
+}
+
+/// Cuts each guard's cone to what it can actually see, rebuilding the mesh on the
+/// first frame and refitting it after that.
+///
+/// Detection samples line of sight, so a cone that ignores cover tells the player
+/// a lie about where they are safe.
+fn fit_guard_cones(
+    state: Res<LightcycleState>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut cones: Query<(&mut GuardConeEntity, &mut Transform, &mut Mesh3d)>,
+) {
+    let Some(room) = state.run.as_ref().and_then(|run| run.source_stealth()) else {
+        return;
+    };
+    for (mut cone, mut transform, mut mesh) in &mut cones {
+        let radii = room.vision_radii(cone.index, config::STEALTH_CONE_SEGMENTS);
+        match cone.mesh.clone() {
+            Some(handle) => {
+                if let Some(mut geometry) = meshes.get_mut(&handle) {
+                    refit_cone(&mut geometry, config::STEALTH_VISION_HALF_ANGLE, &radii);
+                }
+            }
+            None => {
+                // The radii are in cells, so the scale drops to one cell from the
+                // fixed reach the placeholder fan was drawn at.
+                let handle = meshes.add(cone_mesh(config::STEALTH_VISION_HALF_ANGLE, &radii));
+                mesh.0 = handle.clone();
+                transform.scale = Vec3::splat(config::GRID_SPACING);
+                cone.mesh = Some(handle);
+            }
+        }
+    }
 }
 
 /// Merges same-sized cuboids at `cells` and spawns them as one batched entity.
@@ -4996,7 +5058,6 @@ fn update_chase_camera(
         // Pressing into a wall is the peek gesture: the camera swings round to
         // look along that wall, past the corner, from whichever side has floor.
         // The usual view is the same thing aimed at +Z, hence the default angle.
-        // The position lerp below is what smooths the swing.
         let peek = room
             .peek
             .map(heading_angle)
@@ -5007,7 +5068,21 @@ fn update_chase_camera(
                 config::STEALTH_CAMERA_HEIGHT,
                 -peek.sin() * config::STEALTH_CAMERA_DISTANCE,
             );
-        let blend = 1.0 - (-config::STEALTH_CAMERA_LERP * time.delta_secs()).exp();
+        // A swing round a corner is quick and the usual follow is not: the whole
+        // point of peeking is a guard who is walking into view. Telling the two
+        // apart by how far the bearing has to turn means the swing back out is
+        // just as quick, instead of lagging behind a threat that has passed.
+        let offset = camera.translation - focus;
+        let turning = Vec2::new(offset.x, offset.z)
+            .angle_to(Vec2::new(target.x - focus.x, target.z - focus.z))
+            .abs();
+        let entering = offset.length() > config::STEALTH_CAMERA_DISTANCE * 2.0;
+        let rate = if entering || turning <= config::STEALTH_PEEK_SWING {
+            config::STEALTH_CAMERA_LERP
+        } else {
+            config::STEALTH_PEEK_LERP
+        };
+        let blend = 1.0 - (-rate * time.delta_secs()).exp();
         camera.translation = camera.translation.lerp(target, blend);
         camera.look_at(focus + Vec3::Y * config::STEALTH_CAMERA_LOOK, Vec3::Y);
         return;

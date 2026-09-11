@@ -263,6 +263,60 @@ impl StealthSim {
         cell.0.abs() < self.bounds.0 && cell.1.abs() < self.bounds.1
     }
 
+    /// How many cells of open floor lie in `heading` before something solid, up
+    /// to `STEALTH_PEEK_RUN`. Used to pick which way along a hugged wall is worth
+    /// looking down.
+    fn open_run(&self, heading: Heading) -> i32 {
+        let mut cell = self.character;
+        let mut run = 0;
+        while run < config::STEALTH_PEEK_RUN {
+            cell = step_cell(cell, heading);
+            if self.is_solid(cell) {
+                break;
+            }
+            run += 1;
+        }
+        run
+    }
+
+    /// How far a guard can see along each ray across its cone, in cells, stopping
+    /// at whatever it runs into. The drawn cone is cut to this, so it shows what
+    /// the guard can actually see instead of shining through cover.
+    ///
+    /// The order matches the cone mesh's vertices, whose local angle runs the
+    /// other way round from the world angle: local `b` faces world `centre - b`.
+    pub fn vision_radii(&self, index: usize, segments: usize) -> Vec<f32> {
+        let segments = segments.max(1);
+        let Some(guard) = self.guards.get(index) else {
+            return vec![0.0; segments + 1];
+        };
+        let centre = guard.vision_angle();
+        let half = config::STEALTH_VISION_HALF_ANGLE;
+        let (gx, gz) = guard.cell();
+        let mut radii = Vec::with_capacity(segments + 1);
+        for step in 0..=segments {
+            let t = step as f32 / segments as f32;
+            let world = centre - (-half + t * half * 2.0);
+            let (dx, dz) = (world.cos(), world.sin());
+            let mut reach = 0.0;
+            while reach < config::STEALTH_VISION_RANGE {
+                reach += config::STEALTH_SIGHT_SAMPLE;
+                let cell = (
+                    gx + (dx * reach).round() as i32,
+                    gz + (dz * reach).round() as i32,
+                );
+                if self.is_solid(cell) {
+                    // Stop short, so the rim sits against the obstacle rather
+                    // than inside it.
+                    reach -= config::STEALTH_SIGHT_SAMPLE;
+                    break;
+                }
+            }
+            radii.push(reach.clamp(0.0, config::STEALTH_VISION_RANGE));
+        }
+        radii
+    }
+
     /// True when nothing can walk into the cell.
     pub fn is_solid(&self, cell: (i32, i32)) -> bool {
         !self.in_bounds(cell) || self.cover.contains(&cell)
@@ -333,15 +387,20 @@ impl StealthSim {
             wanted.is_some_and(|heading| !self.is_solid(step_cell(self.character, heading)));
 
         // Pressing into a solid is the wall-hug gesture: the character turns to
-        // face it and stays put. Report the wall and the first open way along it,
-        // so the camera can look past the corner.
+        // face it and stays put. Report the wall and the way along it worth
+        // looking down, so the camera can look past the corner.
         if let Some(heading) = wanted
             && self.is_solid(step_cell(self.character, heading))
         {
             self.hug = Some(heading);
+            // The side with more floor: a corner camera aimed at a cupboard is
+            // no use, and which side that is changes as the player moves.
             self.peek = along_wall(heading)
                 .into_iter()
-                .find(|across| !self.is_solid(step_cell(self.character, *across)));
+                .map(|across| (self.open_run(across), across))
+                .max_by_key(|(run, _)| *run)
+                .filter(|(run, _)| *run > 0)
+                .map(|(_, across)| across);
         }
 
         // Sweep the cones, and watch, every frame.
