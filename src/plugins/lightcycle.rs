@@ -5084,6 +5084,19 @@ fn update_chase_camera(
             .peek
             .map(|heading| heading_angle(heading) + std::f32::consts::PI)
             .unwrap_or(std::f32::consts::FRAC_PI_2);
+        // The view drops to hip height and closes in while the player is backed
+        // against a wall, and stands back up when they walk away. Easing rather
+        // than switching makes the drop a move the player can follow.
+        let (want_radius, want_height) = match room.hug {
+            Some(_) => (
+                config::STEALTH_HUG_CAMERA_DISTANCE,
+                config::STEALTH_HUG_CAMERA_HEIGHT,
+            ),
+            None => (
+                config::STEALTH_CAMERA_DISTANCE,
+                config::STEALTH_CAMERA_HEIGHT,
+            ),
+        };
         let offset = camera.translation - focus;
         let bearing = offset.z.atan2(offset.x);
         let radius = (offset.x * offset.x + offset.z * offset.z).sqrt();
@@ -5092,11 +5105,10 @@ fn update_chase_camera(
             - std::f32::consts::PI;
         let bearing = bearing + to_aim.clamp(-turn, turn);
         let blend = 1.0 - (-config::STEALTH_CAMERA_LERP * time.delta_secs()).exp();
-        let radius = radius + (config::STEALTH_CAMERA_DISTANCE - radius) * blend;
-        let height = offset.y + (config::STEALTH_CAMERA_HEIGHT - offset.y) * blend;
-        let target = focus + Vec3::new(bearing.cos() * radius, height, bearing.sin() * radius);
-        camera.translation = target;
-        camera.translation = camera.translation.lerp(target, blend);
+        let radius = radius + (want_radius - radius) * blend;
+        let height = offset.y + (want_height - offset.y) * blend;
+        camera.translation =
+            focus + Vec3::new(bearing.cos() * radius, height, bearing.sin() * radius);
         camera.look_at(focus + Vec3::Y * config::STEALTH_CAMERA_LOOK, Vec3::Y);
         return;
     }

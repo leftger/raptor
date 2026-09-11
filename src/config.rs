@@ -650,26 +650,32 @@ pub const STEALTH_DECAY: f32 = 0.45;
 /// Cell spacing of the line-of-sight samples.
 pub const STEALTH_SIGHT_SAMPLE: f32 = 0.4;
 pub const STEALTH_CONE_SEGMENTS: usize = 18;
-/// Third-person stealth camera: low and nearly level, so a room reads like a
-/// corridor seen from behind the figure rather than a board seen from above.
+/// Third-person stealth camera for walking: high enough to read the room and its
+/// patrols, which is the view the player spends almost all of their time in and
+/// the one the room was tuned around.
+pub const STEALTH_CAMERA_HEIGHT: f32 = 11.0;
+pub const STEALTH_CAMERA_DISTANCE: f32 = 13.0;
+/// Height above the character's feet that the camera aims at.
+pub const STEALTH_CAMERA_LOOK: f32 = 1.2;
+/// The view while backed against a wall: hip height and close in, so the figure
+/// fills the frame and the eyeline runs along the wall and past its end.
 ///
-/// The height cannot go all the way down to the hip: below the cover walls, the
-/// walls themselves hide the character, which is worse than any angle. Sitting
-/// just above them keeps the walls in shot as cover, where they belong.
-pub const STEALTH_CAMERA_HEIGHT: f32 = 2.9;
-pub const STEALTH_CAMERA_DISTANCE: f32 = 10.0;
-/// Height above the character's feet that the camera aims at: the chest, which
-/// leaves the view tilted by only a few degrees.
-pub const STEALTH_CAMERA_LOOK: f32 = 1.5;
+/// Being below the cover walls is the point here rather than a problem. Unlike
+/// the walking view, the wall runs alongside this camera instead of between it and
+/// the figure, which is exactly why this view shows what the high one cannot.
+pub const STEALTH_HUG_CAMERA_HEIGHT: f32 = 1.2;
+pub const STEALTH_HUG_CAMERA_DISTANCE: f32 = 4.5;
 /// How far the figure is pushed toward a wall it is backed against, in world
 /// units, so the pose reads as leaning on the wall rather than standing a cell
 /// short of it.
 pub const STEALTH_HUG_LEAN: f32 = 0.85;
-// A camera below the cover walls would have the room's own geometry hiding the
-// character it is following.
+// The walking view has to clear the cover walls, or the room's own geometry hides
+// the character it is following. The wall-hug view is the deliberate exception,
+// for the reason given above it.
 const _: () = assert!(STEALTH_CAMERA_HEIGHT > STEALTH_WALL_HEIGHT);
 /// How quickly the camera catches up with the character, per second. Fast
-/// enough that its lag stays a steady offset rather than swinging the aim.
+/// enough that its lag stays a steady offset rather than swinging the aim. This
+/// is also what eases it down into the wall-hug view and back up out of it.
 pub const STEALTH_CAMERA_LERP: f32 = 10.0;
 /// How fast the camera turns round the figure, in radians per second. A quarter
 /// turn takes about six tenths of a second: slow enough to watch the swing rather
