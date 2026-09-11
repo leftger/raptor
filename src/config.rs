@@ -671,6 +671,10 @@ const _: () = assert!(STEALTH_CAMERA_HEIGHT > STEALTH_WALL_HEIGHT);
 /// How quickly the camera catches up with the character, per second. Fast
 /// enough that its lag stays a steady offset rather than swinging the aim.
 pub const STEALTH_CAMERA_LERP: f32 = 10.0;
+/// How fast the camera turns round the figure, in radians per second. A quarter
+/// turn takes about six tenths of a second: slow enough to watch the swing rather
+/// than have it read as a cut, which is what made it confusing before.
+pub const STEALTH_SWING_RATE: f32 = 2.6;
 /// How far along a hugged wall to look when deciding which side has more floor
 /// to show, in cells. A bound on the search, not on what the player can see.
 pub const STEALTH_PEEK_RUN: i32 = 12;

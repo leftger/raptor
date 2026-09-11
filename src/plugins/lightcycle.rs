@@ -5071,17 +5071,31 @@ fn update_chase_camera(
             .single()
             .map(|transform| transform.translation)
             .unwrap_or_else(|_| config::ground_position(room.character.0, room.character.1));
-        // The camera keeps a fixed bearing, on the +Z side of the figure. Turning
-        // it to look along a hugged wall read as the controls changing under the
-        // player, and at this angle the view already shows a good way past a
-        // corner, so it stays put.
-        let target = focus
-            + Vec3::new(
-                0.0,
-                config::STEALTH_CAMERA_HEIGHT,
-                config::STEALTH_CAMERA_DISTANCE,
-            );
+        // The camera holds a bearing round the figure and turns steadily toward
+        // whatever the view should be aimed along: round the far side of the peek
+        // direction when the player is backed against a wall, and plain +Z
+        // otherwise.
+        //
+        // It turns at a fixed rate rather than easing, because that is what makes
+        // the swing watchable: an ease puts nearly all the movement in the first
+        // few frames, which is why the perspective read as changing instantly.
+        // The radius and height still ease, so entering a run flies in as before.
+        let aim = room
+            .peek
+            .map(|heading| heading_angle(heading) + std::f32::consts::PI)
+            .unwrap_or(std::f32::consts::FRAC_PI_2);
+        let offset = camera.translation - focus;
+        let bearing = offset.z.atan2(offset.x);
+        let radius = (offset.x * offset.x + offset.z * offset.z).sqrt();
+        let turn = config::STEALTH_SWING_RATE * time.delta_secs();
+        let to_aim = (aim - bearing + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        let bearing = bearing + to_aim.clamp(-turn, turn);
         let blend = 1.0 - (-config::STEALTH_CAMERA_LERP * time.delta_secs()).exp();
+        let radius = radius + (config::STEALTH_CAMERA_DISTANCE - radius) * blend;
+        let height = offset.y + (config::STEALTH_CAMERA_HEIGHT - offset.y) * blend;
+        let target = focus + Vec3::new(bearing.cos() * radius, height, bearing.sin() * radius);
+        camera.translation = target;
         camera.translation = camera.translation.lerp(target, blend);
         camera.look_at(focus + Vec3::Y * config::STEALTH_CAMERA_LOOK, Vec3::Y);
         return;
