@@ -1,9 +1,9 @@
 use crate::asteroids::AsteroidsPhase;
 use crate::config;
-use crate::disc::{DiscPhase, SourceGame};
+use crate::disc::DiscPhase;
 use crate::document::DocumentLoadState;
 use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
-use crate::lightcycle::{LightcycleState, RunEnvironment};
+use crate::lightcycle::{LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::plugins::music::MusicState;
 use crate::state::{InteractionMode, NavigatorResource, SelectionState, UiNotice, UiSettings};
@@ -405,7 +405,7 @@ fn update_footer_text(
         )
     } else {
         (
-            "LIGHTCYCLE  |  A/D: Turn or Pivot  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  source: fight, or .py rocks (Space: throw/fire)  |  Shift: bullet time  |  Q: recall  |  Files/trail/wall: crash  |  Gate: parent/close",
+            "LIGHTCYCLE  |  A/D: Turn, Pivot, Walk or Slide  |  R: Restart  |  M: Explorer  |  Folders: enter  |  .md: read  |  source: .rs/.cpp fight, .c rocks, .py snake, .slint platformer, .lua breaker, .sh stealth (Space: throw/fire/jump/serve/wait)  |  Shift: bullet time  |  Q: recall  |  Gate: parent/close",
             "MOUSE: Hold right-drag to look around  |  u/-: Parent directory or close  |  Breadcrumb: jump to folder  |  Approach text for the folio panel",
         )
     };
@@ -469,15 +469,13 @@ fn update_status_text(
                 if let RunEnvironment::Source {
                     name,
                     layout,
-                    disc,
-                    asteroids,
-                    game,
+                    sim,
                     language,
                     ..
                 } = &run.environment
                 {
-                    match game {
-                        SourceGame::Asteroids => {
+                    match sim {
+                        SourceSim::Asteroids(asteroids) => {
                             status = format!(
                                 "ASTEROIDS {} | LIVES {} | RING: {name} | {} | {status}",
                                 asteroids.score,
@@ -493,7 +491,44 @@ fn update_status_text(
                                 );
                             }
                         }
-                        SourceGame::DiscWars => {
+                        SourceSim::Snake(snake) => {
+                            status = format!(
+                                "SNAKE {} | LEFT {} | TAIL {} | RING: {name} | {} | {status}",
+                                snake.eaten,
+                                snake.remaining(),
+                                snake.max_tail,
+                                language.name(),
+                            );
+                            status = format!(
+                                "{status} | EXIT: {}",
+                                if snake.exit_open { "OPEN" } else { "LOCKED" }
+                            );
+                        }
+                        SourceSim::Platformer(level) => {
+                            status = format!(
+                                "PLATFORMER {}% | RING: {name} | {} | {status}",
+                                (level.progress() * 100.0).round() as u32,
+                                language.name(),
+                            );
+                            status = format!("{status} | {}", level.phase.label());
+                        }
+                        SourceSim::Breaker(level) => {
+                            status = format!(
+                                "BREAKER {} bricks | RING: {name} | {} | {status}",
+                                level.remaining(),
+                                language.name(),
+                            );
+                            status = format!("{status} | {}", level.phase.label());
+                        }
+                        SourceSim::Stealth(room) => {
+                            status = format!(
+                                "STEALTH {} | DETECT {}% | RING: {name} | {} | {status}",
+                                room.phase.label(),
+                                room.detection_percent(),
+                                language.name(),
+                            );
+                        }
+                        SourceSim::DiscWars(disc) => {
                             status = format!(
                                 "DISC {}-{} | RING: {name} | {} | {status}",
                                 disc.player_score,

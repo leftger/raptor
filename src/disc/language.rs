@@ -17,26 +17,40 @@ pub enum SourceLanguage {
     C,
     Cpp,
     Python,
+    Slint,
+    Lua,
+    Shell,
 }
 
 /// Which mini-game a source file opens.
 ///
 /// The ring geometry is shared; only the game inside it changes. Python files
-/// are an asteroid field, the rest are disc-wars rings. Moving the field to
-/// another extension is a one-line change in [`SourceLanguage::game`].
+/// are a snake run, C files an asteroid field, and Rust/C++ a disc-wars ring.
+/// Moving a game to another extension is a one-line change in
+/// [`SourceLanguage::game`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceGame {
     DiscWars,
     Asteroids,
+    Snake,
+    Platformer,
+    Breaker,
+    Stealth,
 }
 
 impl SourceLanguage {
+    /// How many languages the allowlist covers, for fixed-size tables.
+    pub const COUNT: usize = 7;
+
     /// Every language, for tests that need to cover them all.
-    pub const ALL: [SourceLanguage; 4] = [
+    pub const ALL: [SourceLanguage; SourceLanguage::COUNT] = [
         SourceLanguage::Rust,
         SourceLanguage::C,
         SourceLanguage::Cpp,
         SourceLanguage::Python,
+        SourceLanguage::Slint,
+        SourceLanguage::Lua,
+        SourceLanguage::Shell,
     ];
 
     /// Maps a lowercase file extension to a language, or `None` when the
@@ -49,6 +63,9 @@ impl SourceLanguage {
             "c" | "h" => Some(Self::C),
             "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => Some(Self::Cpp),
             "py" | "pyi" => Some(Self::Python),
+            "slint" => Some(Self::Slint),
+            "lua" => Some(Self::Lua),
+            "sh" | "bash" | "zsh" => Some(Self::Shell),
             _ => None,
         }
     }
@@ -66,14 +83,21 @@ impl SourceLanguage {
             Self::C => "c",
             Self::Cpp => "cpp",
             Self::Python => "python",
+            Self::Slint => "slint",
+            Self::Lua => "lua",
+            Self::Shell => "shell",
         }
     }
 
     /// Which mini-game a file of this language hosts. See [`SourceGame`].
     pub fn game(self) -> SourceGame {
         match self {
-            Self::Python => SourceGame::Asteroids,
-            Self::Rust | Self::C | Self::Cpp => SourceGame::DiscWars,
+            Self::Python => SourceGame::Snake,
+            Self::C => SourceGame::Asteroids,
+            Self::Rust | Self::Cpp => SourceGame::DiscWars,
+            Self::Slint => SourceGame::Platformer,
+            Self::Lua => SourceGame::Breaker,
+            Self::Shell => SourceGame::Stealth,
         }
     }
 
@@ -85,6 +109,9 @@ impl SourceLanguage {
             Self::C => "cc",
             Self::Cpp => "c++",
             Self::Python => "CPython",
+            Self::Slint => "slint-build",
+            Self::Lua => "lua",
+            Self::Shell => "sh",
         }
     }
 
@@ -95,6 +122,9 @@ impl SourceLanguage {
             Self::C => config::DISC_C_ACCENT,
             Self::Cpp => config::DISC_CPP_ACCENT,
             Self::Python => config::DISC_PYTHON_ACCENT,
+            Self::Slint => config::DISC_SLINT_ACCENT,
+            Self::Lua => config::DISC_LUA_ACCENT,
+            Self::Shell => config::DISC_SHELL_ACCENT,
         }
     }
 
@@ -105,6 +135,9 @@ impl SourceLanguage {
             Self::C => config::MUSIC_DISC_C_ARP_GAIN,
             Self::Cpp => config::MUSIC_DISC_CPP_ARP_GAIN,
             Self::Python => config::MUSIC_DISC_PYTHON_ARP_GAIN,
+            Self::Slint => config::MUSIC_DISC_SLINT_ARP_GAIN,
+            Self::Lua => config::MUSIC_DISC_LUA_ARP_GAIN,
+            Self::Shell => config::MUSIC_DISC_SHELL_ARP_GAIN,
         }
     }
 
@@ -117,6 +150,9 @@ impl SourceLanguage {
             Self::C => config::MUSIC_DISC_C_ARP_RATE,
             Self::Cpp => config::MUSIC_DISC_CPP_ARP_RATE,
             Self::Python => config::MUSIC_DISC_PYTHON_ARP_RATE,
+            Self::Slint => config::MUSIC_DISC_SLINT_ARP_RATE,
+            Self::Lua => config::MUSIC_DISC_LUA_ARP_RATE,
+            Self::Shell => config::MUSIC_DISC_SHELL_ARP_RATE,
         }
     }
 
@@ -145,6 +181,27 @@ impl SourceLanguage {
                     "IndentationError: unexpected indent"
                 }
             }
+            Self::Slint => {
+                if seed & 1 == 0 {
+                    "error: unknown property"
+                } else {
+                    "error: cannot convert to length"
+                }
+            }
+            Self::Lua => {
+                if seed & 1 == 0 {
+                    "attempt to index a nil value"
+                } else {
+                    "unexpected symbol near '='"
+                }
+            }
+            Self::Shell => {
+                if seed & 1 == 0 {
+                    "command not found"
+                } else {
+                    "unbound variable"
+                }
+            }
         }
     }
 }
@@ -164,6 +221,10 @@ mod tests {
             ("widget.hpp", SourceLanguage::Cpp),
             ("tool.py", SourceLanguage::Python),
             ("stubs.pyi", SourceLanguage::Python),
+            ("app.slint", SourceLanguage::Slint),
+            ("init.lua", SourceLanguage::Lua),
+            ("build.sh", SourceLanguage::Shell),
+            ("run.zsh", SourceLanguage::Shell),
         ] {
             assert_eq!(
                 SourceLanguage::from_path(&PathBuf::from(path)),
@@ -211,10 +272,11 @@ mod tests {
     }
 
     #[test]
-    fn python_files_host_the_asteroid_field() {
+    fn each_language_hosts_its_own_game() {
         use super::SourceGame;
-        assert_eq!(SourceLanguage::Python.game(), SourceGame::Asteroids);
-        for language in [SourceLanguage::Rust, SourceLanguage::C, SourceLanguage::Cpp] {
+        assert_eq!(SourceLanguage::Python.game(), SourceGame::Snake);
+        assert_eq!(SourceLanguage::C.game(), SourceGame::Asteroids);
+        for language in [SourceLanguage::Rust, SourceLanguage::Cpp] {
             assert_eq!(language.game(), SourceGame::DiscWars);
         }
     }

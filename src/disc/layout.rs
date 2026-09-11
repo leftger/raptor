@@ -189,6 +189,69 @@ pub fn build_capped_disc_arena(
     build_arena(path, language, bytes, Some(max_radius))
 }
 
+/// A metadata-only arena for source runs played off the grid.
+///
+/// The platformer, the brick breaker and the stealth run build their own space,
+/// so nothing here is carved, walled or gated. They still need what every source
+/// run shares: the fingerprint that seeds their procedural layout, the size of
+/// the file that was read, and the truncation flags the HUD reports.
+pub fn build_flat_arena(
+    path: &Path,
+    language: SourceLanguage,
+    bytes: &[u8],
+    half_extent: i32,
+) -> (Arena, DiscLayout) {
+    let truncated = bytes.len() > config::SOURCE_MAX_BYTES;
+    let slice = if truncated {
+        let mut end = config::SOURCE_MAX_BYTES;
+        while end > 0 && !is_char_boundary(bytes, end) {
+            end -= 1;
+        }
+        &bytes[..end]
+    } else {
+        bytes
+    };
+    let (text, lossy_utf8) = match std::str::from_utf8(slice) {
+        Ok(text) => (text.to_string(), false),
+        Err(_) => (String::from_utf8_lossy(slice).into_owned(), true),
+    };
+
+    let signals = tokenize_source(&text, language);
+    let seed = stable_path_seed(path) ^ content_hash(&signals) ^ language_pepper(language);
+    let half = half_extent.max(2);
+    let roads: BTreeSet<(i32, i32)> = (-half..=half)
+        .flat_map(|x| (-half..=half).map(move |z| (x, z)))
+        .collect();
+
+    let arena = Arena {
+        min: (-half, -half),
+        max: (half, half),
+        parent_portal: None,
+        kind: ArenaKind::Disc,
+        roads,
+        street_walls: BTreeSet::new(),
+        structures: Vec::new(),
+        city_theme: CityTheme::from_seed(seed),
+    };
+    let layout = DiscLayout {
+        radius: half,
+        center: (0, 0),
+        hazards: BTreeSet::new(),
+        safe_pads: BTreeSet::new(),
+        pickups: Vec::new(),
+        blocks: Vec::new(),
+        player_spawn: (0, 0),
+        player_spawn_heading: Heading::PosX,
+        opponent_spawn: (0, 0),
+        practice: false,
+        truncated,
+        lossy_utf8,
+        seed,
+        signals,
+    };
+    (arena, layout)
+}
+
 fn build_arena(
     path: &Path,
     language: SourceLanguage,
@@ -516,6 +579,16 @@ fn is_function_line(line: &str, language: SourceLanguage) -> bool {
                 || line.contains(" fn ")
         }
         SourceLanguage::Python => line.starts_with("def ") || line.starts_with("async def "),
+        SourceLanguage::Slint => line.starts_with("callback ") || line.contains("=>"),
+        SourceLanguage::Lua => {
+            line.starts_with("function ")
+                || line.contains("function(")
+                || line.contains("= function")
+        }
+        SourceLanguage::Shell => {
+            let head = line.trim_start();
+            head.starts_with("function ") || (!head.contains('=') && head.contains("()"))
+        }
         SourceLanguage::C | SourceLanguage::Cpp => {
             let Some(open) = line.find('(') else {
                 return false;
@@ -703,6 +776,9 @@ fn language_pepper(language: SourceLanguage) -> u64 {
         SourceLanguage::C => 0x0000_00c0,
         SourceLanguage::Cpp => 0x0000_cafe,
         SourceLanguage::Python => 0x5079_7468,
+        SourceLanguage::Slint => 0x536c_696e,
+        SourceLanguage::Lua => 0x4c75_6100,
+        SourceLanguage::Shell => 0x4241_5348,
     }
 }
 

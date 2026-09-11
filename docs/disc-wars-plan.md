@@ -220,9 +220,23 @@ talking back.
   arpeggio) in place of the derezz crash, so the final blow lands clean.
 - Keys: `Space` / left click throws (aimed), `Q` recalls, `Shift` bullet time,
   `R` rematches, `U` / `-` or the gate closes the ring.
-- Sibling game: `.py` files skip the ring fight and open an asteroid field
-  (`crate::asteroids`), sharing the ring geometry, close gate and restore path.
-  The cycle is parked while the rocks are live and handed back — facing the way
-  you were aiming — once the field is won or lost, so you can drive out the
-  gate. See the README's "Asteroid Field" section.
+- Sibling games: the ring is shared, the game inside depends on the language
+  ([`SourceLanguage::game`]). `.c` / `.h` files open an asteroid field
+  (`crate::asteroids`), and `.py` files open a snake run (`crate::snake`); both
+  reuse the ring geometry, close gate and restore path.
+- Off-grid games: `.slint` files open a side platformer (`crate::platformer`),
+  `.lua` files a brick breaker with the bike as the paddle (`crate::breaker`),
+  and `.sh` files a stealth run with sweeping vision cones (`crate::stealth`).
+  These build their own space, so they carry a metadata-only arena
+  (`build_flat_arena`) and reach the directory through their own exit: the door
+  at the end of the level, a cleared wall, or the far side of the room.
+  - Field: the cycle is parked while the rocks are live and handed back — facing
+    the way you were aiming — once the field is won or lost, so you can drive
+    out the gate.
+  - Snake: the cycle drives the grid as usual, but the trail is capped to a
+    finite tail that grows with every power-up, and the gate is solid until all
+    of them are eaten.
+- One sim per run: `RunEnvironment::Source` holds a `SourceSim`, so a run can
+  only ever read the state of the game it is actually playing. The earlier
+  always-present-sims shape let the field's overhead camera leak into disc wars.
 

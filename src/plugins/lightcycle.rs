@@ -1,9 +1,10 @@
 use crate::asteroids::{AsteroidsPhase, AsteroidsSim};
+use crate::breaker::{BreakerPhase, BreakerSim};
 use crate::config;
 use crate::disc::{
     DiscEvents, DiscLayout, DiscPhase, DiscSim, PlayerSnapshot, SourceGame, SourceLanguage,
     SourceLoadFailed, SourceLoadState, SourceLoaded, SourceRequested, build_capped_disc_arena,
-    build_disc_arena,
+    build_disc_arena, build_flat_arena,
 };
 use crate::document::{
     DocumentLayout, DocumentLoadFailed, DocumentLoadState, DocumentLoaded, DocumentRequested,
@@ -16,14 +17,17 @@ use crate::lightcycle::logic::{
     GatePlacement, Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall,
     classify_next_content,
 };
-use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment};
+use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
 use crate::music::MusicSfx;
+use crate::platformer::{PlatformerPhase, PlatformerSim};
 use crate::plugins::transition::{ModeTransition, gods_eye_pose};
+use crate::snake::SnakeSim;
 use crate::state::{
     DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
     OrbitCameraResource, TrailSceneRoot,
 };
+use crate::stealth::{StealthPhase, StealthSim};
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -75,6 +79,10 @@ impl Plugin for LightcyclePlugin {
                         update_disc_focus.run_if(in_lightcycle_mode),
                         sync_disc_entities.run_if(in_lightcycle_mode),
                         sync_asteroid_entities.run_if(in_lightcycle_mode),
+                        sync_snake_entities.run_if(in_lightcycle_mode),
+                        sync_character_entities.run_if(in_lightcycle_mode),
+                        sync_breaker_entities.run_if(in_lightcycle_mode),
+                        sync_stealth_entities.run_if(in_lightcycle_mode),
                         animate_disc_pickups.run_if(in_lightcycle_mode),
                         update_cycle_transform.run_if(in_lightcycle_mode),
                         update_chase_camera.run_if(in_lightcycle_mode),
@@ -127,7 +135,7 @@ struct LightcycleAssets {
     disc_pickup_material: Handle<StandardMaterial>,
     disc_safe_pad_material: Handle<StandardMaterial>,
     /// One accent per [`SourceLanguage`], indexed by [`disc_language_index`].
-    disc_accent_materials: [Handle<StandardMaterial>; 4],
+    disc_accent_materials: [Handle<StandardMaterial>; SourceLanguage::COUNT],
     /// Flat cylinder thrown and returned during a fight.
     disc_mesh: Handle<Mesh>,
     /// Taller cylinder body for the Recognizer opponent.
@@ -135,6 +143,24 @@ struct LightcycleAssets {
     /// Blocky rock body and beam tracer for the asteroid field.
     rock_material: Handle<StandardMaterial>,
     beam_material: Handle<StandardMaterial>,
+    /// Power-up orb and sealed-exit bar for a snake ring.
+    snake_food_material: Handle<StandardMaterial>,
+    snake_lock_material: Handle<StandardMaterial>,
+    /// The Tron runner, and the slabs and door of a platformer level.
+    tron_scene: Handle<WorldAsset>,
+    platform_material: Handle<StandardMaterial>,
+    exit_material: Handle<StandardMaterial>,
+    /// Bricks, ball and court walls for the breaker.
+    brick_material: Handle<StandardMaterial>,
+    ball_material: Handle<StandardMaterial>,
+    court_material: Handle<StandardMaterial>,
+    /// Floor, cover, guards and their vision cones for the stealth run.
+    stealth_floor_material: Handle<StandardMaterial>,
+    stealth_wall_material: Handle<StandardMaterial>,
+    stealth_cone_material: Handle<StandardMaterial>,
+    stealth_exit_material: Handle<StandardMaterial>,
+    /// Unit-length cone with the stealth half-angle, scaled by its range.
+    vision_cone: Handle<Mesh>,
     document_floor_material: Handle<StandardMaterial>,
     document_rule_material: Handle<StandardMaterial>,
     document_margin_material: Handle<StandardMaterial>,
@@ -221,6 +247,42 @@ struct RockEntity {
 /// One pooled beam in the asteroid field, keyed into `AsteroidsSim::beams`.
 #[derive(Component)]
 struct BeamEntity {
+    index: usize,
+}
+
+/// One power-up on a snake ring, keyed into `SnakeSim::food`.
+#[derive(Component)]
+struct SnakeFoodEntity {
+    index: usize,
+}
+
+/// The bar sealing a snake ring's exit until enough power-ups are collected.
+#[derive(Component)]
+struct SnakeGateLock;
+
+/// The Tron runner, on a platformer level or a stealth run.
+#[derive(Component)]
+struct CharacterEntity;
+
+/// The breaker's ball.
+#[derive(Component)]
+struct BallEntity;
+
+/// One brick of a breaker wall, keyed into `BreakerSim::bricks`.
+#[derive(Component)]
+struct BrickEntity {
+    index: usize,
+}
+
+/// One patrol's body, keyed into `StealthSim::guards`.
+#[derive(Component)]
+struct GuardEntity {
+    index: usize,
+}
+
+/// One patrol's field-of-vision cone, keyed into `StealthSim::guards`.
+#[derive(Component)]
+struct GuardConeEntity {
     index: usize,
 }
 
@@ -420,6 +482,67 @@ fn setup_lightcycle_assets(
             alpha_mode: AlphaMode::Add,
             ..default()
         }),
+        snake_food_material: materials.add(StandardMaterial {
+            base_color: config::SNAKE_FOOD_COLOR,
+            emissive: LinearRgba::from(config::SNAKE_FOOD_COLOR) * 2.2,
+            unlit: true,
+            ..default()
+        }),
+        snake_lock_material: materials.add(StandardMaterial {
+            base_color: config::SNAKE_GATE_COLOR,
+            emissive: LinearRgba::from(config::SNAKE_GATE_COLOR) * 1.6,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
+        tron_scene: asset_server
+            .load(GltfAssetLabel::Scene(0).from_asset(config::TRON_MODEL_ASSET)),
+        platform_material: materials.add(unlit_material(config::PLATFORMER_PLATFORM_COLOR)),
+        exit_material: materials.add(StandardMaterial {
+            base_color: config::PLATFORMER_EXIT_COLOR,
+            emissive: LinearRgba::from(config::PLATFORMER_EXIT_COLOR) * 2.4,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
+        brick_material: materials.add(StandardMaterial {
+            base_color: config::BREAKER_BRICK_COLOR,
+            emissive: LinearRgba::from(config::BREAKER_BRICK_COLOR) * 1.5,
+            unlit: true,
+            ..default()
+        }),
+        ball_material: materials.add(StandardMaterial {
+            base_color: config::BREAKER_BALL_COLOR,
+            emissive: LinearRgba::from(config::BREAKER_BALL_COLOR) * 3.0,
+            unlit: true,
+            ..default()
+        }),
+        court_material: materials.add(unlit_material(config::BREAKER_WALL_COLOR)),
+        stealth_floor_material: materials.add(unlit_material(config::STEALTH_FLOOR_COLOR)),
+        stealth_wall_material: materials.add(StandardMaterial {
+            base_color: config::STEALTH_WALL_COLOR,
+            emissive: LinearRgba::from(config::STEALTH_WALL_COLOR) * 0.6,
+            unlit: true,
+            ..default()
+        }),
+        stealth_cone_material: materials.add(StandardMaterial {
+            base_color: config::STEALTH_CONE_COLOR,
+            emissive: LinearRgba::from(config::STEALTH_CONE_COLOR) * 1.4,
+            unlit: true,
+            alpha_mode: AlphaMode::Add,
+            ..default()
+        }),
+        stealth_exit_material: materials.add(StandardMaterial {
+            base_color: config::STEALTH_EXIT_COLOR,
+            emissive: LinearRgba::from(config::STEALTH_EXIT_COLOR) * 2.4,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            ..default()
+        }),
+        vision_cone: meshes.add(vision_cone_mesh(
+            config::STEALTH_VISION_HALF_ANGLE,
+            config::STEALTH_CONE_SEGMENTS,
+        )),
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
@@ -607,30 +730,54 @@ fn build_document_run(path: &Path, bytes: &[u8]) -> ActiveRun {
     }
 }
 
-/// Builds the fight for a source file: a fresh player cycle at the ring center
-/// and a fresh [`DiscSim`] beside it.
+/// Builds the run for a source file: a fresh player cycle at the ring center
+/// plus the sim for whichever game the language hosts.
 fn build_source_run(path: &Path, language: SourceLanguage, bytes: &[u8]) -> ActiveRun {
     let game = language.game();
     let (arena, layout) = match game {
-        // The field wants a small, fully visible ring whatever the file size.
+        // The field and the snake ring want a bounded playfield whatever the
+        // file size; only disc wars scales its coliseum with the file.
         SourceGame::Asteroids => {
             build_capped_disc_arena(path, language, bytes, config::ASTEROIDS_RADIUS_CELLS)
         }
+        SourceGame::Snake => {
+            build_capped_disc_arena(path, language, bytes, config::SNAKE_RADIUS_CELLS)
+        }
         SourceGame::DiscWars => build_disc_arena(path, language, bytes),
+        // The off-grid games carry a metadata-only arena; their level is their
+        // own. The half-extent only sizes the (unused) metadata box.
+        SourceGame::Platformer | SourceGame::Breaker | SourceGame::Stealth => {
+            build_flat_arena(path, language, bytes, config::PLATFORMER_HALF_EXTENT)
+        }
     };
     let sim = LightcycleSim::start(layout.player_spawn, layout.player_spawn_heading);
-    let disc = DiscSim::new(&layout);
-    let mut asteroids = Box::new(AsteroidsSim::new(
-        layout.seed,
-        (
-            layout.center.0 as f32 * config::GRID_SPACING,
-            layout.center.1 as f32 * config::GRID_SPACING,
-        ),
-        layout.radius as f32 * config::GRID_SPACING,
-    ));
-    // The parked cycle starts facing the way it will drive once the field ends,
-    // so the handover is seamless and the gate is straight ahead.
-    asteroids.angle = heading_facing(layout.player_spawn_heading);
+    let sim_state = match game {
+        SourceGame::DiscWars => SourceSim::DiscWars(DiscSim::new(&layout)),
+        SourceGame::Asteroids => {
+            let mut field = Box::new(AsteroidsSim::new(
+                layout.seed,
+                ring_center_world(&layout),
+                ring_radius_world(&layout),
+            ));
+            // The parked cycle starts on the ring's spawn heading so the aim
+            // angle is already meaningful when the field ends and the bike is
+            // handed back.
+            field.angle = heading_facing(layout.player_spawn_heading);
+            SourceSim::Asteroids(field)
+        }
+        SourceGame::Snake => SourceSim::Snake(SnakeSim::new(
+            layout.seed,
+            layout.player_spawn,
+            &ring_food_cells(&arena),
+            config::SNAKE_FOOD_TARGET,
+        )),
+        SourceGame::Platformer => SourceSim::Platformer(Box::new(PlatformerSim::new(
+            layout.seed,
+            level_metres(&layout),
+        ))),
+        SourceGame::Breaker => SourceSim::Breaker(Box::new(BreakerSim::new(layout.seed))),
+        SourceGame::Stealth => SourceSim::Stealth(Box::new(StealthSim::new(layout.seed))),
+    };
     ActiveRun {
         sim,
         arena,
@@ -642,15 +789,44 @@ fn build_source_run(path: &Path, language: SourceLanguage, bytes: &[u8]) -> Acti
                 .unwrap_or("source")
                 .to_string(),
             language,
-            game,
             layout: Box::new(layout),
-            disc,
-            asteroids,
+            sim: sim_state,
             focused_block: None,
         },
         crash_label: None,
         entering_label: None,
     }
+}
+
+/// Level length for an off-grid run, in metres: longer file, longer level.
+fn level_metres(layout: &DiscLayout) -> f32 {
+    layout.signals.lines as f32 * config::PLATFORMER_METRES_PER_LINE
+}
+
+/// Middle of a ring, in world units.
+fn ring_center_world(layout: &DiscLayout) -> (f32, f32) {
+    (
+        layout.center.0 as f32 * config::GRID_SPACING,
+        layout.center.1 as f32 * config::GRID_SPACING,
+    )
+}
+
+/// Inner radius of a ring wall, in world units.
+fn ring_radius_world(layout: &DiscLayout) -> f32 {
+    layout.radius as f32 * config::GRID_SPACING
+}
+
+/// Driveable cells of a ring, in a stable order, for scattering power-ups.
+fn ring_food_cells(arena: &Arena) -> Vec<(i32, i32)> {
+    arena.roads.iter().copied().collect()
+}
+
+/// True when `cell` is a ring's close gate.
+fn is_ring_gate(arena: &Arena, cell: (i32, i32)) -> bool {
+    arena
+        .parent_portal
+        .as_ref()
+        .is_some_and(|portal| portal.contains(cell))
 }
 
 fn spawn_sim(arena: &Arena, cells: &HashMap<(i32, i32), usize>) -> LightcycleSim {
@@ -819,27 +995,37 @@ fn spawn_run_entities(
         }
         RunEnvironment::Source {
             language,
-            game,
             layout,
-            disc,
-            asteroids,
+            sim,
             ..
-        } => {
-            match game {
-                // The field shares the ring and its gate, but stands alone: no
-                // hazards, pickups or opponent, and its own pooled rocks/beams.
-                SourceGame::Asteroids => {
-                    spawn_ring_shell(commands, meshes, assets, &run.arena, layout, *language);
-                    spawn_asteroid_field(commands, assets, asteroids);
-                }
-                SourceGame::DiscWars => {
-                    spawn_disc_arena(
-                        commands, assets, meshes, &run.arena, layout, *language, disc,
-                    );
-                    spawn_disc_focus_marker(commands, assets, run);
-                }
+        } => match sim {
+            // The field shares the ring and its gate, but stands alone: no
+            // hazards, pickups or opponent, and its own pooled rocks/beams.
+            SourceSim::Asteroids(field) => {
+                spawn_ring_shell(commands, meshes, assets, &run.arena, layout, *language);
+                spawn_asteroid_field(commands, assets, field);
             }
-        }
+            // Snake is the ordinary grid run plus power-ups and a locked gate.
+            SourceSim::Snake(snake) => {
+                spawn_ring_shell(commands, meshes, assets, &run.arena, layout, *language);
+                spawn_snake_field(commands, assets, &run.arena, snake);
+            }
+            SourceSim::Platformer(level) => {
+                spawn_platformer_level(commands, assets, meshes, *language, level);
+            }
+            SourceSim::Breaker(level) => {
+                spawn_breaker_court(commands, assets, level);
+            }
+            SourceSim::Stealth(room) => {
+                spawn_stealth_room(commands, assets, meshes, room);
+            }
+            SourceSim::DiscWars(disc) => {
+                spawn_disc_arena(
+                    commands, assets, meshes, &run.arena, layout, *language, disc,
+                );
+                spawn_disc_focus_marker(commands, assets, run);
+            }
+        },
     }
     spawn_trail_ribbon(commands, assets, meshes, run);
 }
@@ -1080,6 +1266,327 @@ fn spawn_asteroid_field(commands: &mut Commands, assets: &LightcycleAssets, sim:
     }
 }
 
+/// Spawns a snake ring's power-ups and the bar sealing its exit.
+///
+/// The power-ups are a fixed pool keyed by index; the sim marks them eaten.
+fn spawn_snake_field(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    arena: &Arena,
+    snake: &SnakeSim,
+) {
+    for (index, food) in snake.food.iter().enumerate() {
+        commands.spawn((
+            LightcycleSceneRoot,
+            SnakeFoodEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.snake_food_material.clone()),
+            Transform::from_translation(
+                config::ground_position(food.cell.0, food.cell.1) + Vec3::Y * 0.5,
+            )
+            .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_4))
+            .with_scale(Vec3::splat(config::SNAKE_FOOD_SIZE)),
+            if food.eaten {
+                Visibility::Hidden
+            } else {
+                Visibility::Visible
+            },
+            Pickable::IGNORE,
+        ));
+    }
+
+    // A solid bar in the gate opening until the exit opens. The physical lock is
+    // the classification; this is what the rider sees.
+    let Some(portal) = arena.parent_portal.as_ref() else {
+        return;
+    };
+    let gate = portal.to;
+    commands.spawn((
+        LightcycleSceneRoot,
+        SnakeGateLock,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.snake_lock_material.clone()),
+        Transform::from_translation(config::ground_position(gate.0, gate.1) + Vec3::Y * 0.9)
+            .with_scale(Vec3::new(
+                config::GRID_SPACING,
+                config::LIGHTCYCLE_WALL_HEIGHT * 0.9,
+                config::GRID_SPACING,
+            )),
+        if snake.exit_open {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        },
+        Pickable::IGNORE,
+    ));
+}
+
+/// Spawns a platformer level: a backdrop, the platforms with neon lips, the
+/// exit door and the runner.
+fn spawn_platformer_level(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    language: SourceLanguage,
+    level: &PlatformerSim,
+) {
+    let _ = meshes;
+    let depth = config::PLATFORMER_DEPTH;
+    let lip = assets.disc_accent_materials[disc_language_index(language)].clone();
+
+    // A dark slab behind the level so the platforms read against something.
+    let span = level.length + 60.0;
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.platform_material.clone()),
+        Transform::from_translation(Vec3::new(level.length * 0.5, 8.0, -depth))
+            .with_scale(Vec3::new(span, 46.0, 1.0)),
+        Pickable::IGNORE,
+    ));
+
+    for platform in &level.platforms {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.platform_material.clone()),
+            Transform::from_translation(Vec3::new(
+                platform.x + platform.w * 0.5,
+                platform.y - platform.h * 0.5,
+                0.0,
+            ))
+            .with_scale(Vec3::new(platform.w, platform.h, depth)),
+            Pickable::IGNORE,
+        ));
+        // The lip marks the surface the runner lands on.
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(lip.clone()),
+            Transform::from_translation(Vec3::new(platform.x + platform.w * 0.5, platform.y, 0.0))
+                .with_scale(Vec3::new(platform.w, 0.14, depth + 0.2)),
+            Pickable::IGNORE,
+        ));
+    }
+
+    let door = level.exit_box();
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.exit_material.clone()),
+        Transform::from_translation(Vec3::new(door.x + door.w * 0.5, door.y - door.h * 0.5, 0.0))
+            .with_scale(Vec3::new(door.w, door.h, depth * 0.4)),
+        Pickable::IGNORE,
+    ));
+
+    commands.spawn((
+        LightcycleSceneRoot,
+        CharacterEntity,
+        Transform::from_translation(Vec3::new(level.runner.x, level.runner.y, 0.0)),
+        Visibility::default(),
+        Pickable::IGNORE,
+        children![(
+            WorldAssetRoot(assets.tron_scene.clone()),
+            Transform::from_rotation(Quat::from_rotation_y(config::TRON_MODEL_YAW))
+                .with_scale(Vec3::splat(config::TRON_MODEL_SCALE)),
+        )],
+    ));
+}
+
+/// Spawns a breaker court: the side and ceiling walls, the bricks, and the ball.
+///
+/// The bike itself is the paddle, so it is left to `update_cycle_transform`.
+fn spawn_breaker_court(commands: &mut Commands, assets: &LightcycleAssets, level: &BreakerSim) {
+    let (width, height) = level.court;
+    let thickness = 0.8;
+    let depth = config::PLATFORMER_DEPTH;
+    // Side walls and ceiling.
+    for (x, y, w, h) in [
+        (
+            -width * 0.5 - thickness * 0.5,
+            height * 0.5,
+            thickness,
+            height,
+        ),
+        (
+            width * 0.5 + thickness * 0.5,
+            height * 0.5,
+            thickness,
+            height,
+        ),
+        (
+            0.0,
+            height + thickness * 0.5,
+            width + thickness * 2.0,
+            thickness,
+        ),
+    ] {
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.court_material.clone()),
+            Transform::from_translation(Vec3::new(x, y, -depth * 0.5))
+                .with_scale(Vec3::new(w, h, depth)),
+            Pickable::IGNORE,
+        ));
+    }
+
+    for (index, brick) in level.bricks.iter().enumerate() {
+        let (bx, by, bw, bh) = level.brick_box(brick);
+        commands.spawn((
+            LightcycleSceneRoot,
+            BrickEntity { index },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.brick_material.clone()),
+            Transform::from_translation(Vec3::new(bx + bw * 0.5, by + bh * 0.5, 0.0))
+                .with_scale(Vec3::new(bw, bh, depth * 0.6)),
+            if brick.alive {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            },
+            Pickable::IGNORE,
+        ));
+    }
+
+    commands.spawn((
+        LightcycleSceneRoot,
+        BallEntity,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.ball_material.clone()),
+        Transform::from_translation(Vec3::new(level.ball.x, level.ball.y, 0.0))
+            .with_scale(Vec3::splat(config::BREAKER_BALL_RADIUS * 2.0)),
+        Pickable::IGNORE,
+    ));
+}
+
+/// Spawns a stealth room: floor, cover, the door, the character and the patrols
+/// with their vision cones.
+fn spawn_stealth_room(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
+    room: &StealthSim,
+) {
+    let _ = meshes;
+    let (half_w, half_h) = (
+        config::STEALTH_WIDTH as f32 * 0.5,
+        config::STEALTH_HEIGHT as f32 * 0.5,
+    );
+    let span = config::GRID_SPACING;
+    let width = half_w * 2.0 * span;
+    let height = half_h * 2.0 * span;
+
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.stealth_floor_material.clone()),
+        Transform::from_translation(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(
+            width + span * 2.0,
+            0.2,
+            height + span * 2.0,
+        )),
+        Pickable::IGNORE,
+    ));
+
+    for cell in &room.cover {
+        let position = config::ground_position(cell.0, cell.1);
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.stealth_wall_material.clone()),
+            Transform::from_translation(position + Vec3::Y * config::STEALTH_WALL_HEIGHT * 0.5)
+                .with_scale(Vec3::new(
+                    span * 0.96,
+                    config::STEALTH_WALL_HEIGHT,
+                    span * 0.96,
+                )),
+            Pickable::IGNORE,
+        ));
+    }
+
+    let exit = config::ground_position(room.exit.0, room.exit.1);
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.stealth_exit_material.clone()),
+        Transform::from_translation(exit + Vec3::Y * 1.4).with_scale(Vec3::new(
+            span * 0.9,
+            2.8,
+            span * 0.9,
+        )),
+        Pickable::IGNORE,
+    ));
+
+    let facing = |angle: f32| Quat::from_rotation_y(std::f32::consts::FRAC_PI_2 - angle);
+    let body = |assets: &LightcycleAssets, scale: f32| {
+        children![(
+            WorldAssetRoot(assets.tron_scene.clone()),
+            Transform::from_rotation(Quat::from_rotation_y(config::TRON_MODEL_YAW))
+                .with_scale(Vec3::splat(scale)),
+        )]
+    };
+
+    let start = config::ground_position(room.character.0, room.character.1);
+    commands.spawn((
+        LightcycleSceneRoot,
+        CharacterEntity,
+        Transform::from_translation(start).with_rotation(facing(room.heading.angle())),
+        Visibility::default(),
+        Pickable::IGNORE,
+        body(assets, config::TRON_MODEL_SCALE),
+    ));
+
+    for (index, guard) in room.guards.iter().enumerate() {
+        let cell = guard.cell();
+        let position = config::ground_position(cell.0, cell.1);
+        commands.spawn((
+            LightcycleSceneRoot,
+            GuardEntity { index },
+            Transform::from_translation(position)
+                .with_rotation(facing(guard.patrol.heading().angle())),
+            Visibility::default(),
+            Pickable::IGNORE,
+            body(
+                assets,
+                config::TRON_MODEL_SCALE * config::STEALTH_GUARD_SCALE,
+            ),
+        ));
+        commands.spawn((
+            LightcycleSceneRoot,
+            GuardConeEntity { index },
+            Mesh3d(assets.vision_cone.clone()),
+            MeshMaterial3d(assets.stealth_cone_material.clone()),
+            Transform::from_translation(position + Vec3::Y * 0.08)
+                .with_rotation(facing(guard.vision_angle()))
+                .with_scale(Vec3::splat(config::STEALTH_VISION_RANGE)),
+            Pickable::IGNORE,
+        ));
+    }
+}
+
+/// Unit-length flat cone with the stealth half-angle, opening along local `+Z`.
+fn vision_cone_mesh(half_angle: f32, segments: usize) -> Mesh {
+    let mut positions = vec![[0.0, 0.0, 0.0]];
+    for step in 0..=segments {
+        let t = step as f32 / segments as f32;
+        let angle = -half_angle + t * half_angle * 2.0;
+        positions.push([angle.sin(), 0.0, angle.cos()]);
+    }
+    let mut indices = Vec::new();
+    for step in 0..segments as u32 {
+        indices.extend_from_slice(&[0, step + 1, step + 2]);
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
 /// Merges same-sized cuboids at `cells` and spawns them as one batched entity.
 fn spawn_disc_cube_layer(
     commands: &mut Commands,
@@ -1225,7 +1732,7 @@ fn sync_disc_entities(
     let Some(run) = state.run.as_ref() else {
         return;
     };
-    let RunEnvironment::Source { disc, .. } = &run.environment else {
+    let Some(disc) = run.source_disc() else {
         return;
     };
 
@@ -1329,6 +1836,124 @@ fn sync_asteroid_entities(
                 *visibility = Visibility::Visible;
             }
             None => *visibility = Visibility::Hidden,
+        }
+    }
+}
+
+/// Hides a snake ring's power-ups once eaten, and its exit bar once unlocked.
+fn sync_snake_entities(
+    state: Res<LightcycleState>,
+    mut food: Query<(&SnakeFoodEntity, &mut Visibility), Without<SnakeGateLock>>,
+    mut lock: Query<&mut Visibility, (With<SnakeGateLock>, Without<SnakeFoodEntity>)>,
+) {
+    let Some(snake) = state.run.as_ref().and_then(|run| run.source_snake()) else {
+        return;
+    };
+
+    for (item, mut visibility) in &mut food {
+        *visibility = match snake.food.get(item.index) {
+            Some(food) if !food.eaten => Visibility::Visible,
+            _ => Visibility::Hidden,
+        };
+    }
+
+    if let Ok(mut visibility) = lock.single_mut() {
+        *visibility = if snake.exit_open {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+    }
+}
+
+/// Poses the on-foot character, whichever game it belongs to.
+fn sync_character_entities(
+    state: Res<LightcycleState>,
+    mut character: Query<&mut Transform, (With<CharacterEntity>, Without<CycleEntity>)>,
+) {
+    let Some(run) = state.run.as_ref() else {
+        return;
+    };
+    let pose = if let Some(level) = run.source_platformer() {
+        Some((
+            Vec3::new(level.runner.x, level.runner.y, 0.0),
+            if level.runner.facing >= 0.0 {
+                0.0
+            } else {
+                std::f32::consts::PI
+            },
+        ))
+    } else {
+        run.source_stealth().map(|room| {
+            (
+                config::ground_position(room.character.0, room.character.1),
+                heading_angle(room.heading),
+            )
+        })
+    };
+    let Some((translation, angle)) = pose else {
+        return;
+    };
+    for mut transform in &mut character {
+        transform.translation = translation;
+        transform.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2 - angle);
+    }
+}
+
+#[allow(clippy::type_complexity)]
+/// Keeps the breaker's ball and bricks glued to its sim.
+fn sync_breaker_entities(
+    state: Res<LightcycleState>,
+    mut ball: Query<&mut Transform, (With<BallEntity>, Without<BrickEntity>)>,
+    mut bricks: Query<
+        (&BrickEntity, &mut Visibility),
+        (Without<BallEntity>, Without<CharacterEntity>),
+    >,
+) {
+    let Some(level) = state.run.as_ref().and_then(|run| run.source_breaker()) else {
+        return;
+    };
+    for mut transform in &mut ball {
+        transform.translation = Vec3::new(level.ball.x, level.ball.y, 0.0);
+    }
+    for (brick, mut visibility) in &mut bricks {
+        *visibility = match level.bricks.get(brick.index) {
+            Some(brick) if brick.alive => Visibility::Visible,
+            _ => Visibility::Hidden,
+        };
+    }
+}
+
+#[allow(clippy::type_complexity)]
+/// Walks the patrols and swings their vision cones.
+fn sync_stealth_entities(
+    state: Res<LightcycleState>,
+    mut guards: Query<
+        (&GuardEntity, &mut Transform),
+        (Without<GuardConeEntity>, Without<CharacterEntity>),
+    >,
+    mut cones: Query<
+        (&GuardConeEntity, &mut Transform),
+        (Without<GuardEntity>, Without<CharacterEntity>),
+    >,
+) {
+    let Some(room) = state.run.as_ref().and_then(|run| run.source_stealth()) else {
+        return;
+    };
+    for (guard, mut transform) in &mut guards {
+        if let Some(guard) = room.guards.get(guard.index) {
+            let cell = guard.cell();
+            transform.translation = config::ground_position(cell.0, cell.1);
+            transform.rotation =
+                Quat::from_rotation_y(std::f32::consts::FRAC_PI_2 - guard.patrol.heading().angle());
+        }
+    }
+    for (cone, mut transform) in &mut cones {
+        if let Some(guard) = room.guards.get(cone.index) {
+            let cell = guard.cell();
+            transform.translation = config::ground_position(cell.0, cell.1) + Vec3::Y * 0.08;
+            transform.rotation =
+                Quat::from_rotation_y(std::f32::consts::FRAC_PI_2 - guard.vision_angle());
         }
     }
 }
@@ -2560,6 +3185,9 @@ fn read_lightcycle_input(
     let go_up = keys.just_pressed(KeyCode::KeyU) || keys.just_pressed(KeyCode::Minus);
     let throw = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
     let recall = keys.just_pressed(KeyCode::KeyQ);
+    // Held, not tapped: waiting in place during a stealth run lasts as long as
+    // the key is down.
+    let hold = keys.pressed(KeyCode::Space) || mouse.pressed(MouseButton::Left);
     // Steering is continuous: the asteroid field pivots while the key is held.
     let steer = i32::from(keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight))
         - i32::from(keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft));
@@ -2571,14 +3199,19 @@ fn read_lightcycle_input(
         return;
     };
 
-    let asteroids = run.source_game() == Some(SourceGame::Asteroids);
     // The field is only a turret fight while the rocks are live; after it is won
-    // or lost the bike is handed back and drives normally. Gated on the game
-    // kind as well, so a disc-wars ring keeps its turns and its disc.
+    // or lost the bike is handed back and drives normally.
     let field_active = run.asteroid_field_active();
 
-    // A parked cycle pivots instead of queuing grid turns.
-    if !field_active && run.sim.phase == RunPhase::Running && (left || right) {
+    // Which runs steer the shared bike grid this frame? Directories and
+    // documents always do, disc wars and snake always do, the field only once it
+    // has handed the bike back, and the off-grid games never.
+    let drives_grid = match run.source_game() {
+        Some(SourceGame::DiscWars | SourceGame::Snake) | None => true,
+        Some(SourceGame::Asteroids) => !field_active,
+        Some(SourceGame::Platformer | SourceGame::Breaker | SourceGame::Stealth) => false,
+    };
+    if drives_grid && run.sim.phase == RunPhase::Running && (left || right) {
         run.sim.queue_turn_input(left, right);
         effects.write(MusicSfx::Turn);
     }
@@ -2588,16 +3221,25 @@ fn read_lightcycle_input(
             // Pivot and shoot. `set_turn` persists for the fixed sub-steps that
             // follow this frame.
             let mut fired = false;
-            if let RunEnvironment::Source { asteroids, .. } = &mut run.environment {
-                asteroids.set_turn(steer as f32);
+            if let Some(field) = run.source_asteroids_mut() {
+                field.set_turn(steer as f32);
                 if throw {
-                    fired = asteroids.fire();
+                    fired = field.fire();
                 }
             }
             if fired {
                 effects.write(MusicSfx::Zap);
             }
-        } else if !asteroids {
+        } else if let Some(level) = run.source_platformer_mut() {
+            // Held to run, tapped to jump.
+            level.set_input(steer as f32, throw);
+        } else if let Some(level) = run.source_breaker_mut() {
+            // Held to slide the bike along the bottom, tapped to serve.
+            level.set_input(steer as f32, throw);
+        } else if let Some(room) = run.source_stealth_mut() {
+            // Tapped to turn, held to wait for the patrol to pass.
+            room.set_input(steer, hold);
+        } else if run.source_game() == Some(SourceGame::DiscWars) {
             // Disc wars: throw and recall. The cycle's movement is unchanged.
             let snapshot = PlayerSnapshot {
                 cell: run.sim.cell,
@@ -2607,7 +3249,9 @@ fn read_lightcycle_input(
             if throw {
                 let mut events = DiscEvents::default();
                 // Aimed at the opponent, so riding and aiming stay separate.
-                if let RunEnvironment::Source { disc, .. } = &mut run.environment {
+                if let RunEnvironment::Source { sim, .. } = &mut run.environment
+                    && let Some(disc) = sim.as_disc_mut()
+                {
                     disc.throw_player(snapshot, &run.arena, &mut events);
                 }
                 if events.player_threw {
@@ -2649,7 +3293,7 @@ fn read_lightcycle_input(
 }
 
 fn restart_run(run: &mut ActiveRun) {
-    match &run.environment {
+    match &mut run.environment {
         RunEnvironment::Directory { cells, .. } => {
             let cells = cells.clone();
             run.sim = spawn_sim(&run.arena, &cells);
@@ -2657,27 +3301,29 @@ fn restart_run(run: &mut ActiveRun) {
         RunEnvironment::Document { .. } => {
             run.sim = spawn_sim(&run.arena, &HashMap::new());
         }
-        RunEnvironment::Source { layout, .. } => {
+        RunEnvironment::Source { layout, sim, .. } => {
             let spawn = layout.player_spawn;
             let heading = layout.player_spawn_heading;
-            let fresh_disc = DiscSim::new(layout);
-            let fresh_field = AsteroidsSim::new(
-                layout.seed,
-                (
-                    layout.center.0 as f32 * config::GRID_SPACING,
-                    layout.center.1 as f32 * config::GRID_SPACING,
-                ),
-                layout.radius as f32 * config::GRID_SPACING,
-            );
-            let mut fresh_field = fresh_field;
-            fresh_field.angle = heading_facing(heading);
+            let seed = layout.seed;
+            let center = ring_center_world(layout);
+            let radius = ring_radius_world(layout);
+            let food_cells = ring_food_cells(&run.arena);
             run.sim = LightcycleSim::start(spawn, heading);
-            if let RunEnvironment::Source {
-                disc, asteroids, ..
-            } = &mut run.environment
-            {
-                *disc = fresh_disc;
-                **asteroids = fresh_field;
+            match sim {
+                SourceSim::DiscWars(disc) => *disc = DiscSim::new(layout),
+                SourceSim::Asteroids(field) => {
+                    let mut fresh = AsteroidsSim::new(seed, center, radius);
+                    fresh.angle = heading_facing(heading);
+                    **field = fresh;
+                }
+                SourceSim::Snake(snake) => {
+                    *snake = SnakeSim::new(seed, spawn, &food_cells, config::SNAKE_FOOD_TARGET);
+                }
+                // Each sim re-rolls itself from its own stored seed, so a
+                // restart lays out exactly the same level.
+                SourceSim::Platformer(level) => level.restart(),
+                SourceSim::Breaker(level) => level.restart(),
+                SourceSim::Stealth(room) => room.restart(),
             }
         }
     }
@@ -2789,23 +3435,18 @@ fn step_lightcycle(
                         )
                     })
                 }
-                RunEnvironment::Source {
-                    game,
-                    disc,
-                    asteroids,
-                    ..
-                } => match game {
+                RunEnvironment::Source { sim: source, .. } => match source {
                     // Parked while the rocks are live: nothing to advance, and
                     // the field itself is stepped after the loop.
-                    SourceGame::Asteroids if asteroids.is_active() => StepOutcome::Moved,
+                    SourceSim::Asteroids(field) if field.is_active() => StepOutcome::Moved,
                     // Once the field is decided the cycle is handed back, so it
                     // drives again and can ride out through the gate.
-                    SourceGame::Asteroids => {
-                        sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, sim| {
+                    SourceSim::Asteroids(_) => {
+                        sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, state| {
                             classify_next_content(
                                 next,
                                 arena,
-                                sim,
+                                state,
                                 &HashMap::new(),
                                 |_| false,
                                 |_| false,
@@ -2813,12 +3454,40 @@ fn step_lightcycle(
                             )
                         })
                     }
-                    SourceGame::DiscWars => {
+                    // Snake drives the ordinary grid, but the exit is a solid
+                    // wall until enough power-ups have been eaten. The tail is
+                    // capped after every step so it stays finite.
+                    SourceSim::Snake(snake) => {
+                        let locked = !snake.exit_open;
+                        let outcome =
+                            sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, state| {
+                                if locked && is_ring_gate(arena, next) {
+                                    return CellContent::Wall;
+                                }
+                                classify_next_content(
+                                    next,
+                                    arena,
+                                    state,
+                                    &HashMap::new(),
+                                    |_| false,
+                                    |_| false,
+                                    |_| false,
+                                )
+                            });
+                        snake.trim_tail(sim);
+                        outcome
+                    }
+                    // The off-grid games drive their own sims, so the shared
+                    // grid has nothing to advance.
+                    SourceSim::Platformer(_) | SourceSim::Breaker(_) | SourceSim::Stealth(_) => {
+                        StepOutcome::Moved
+                    }
+                    SourceSim::DiscWars(disc) => {
                         // The opponent's body and its live disc are lethal cells
                         // in the same grid model the cycle already uses.
                         let opponent = disc.opponent_cell();
                         let opponent_disc = disc.opponent_disc_cell();
-                        sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, sim| {
+                        sim.advance(step * config::LIGHTCYCLE_CELLS_PER_SEC, |next, state| {
                             if Some(next) == opponent {
                                 return CellContent::Opponent;
                             }
@@ -2828,7 +3497,7 @@ fn step_lightcycle(
                             classify_next_content(
                                 next,
                                 arena,
-                                sim,
+                                state,
                                 &HashMap::new(),
                                 |_| false,
                                 |_| false,
@@ -2858,6 +3527,12 @@ fn step_lightcycle(
                     CrashReason::Opponent => "the recognizer".to_string(),
                     CrashReason::Disc => "a disc".to_string(),
                     CrashReason::Hazard => "a hazard tile".to_string(),
+                    // Snake's gate is solid until the exit opens.
+                    CrashReason::Wall
+                        if run.source_snake().is_some() && is_ring_gate(&run.arena, crash_cell) =>
+                    {
+                        "the locked exit".to_string()
+                    }
                     CrashReason::Wall if run.arena.street_walls.contains(&crash_cell) => {
                         if run.is_document() {
                             "paragraph".to_string()
@@ -2937,10 +3612,27 @@ fn step_lightcycle(
         }
 
         if source_run {
-            if run.source_game() == Some(SourceGame::Asteroids) {
-                step_asteroid_field(&mut run, step, &mut effects);
-            } else {
-                step_disc_fight(&mut run, step, &mut effects);
+            let cleared = match run.source_game() {
+                Some(SourceGame::Asteroids) => {
+                    step_asteroid_field(&mut run, step, &mut effects);
+                    false
+                }
+                Some(SourceGame::Snake) => {
+                    step_snake(&mut run, &mut effects);
+                    false
+                }
+                Some(SourceGame::Platformer) => step_platformer(&mut run, step, &mut effects),
+                Some(SourceGame::Breaker) => step_breaker(&mut run, step, &mut effects),
+                Some(SourceGame::Stealth) => step_stealth(&mut run, step, &mut effects),
+                Some(SourceGame::DiscWars) => {
+                    step_disc_fight(&mut run, step, &mut effects);
+                    false
+                }
+                None => false,
+            };
+            // Clearing a level is this run's version of riding out the gate.
+            if cleared {
+                state.restore_directory = true;
             }
         }
 
@@ -2962,10 +3654,10 @@ fn step_lightcycle(
 /// Steps the asteroid field and routes its feedback into sound and labels.
 fn step_asteroid_field(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) {
     let events = {
-        let RunEnvironment::Source { asteroids, .. } = &mut run.environment else {
+        let Some(field) = run.source_asteroids_mut() else {
             return;
         };
-        asteroids.update(dt)
+        field.update(dt)
     };
 
     for _ in 0..events.destroyed {
@@ -2980,10 +3672,9 @@ fn step_asteroid_field(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter
         effects.write(MusicSfx::Victory);
     }
 
-    let lost = matches!(
-        &run.environment,
-        RunEnvironment::Source { asteroids, .. } if asteroids.phase == AsteroidsPhase::Lost
-    );
+    let lost = run
+        .source_asteroids()
+        .is_some_and(|field| field.phase == AsteroidsPhase::Lost);
     if lost {
         run.crash_label = Some("the rock field".to_string());
         run.entering_label = None;
@@ -2992,15 +3683,124 @@ fn step_asteroid_field(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter
     if events.ended {
         // Hand the wheel back on the frame the field is decided: the bike keeps
         // the facing the player was holding and can drive to the gate to leave.
-        let facing = {
-            let RunEnvironment::Source { asteroids, .. } = &mut run.environment else {
-                return;
-            };
-            asteroids.set_turn(0.0);
-            nearest_heading(asteroids.angle)
-        };
-        run.sim.heading = facing;
+        let facing = run.source_asteroids_mut().map(|field| {
+            field.set_turn(0.0);
+            nearest_heading(field.angle)
+        });
+        if let Some(facing) = facing {
+            run.sim.heading = facing;
+        }
     }
+}
+
+/// Steps a snake run: collects power-ups, opens the exit and cues the death.
+fn step_snake(run: &mut ActiveRun, effects: &mut MessageWriter<MusicSfx>) {
+    let cell = run.sim.cell;
+    let Some(events) = run.source_snake_mut().map(|snake| snake.eat(cell)) else {
+        return;
+    };
+    if events.ate {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.opened_exit {
+        effects.write(MusicSfx::Beam);
+    }
+
+    // The base grid crash ends the run; the rider keeps their crash FX, and the
+    // snake only adds the sound once.
+    if run.sim.phase == RunPhase::Crashed
+        && run
+            .source_snake_mut()
+            .is_some_and(|snake| snake.note_crash())
+    {
+        effects.write(MusicSfx::Crash);
+    }
+}
+
+/// Steps a platformer level. Returns `true` on the frame the exit is reached,
+/// which hands the run back to the directory it came from.
+fn step_platformer(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, fell) = {
+        let Some(level) = run.source_platformer_mut() else {
+            return false;
+        };
+        let events = level.update(dt);
+        (events, level.phase == PlatformerPhase::Lost)
+    };
+    if events.jumped {
+        effects.write(MusicSfx::Zap);
+    }
+    if events.won {
+        effects.write(MusicSfx::Victory);
+    }
+    // A fall ends the run through the shared crash path, so the burst, the
+    // shake, the label and `R` all behave like any other crash.
+    if fell {
+        crash_source(run, "the void under the level", effects);
+    }
+    events.won
+}
+
+/// Steps a breaker court. Returns `true` when the wall is cleared, which hands
+/// the run back to the directory.
+fn step_breaker(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, missed) = {
+        let Some(level) = run.source_breaker_mut() else {
+            return false;
+        };
+        let events = level.update(dt);
+        (events, level.phase == BreakerPhase::Missed)
+    };
+    if events.launched {
+        effects.write(MusicSfx::Beam);
+    }
+    if events.bounced_off_paddle {
+        effects.write(MusicSfx::Turn);
+    }
+    for _ in 0..events.broke_bricks {
+        effects.write(MusicSfx::Portal);
+    }
+    if events.cleared {
+        effects.write(MusicSfx::Victory);
+    }
+    // The wall below the bike is the one that ends it.
+    if missed {
+        crash_source(run, "the ball past the bike", effects);
+    }
+    events.cleared
+}
+
+/// Steps a stealth run. Returns `true` when the character reaches the door.
+fn step_stealth(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<MusicSfx>) -> bool {
+    let (events, caught) = {
+        let Some(room) = run.source_stealth_mut() else {
+            return false;
+        };
+        let events = room.update(dt);
+        (events, room.phase == StealthPhase::Caught)
+    };
+    if events.spotted {
+        effects.write(MusicSfx::Zap);
+    }
+    if events.escaped {
+        effects.write(MusicSfx::Victory);
+    }
+    if caught {
+        crash_source(run, "a patrol", effects);
+    }
+    events.escaped
+}
+
+/// Ends a source run through the shared crash path, so the burst, the shake, the
+/// label and `R` behave the same as a grid crash.
+fn crash_source(run: &mut ActiveRun, label: &str, effects: &mut MessageWriter<MusicSfx>) {
+    if run.sim.phase != RunPhase::Running {
+        return;
+    }
+    effects.write(MusicSfx::Crash);
+    run.sim.phase = RunPhase::Crashed;
+    run.crash_label = Some(label.to_string());
+    run.entering_label = None;
 }
 
 /// Steps one ring's fight and folds its events back into the shared run.
@@ -3012,7 +3812,10 @@ fn step_disc_fight(run: &mut ActiveRun, dt: f32, effects: &mut MessageWriter<Mus
     };
     let events = {
         let arena = &run.arena;
-        let RunEnvironment::Source { disc, layout, .. } = &mut run.environment else {
+        let RunEnvironment::Source { sim, layout, .. } = &mut run.environment else {
+            return;
+        };
+        let Some(disc) = sim.as_disc_mut() else {
             return;
         };
         disc.update(dt, snapshot, arena, layout)
@@ -3795,14 +4598,31 @@ fn arc_cell_pose(
 
 fn update_cycle_transform(
     state: Res<LightcycleState>,
-    mut cycle: Query<&mut Transform, With<CycleEntity>>,
+    mut cycle: Query<(&mut Transform, &mut Visibility), With<CycleEntity>>,
 ) {
-    let Ok(mut transform) = cycle.single_mut() else {
+    let Ok((mut transform, mut visibility)) = cycle.single_mut() else {
         return;
     };
     let Some(run) = state.run.as_ref() else {
         return;
     };
+
+    // The on-foot games park the bike out of sight and pose their own character.
+    if run.source_platformer().is_some() || run.source_stealth().is_some() {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    *visibility = Visibility::Visible;
+
+    // In the breaker the bike is the paddle: it slides along the bottom of the
+    // court and rebounds the ball.
+    if let Some(level) = run.source_breaker() {
+        transform.translation = Vec3::new(level.paddle_x, config::BREAKER_PADDLE_Y, 0.0);
+        transform.rotation = Quat::IDENTITY;
+        transform.scale = Vec3::splat(config::BREAKER_PADDLE_SCALE);
+        return;
+    }
+    transform.scale = Vec3::ONE;
 
     let pose = cycle_cell_pose(&run.sim);
     transform.translation = pose_world_position(&pose);
@@ -3869,12 +4689,12 @@ fn chase_rig_radius() -> f32 {
 /// Facing, in radians, for a grid heading, matching the field's aim convention
 /// (`0` is `+X`, growing toward `+Z`).
 fn heading_facing(heading: Heading) -> f32 {
-    match heading {
-        Heading::PosX => 0.0,
-        Heading::PosZ => std::f32::consts::FRAC_PI_2,
-        Heading::NegX => std::f32::consts::PI,
-        Heading::NegZ => -std::f32::consts::FRAC_PI_2,
-    }
+    heading_angle(heading)
+}
+
+/// Facing of a grid heading, in radians.
+fn heading_angle(heading: Heading) -> f32 {
+    heading.angle()
 }
 
 /// The grid heading closest to an aim angle. Used when the field ends so the
@@ -3920,6 +4740,44 @@ fn update_chase_camera(
     // The flight owns the camera until it lands on this rig; easing the follow
     // direction or taking a look drag now would move the pose it is aiming for.
     if state.run.is_none() || transition.is_active() {
+        return;
+    }
+
+    // The platformer is played from the side, riding along with the runner.
+    if let Some(level) = state.run.as_ref().and_then(|run| run.source_platformer()) {
+        let focus = Vec3::new(
+            level.runner.x + config::PLATFORMER_CAMERA_AHEAD,
+            (level.runner.y + config::PLATFORMER_CAMERA_HEIGHT).max(2.0),
+            0.0,
+        );
+        let target = Vec3::new(focus.x, focus.y, config::PLATFORMER_CAMERA_BACK);
+        let blend = 1.0 - (-config::PLATFORMER_CAMERA_LERP * time.delta_secs()).exp();
+        camera.translation = camera.translation.lerp(target, blend);
+        camera.look_at(focus, Vec3::Y);
+        return;
+    }
+
+    // The breaker is played head-on: the whole court stays in frame while the
+    // bike slides along the bottom.
+    if let Some(level) = state.run.as_ref().and_then(|run| run.source_breaker()) {
+        let centre = Vec3::new(0.0, level.court.1 * 0.5, 0.0);
+        camera.translation = Vec3::new(0.0, centre.y, config::BREAKER_CAMERA_BACK);
+        camera.look_at(centre, Vec3::Y);
+        return;
+    }
+
+    // The stealth run is played from above, like a stakeout.
+    if state
+        .run
+        .as_ref()
+        .and_then(|run| run.source_stealth())
+        .is_some()
+    {
+        let centre = Vec3::ZERO;
+        let radius = config::STEALTH_HEIGHT as f32 * 0.5 * config::GRID_SPACING;
+        let height = radius * config::STEALTH_CAMERA_FIT + 4.0;
+        camera.translation = centre + Vec3::new(0.0, height, height * 0.5);
+        camera.look_at(centre, Vec3::Y);
         return;
     }
 
@@ -4735,32 +5593,84 @@ mod tests {
         );
     }
 
-    /// Every source run carries an asteroid sim, so the field-only behaviour
-    /// (parked bike, overhead camera, pivot input) must be gated on the game
-    /// kind. This is the regression test for the overhead camera leaking into
-    /// disc wars.
+    /// Each language must build only its own sim, so the field-only behaviour
+    /// (parked bike, overhead camera, pivot input) can never leak into another
+    /// ring. This is the regression test for the overhead camera that once
+    /// appeared in disc wars.
     #[test]
-    fn a_disc_wars_ring_is_never_an_asteroid_field() {
-        let field = super::build_source_run(
-            std::path::Path::new("/tmp/field.py"),
-            crate::disc::SourceLanguage::Python,
-            b"print('hi')\n",
-        );
+    fn each_source_language_builds_only_its_own_game() {
+        use crate::disc::SourceLanguage;
+        let run = |name: &str, language: SourceLanguage, body: &[u8]| {
+            super::build_source_run(std::path::Path::new(name), language, body)
+        };
+
+        let field = run("/tmp/field.c", SourceLanguage::C, b"int main(void) {}\n");
+        assert!(field.source_asteroids().is_some());
+        assert!(field.source_disc().is_none() && field.source_snake().is_none());
         assert!(field.asteroid_field_active());
         assert!(
             super::field_camera_focus(&field).is_some(),
             "the field plays from above"
         );
 
-        let ring = super::build_source_run(
-            std::path::Path::new("/tmp/ring.rs"),
-            crate::disc::SourceLanguage::Rust,
-            b"fn main() {}\n",
-        );
+        let ring = run("/tmp/ring.rs", SourceLanguage::Rust, b"fn main() {}\n");
+        assert!(ring.source_disc().is_some());
+        assert!(ring.source_asteroids().is_none() && ring.source_snake().is_none());
         assert!(!ring.asteroid_field_active());
         assert!(
             super::field_camera_focus(&ring).is_none(),
             "a disc-wars ring must keep the chase camera"
+        );
+
+        let snake = run("/tmp/snake.py", SourceLanguage::Python, b"print('hi')\n");
+        assert!(snake.source_snake().is_some());
+        assert!(snake.source_disc().is_none() && snake.source_asteroids().is_none());
+        assert!(!snake.asteroid_field_active());
+        assert!(
+            super::field_camera_focus(&snake).is_none(),
+            "snake drives on the grid, so it keeps the chase camera"
+        );
+        let snake = snake.source_snake().expect("snake state");
+        assert_eq!(snake.food.len(), config::SNAKE_FOOD_TARGET);
+        assert!(!snake.exit_open, "the exit starts locked");
+
+        // The three games that build their own space off the grid.
+        let level = run(
+            "/tmp/run.slint",
+            SourceLanguage::Slint,
+            b"export component App {}\n",
+        );
+        assert!(level.source_platformer().is_some());
+        assert!(!level.asteroid_field_active());
+        assert!(
+            level.source_platformer().expect("level").platforms.len() > 2,
+            "a level should have platforms to run"
+        );
+
+        let court = run("/tmp/init.lua", SourceLanguage::Lua, b"local x = 1\n");
+        assert!(court.source_breaker().is_some());
+        assert!(court.source_breaker().expect("court").remaining() > 0);
+
+        let room = run("/tmp/build.sh", SourceLanguage::Shell, b"set -e\n");
+        assert!(room.source_stealth().is_some());
+        assert!(!room.source_stealth().expect("room").guards.is_empty());
+    }
+
+    #[test]
+    fn a_locked_snake_gate_is_a_wall_until_it_opens() {
+        let run = super::build_source_run(
+            std::path::Path::new("/tmp/snake.py"),
+            crate::disc::SourceLanguage::Python,
+            b"print('hi')\n",
+        );
+        let portal = run.arena.parent_portal.as_ref().expect("a close gate");
+        assert!(
+            super::is_ring_gate(&run.arena, portal.to),
+            "the portal cell is the gate"
+        );
+        assert!(
+            !run.source_snake().expect("snake state").exit_open,
+            "so the gate is solid at the start of the run"
         );
     }
 }

@@ -1,9 +1,13 @@
 pub mod logic;
 
 use crate::asteroids::AsteroidsSim;
+use crate::breaker::BreakerSim;
 use crate::disc::{DiscLayout, DiscSim, SourceGame, SourceLanguage};
 use crate::document::DocumentLayout;
 use crate::filesystem::FileNode;
+use crate::platformer::PlatformerSim;
+use crate::snake::SnakeSim;
+use crate::stealth::StealthSim;
 use bevy::prelude::Resource;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,6 +25,119 @@ pub struct ActiveRun {
     pub entering_label: Option<String>,
 }
 
+/// The sim a source ring is actually playing. Carrying exactly one keeps the
+/// game kind and its state from drifting apart: a disc-wars ring has no
+/// asteroid field to accidentally read (and vice versa).
+#[derive(Debug, Clone)]
+pub enum SourceSim {
+    DiscWars(DiscSim),
+    /// Boxed: the field holds two entity vectors.
+    Asteroids(Box<AsteroidsSim>),
+    Snake(SnakeSim),
+    /// Boxed: the level holds every platform in the run.
+    Platformer(Box<PlatformerSim>),
+    Breaker(Box<BreakerSim>),
+    Stealth(Box<StealthSim>),
+}
+
+impl SourceSim {
+    /// Which game this state belongs to.
+    pub fn game(&self) -> SourceGame {
+        match self {
+            Self::DiscWars(_) => SourceGame::DiscWars,
+            Self::Asteroids(_) => SourceGame::Asteroids,
+            Self::Snake(_) => SourceGame::Snake,
+            Self::Platformer(_) => SourceGame::Platformer,
+            Self::Breaker(_) => SourceGame::Breaker,
+            Self::Stealth(_) => SourceGame::Stealth,
+        }
+    }
+
+    pub fn as_disc(&self) -> Option<&DiscSim> {
+        match self {
+            Self::DiscWars(disc) => Some(disc),
+            _ => None,
+        }
+    }
+
+    pub fn as_disc_mut(&mut self) -> Option<&mut DiscSim> {
+        match self {
+            Self::DiscWars(disc) => Some(disc),
+            _ => None,
+        }
+    }
+
+    pub fn as_asteroids(&self) -> Option<&AsteroidsSim> {
+        match self {
+            Self::Asteroids(field) => Some(field),
+            _ => None,
+        }
+    }
+
+    pub fn as_asteroids_mut(&mut self) -> Option<&mut AsteroidsSim> {
+        match self {
+            Self::Asteroids(field) => Some(field),
+            _ => None,
+        }
+    }
+
+    pub fn as_snake(&self) -> Option<&SnakeSim> {
+        match self {
+            Self::Snake(snake) => Some(snake),
+            _ => None,
+        }
+    }
+
+    pub fn as_snake_mut(&mut self) -> Option<&mut SnakeSim> {
+        match self {
+            Self::Snake(snake) => Some(snake),
+            _ => None,
+        }
+    }
+
+    pub fn as_platformer(&self) -> Option<&PlatformerSim> {
+        match self {
+            Self::Platformer(level) => Some(level),
+            _ => None,
+        }
+    }
+
+    pub fn as_platformer_mut(&mut self) -> Option<&mut PlatformerSim> {
+        match self {
+            Self::Platformer(level) => Some(level),
+            _ => None,
+        }
+    }
+
+    pub fn as_breaker(&self) -> Option<&BreakerSim> {
+        match self {
+            Self::Breaker(level) => Some(level),
+            _ => None,
+        }
+    }
+
+    pub fn as_breaker_mut(&mut self) -> Option<&mut BreakerSim> {
+        match self {
+            Self::Breaker(level) => Some(level),
+            _ => None,
+        }
+    }
+
+    pub fn as_stealth(&self) -> Option<&StealthSim> {
+        match self {
+            Self::Stealth(room) => Some(room),
+            _ => None,
+        }
+    }
+
+    pub fn as_stealth_mut(&mut self) -> Option<&mut StealthSim> {
+        match self {
+            Self::Stealth(room) => Some(room),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum RunEnvironment {
     Directory {
@@ -34,22 +151,19 @@ pub enum RunEnvironment {
         focused_block: Option<usize>,
     },
     /// A ring generated from a source file. Which game is played inside it is
-    /// chosen by the language ([`SourceGame`]); only one of `disc`/`asteroids`
-    /// is ever stepped, but both are cheap to carry so the shared ring geometry,
-    /// close gate and restore path stay identical.
+    /// chosen by the language; the ring geometry, close gate and restore path
+    /// are shared by all of them.
     ///
-    /// `disc` is the disc-wars fight; the player's own movement stays in
-    /// [`ActiveRun::sim`]. In the asteroid field the cycle is parked and only
-    /// pivots, so `sim` never advances.
+    /// The player's own movement always stays in [`ActiveRun::sim`]. Disc wars
+    /// and snake drive it normally; the asteroid field parks it and only pivots,
+    /// stepping [`SourceSim::Asteroids`] instead.
     Source {
         path: PathBuf,
         name: String,
         language: SourceLanguage,
-        game: SourceGame,
         /// Boxed: a ring's layout is much larger than the other variants.
         layout: Box<DiscLayout>,
-        disc: DiscSim,
-        asteroids: Box<AsteroidsSim>,
+        sim: SourceSim,
         focused_block: Option<usize>,
     },
 }
@@ -77,37 +191,102 @@ impl ActiveRun {
         matches!(self.environment, RunEnvironment::Source { .. })
     }
 
-    pub fn source_disc_mut(&mut self) -> Option<&mut DiscSim> {
-        match &mut self.environment {
-            RunEnvironment::Source { disc, .. } => Some(disc),
+    /// Which mini-game this run is, for source runs only.
+    pub fn source_game(&self) -> Option<SourceGame> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => Some(sim.game()),
             _ => None,
         }
     }
 
-    /// Which mini-game this run is, for source runs only.
-    pub fn source_game(&self) -> Option<SourceGame> {
+    pub fn source_disc_mut(&mut self) -> Option<&mut DiscSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_disc_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_disc(&self) -> Option<&DiscSim> {
         match &self.environment {
-            RunEnvironment::Source { game, .. } => Some(*game),
+            RunEnvironment::Source { sim, .. } => sim.as_disc(),
             _ => None,
         }
     }
 
     pub fn source_asteroids(&self) -> Option<&AsteroidsSim> {
         match &self.environment {
-            RunEnvironment::Source { asteroids, .. } => Some(asteroids),
+            RunEnvironment::Source { sim, .. } => sim.as_asteroids(),
+            _ => None,
+        }
+    }
+
+    pub fn source_asteroids_mut(&mut self) -> Option<&mut AsteroidsSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_asteroids_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_snake(&self) -> Option<&SnakeSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_snake(),
+            _ => None,
+        }
+    }
+
+    pub fn source_snake_mut(&mut self) -> Option<&mut SnakeSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_snake_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_platformer(&self) -> Option<&PlatformerSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_platformer(),
+            _ => None,
+        }
+    }
+
+    pub fn source_platformer_mut(&mut self) -> Option<&mut PlatformerSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_platformer_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_breaker(&self) -> Option<&BreakerSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_breaker(),
+            _ => None,
+        }
+    }
+
+    pub fn source_breaker_mut(&mut self) -> Option<&mut BreakerSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_breaker_mut(),
+            _ => None,
+        }
+    }
+
+    pub fn source_stealth(&self) -> Option<&StealthSim> {
+        match &self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_stealth(),
+            _ => None,
+        }
+    }
+
+    pub fn source_stealth_mut(&mut self) -> Option<&mut StealthSim> {
+        match &mut self.environment {
+            RunEnvironment::Source { sim, .. } => sim.as_stealth_mut(),
             _ => None,
         }
     }
 
     /// True only while an asteroid field is actually being played.
-    ///
-    /// Every source run carries an `AsteroidsSim` (a fresh one is always
-    /// `Flying`), so anything that parks the cycle, aims the camera from above
-    /// or pivots the bike must gate on this rather than on `source_asteroids`
-    /// alone, or it leaks into disc-wars rings.
     pub fn asteroid_field_active(&self) -> bool {
-        self.source_game() == Some(SourceGame::Asteroids)
-            && self.source_asteroids().is_some_and(|sim| sim.is_active())
+        self.source_asteroids()
+            .is_some_and(|field| field.is_active())
     }
 }
 

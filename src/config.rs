@@ -404,11 +404,92 @@ pub const ASTEROIDS_ROCK_COLOR: Color = Color::srgb(0.44, 0.5, 0.6);
 pub const ASTEROIDS_ROCK_CORE_COLOR: Color = Color::srgb(1.0, 0.66, 0.26);
 pub const ASTEROIDS_BEAM_COLOR: Color = Color::srgb(0.6, 1.0, 1.0);
 
+// --- Snake (Python source files) -------------------------------------------
+//
+// The base lightcycle game with a finite tail, power-ups that lengthen it, and
+// an exit that only opens once enough are collected. See `crate::snake`.
+
+/// Ring radius, in cells, for a snake run. Tighter than a disc ring so the
+/// growing tail stays a threat.
+pub const SNAKE_RADIUS_CELLS: i32 = 10;
+/// Power-ups to collect before the exit opens.
+pub const SNAKE_FOOD_TARGET: usize = 6;
+/// Tail length at the start, in cells.
+pub const SNAKE_TAIL_START: usize = 8;
+/// Cells of tail gained per power-up.
+pub const SNAKE_TAIL_GROWTH: usize = 4;
+/// Preferred clear space between a power-up and the rider's spawn.
+pub const SNAKE_MIN_FOOD_DISTANCE: i32 = 4;
+/// Rendered power-up size.
+pub const SNAKE_FOOD_SIZE: f32 = 0.55;
+
+pub const SNAKE_FOOD_COLOR: Color = Color::srgb(0.45, 1.0, 0.35);
+pub const SNAKE_GATE_COLOR: Color = Color::srgb(1.0, 0.22, 0.25);
+
+// --- Platformer (Slint source files) ---------------------------------------
+//
+// A side-scrolling run on the X/Y plane, in metres. See `crate::platformer`.
+
+/// The Tron runner. CC-BY-4.0: see the credits in the README.
+pub const TRON_MODEL_ASSET: &str = "models/tron_character/scene.gltf";
+/// The mesh is authored in centimetres: foot to head is this many glTF units.
+/// Read off the POSITION accessor bounds in `scene.gltf`.
+pub const TRON_MODEL_HEIGHT_UNITS: f32 = 929.4;
+/// Scaled so the runner stands exactly as tall as its collision box.
+pub const TRON_MODEL_SCALE: f32 = PLATFORMER_RUNNER_HEIGHT / TRON_MODEL_HEIGHT_UNITS;
+/// The model faces along its thin axis; flip this a half turn if the runner
+/// ends up looking backwards.
+pub const TRON_MODEL_YAW: f32 = std::f32::consts::PI;
+
+pub const PLATFORMER_RUNNER_WIDTH: f32 = 0.8;
+pub const PLATFORMER_RUNNER_HEIGHT: f32 = 1.7;
+pub const PLATFORMER_WALK_SPEED: f32 = 7.0;
+pub const PLATFORMER_WALK_ACCEL: f32 = 44.0;
+pub const PLATFORMER_FRICTION: f32 = 40.0;
+pub const PLATFORMER_JUMP_SPEED: f32 = 9.5;
+pub const PLATFORMER_GRAVITY: f32 = 22.0;
+/// Jump envelope: ~2.0 m of rise and ~6.0 m of reach at full speed, so these
+/// stay comfortably clearable.
+pub const PLATFORMER_MIN_GAP: f32 = 1.5;
+pub const PLATFORMER_MAX_GAP: f32 = 4.0;
+pub const PLATFORMER_MAX_STEP: f32 = 1.2;
+pub const PLATFORMER_HEIGHT_MAX: f32 = 6.0;
+pub const PLATFORMER_MIN_WIDTH: f32 = 2.5;
+pub const PLATFORMER_MAX_WIDTH: f32 = 6.0;
+pub const PLATFORMER_START_PAD: f32 = 7.0;
+pub const PLATFORMER_GOAL_WIDTH: f32 = 8.0;
+pub const PLATFORMER_PLATFORM_THICKNESS: f32 = 0.8;
+/// A vertical overlap shallower than this is a landing, not a wall.
+pub const PLATFORMER_STEP_TOLERANCE: f32 = 0.45;
+pub const PLATFORMER_KILL_DEPTH: f32 = 7.0;
+pub const PLATFORMER_LENGTH_MIN: f32 = 60.0;
+pub const PLATFORMER_LENGTH_MAX: f32 = 240.0;
+pub const PLATFORMER_EXIT_WIDTH: f32 = 2.0;
+pub const PLATFORMER_EXIT_HEIGHT: f32 = 3.0;
+/// Metres of level per line of source, so a longer file is a longer level.
+pub const PLATFORMER_METRES_PER_LINE: f32 = 1.6;
+pub const PLATFORMER_CAMERA_BACK: f32 = 30.0;
+pub const PLATFORMER_CAMERA_HEIGHT: f32 = 4.0;
+pub const PLATFORMER_CAMERA_AHEAD: f32 = 8.0;
+pub const PLATFORMER_CAMERA_LERP: f32 = 5.0;
+
+/// Half-extent of the metadata-only arena the off-grid games carry, in cells.
+pub const PLATFORMER_HALF_EXTENT: i32 = 16;
+
+/// How thick the platforms and backdrop are in Z, so the side view has body.
+pub const PLATFORMER_DEPTH: f32 = 9.0;
+
+pub const PLATFORMER_PLATFORM_COLOR: Color = Color::srgb(0.15, 0.2, 0.32);
+pub const PLATFORMER_EXIT_COLOR: Color = Color::srgb(0.7, 0.95, 1.0);
+
 /// One ring identity per source language, mirroring the plan's table.
 pub const DISC_RUST_ACCENT: Color = Color::srgb(0.0, 0.9, 1.0);
 pub const DISC_C_ACCENT: Color = Color::srgb(1.0, 0.56, 0.07);
 pub const DISC_CPP_ACCENT: Color = Color::srgb(1.0, 0.03, 0.72);
 pub const DISC_PYTHON_ACCENT: Color = Color::srgb(0.2, 0.85, 0.25);
+pub const DISC_SLINT_ACCENT: Color = Color::srgb(0.55, 0.45, 1.0);
+pub const DISC_LUA_ACCENT: Color = Color::srgb(0.15, 0.35, 0.95);
+pub const DISC_SHELL_ACCENT: Color = Color::srgb(0.65, 0.75, 0.2);
 
 /// Per-language arpeggiator tint while a ring is open: Rust arpeggiates harder,
 /// Python pumps slower. Multipliers on the folder theme, which stays the seed.
@@ -416,10 +497,16 @@ pub const MUSIC_DISC_RUST_ARP_RATE: f32 = 1.25;
 pub const MUSIC_DISC_C_ARP_RATE: f32 = 1.0;
 pub const MUSIC_DISC_CPP_ARP_RATE: f32 = 1.1;
 pub const MUSIC_DISC_PYTHON_ARP_RATE: f32 = 0.75;
+pub const MUSIC_DISC_SLINT_ARP_RATE: f32 = 0.9;
+pub const MUSIC_DISC_LUA_ARP_RATE: f32 = 1.15;
+pub const MUSIC_DISC_SHELL_ARP_RATE: f32 = 1.35;
 pub const MUSIC_DISC_RUST_ARP_GAIN: f32 = 1.2;
 pub const MUSIC_DISC_C_ARP_GAIN: f32 = 1.0;
 pub const MUSIC_DISC_CPP_ARP_GAIN: f32 = 1.1;
 pub const MUSIC_DISC_PYTHON_ARP_GAIN: f32 = 0.85;
+pub const MUSIC_DISC_SLINT_ARP_GAIN: f32 = 0.95;
+pub const MUSIC_DISC_LUA_ARP_GAIN: f32 = 1.05;
+pub const MUSIC_DISC_SHELL_ARP_GAIN: f32 = 0.9;
 
 pub const LIGHTCYCLE_CAMERA_DISTANCE: f32 = 14.0;
 pub const LIGHTCYCLE_CAMERA_HEIGHT: f32 = 8.0;
@@ -492,3 +579,66 @@ pub fn block_top_position(x: i32, z: i32, height: f32) -> Vec3 {
     position.y = height + 0.5;
     position
 }
+
+// --- Brick breaker (Lua source files) --------------------------------------
+//
+// An upright court on the X/Y plane with the bike as the paddle. See
+// `crate::breaker`.
+
+pub const BREAKER_COLS: i32 = 9;
+pub const BREAKER_ROWS: i32 = 6;
+pub const BREAKER_WIDTH: f32 = 22.0;
+pub const BREAKER_HEIGHT: f32 = 26.0;
+/// Gap between the ceiling and the first row of bricks.
+pub const BREAKER_WALL_TOP: f32 = 3.5;
+pub const BREAKER_BRICK_WIDTH: f32 = 1.9;
+pub const BREAKER_BRICK_HEIGHT: f32 = 0.9;
+pub const BREAKER_BRICK_GAP: f32 = 0.35;
+/// Chance a brick above the bottom row is missing, so the wall is not a slab.
+pub const BREAKER_HOLE_CHANCE: f32 = 0.12;
+pub const BREAKER_PADDLE_Y: f32 = 1.4;
+pub const BREAKER_PADDLE_WIDTH: f32 = 4.2;
+pub const BREAKER_PADDLE_HEIGHT: f32 = 0.6;
+pub const BREAKER_PADDLE_SPEED: f32 = 15.0;
+/// How much the bike is scaled up to read as a paddle.
+pub const BREAKER_PADDLE_SCALE: f32 = 1.8;
+pub const BREAKER_LAUNCH_ANGLE: f32 = 0.35;
+pub const BREAKER_MAX_DEFLECT: f32 = 0.85;
+/// Largest distance the ball may travel in one collision slice.
+pub const BREAKER_MAX_STEP: f32 = 0.25;
+pub const BREAKER_BALL_RADIUS: f32 = 0.34;
+pub const BREAKER_BALL_SPEED: f32 = 13.0;
+pub const BREAKER_CAMERA_BACK: f32 = 44.0;
+
+pub const BREAKER_BRICK_COLOR: Color = Color::srgb(0.35, 0.55, 1.0);
+pub const BREAKER_BALL_COLOR: Color = Color::srgb(1.0, 0.96, 0.72);
+pub const BREAKER_WALL_COLOR: Color = Color::srgb(0.17, 0.22, 0.32);
+
+// --- Stealth (Shell source files) ------------------------------------------
+//
+// A room of cover on the X/Z grid, patrolled by guards with sweeping vision
+// cones. See `crate::stealth`.
+
+pub const STEALTH_WIDTH: i32 = 21;
+pub const STEALTH_HEIGHT: i32 = 15;
+pub const STEALTH_COVER: usize = 16;
+/// Seconds per cell of creep, for the character and the guards alike.
+pub const STEALTH_STEP_SECONDS: f32 = 0.26;
+pub const STEALTH_VISION_RANGE: f32 = 7.0;
+pub const STEALTH_VISION_HALF_ANGLE: f32 = 0.5;
+pub const STEALTH_SCAN_SWEEP: f32 = 0.45;
+pub const STEALTH_SCAN_RATE: f32 = 1.1;
+pub const STEALTH_DETECT_RATE: f32 = 0.7;
+pub const STEALTH_DECAY: f32 = 0.45;
+/// Cell spacing of the line-of-sight samples.
+pub const STEALTH_SIGHT_SAMPLE: f32 = 0.4;
+pub const STEALTH_CONE_SEGMENTS: usize = 18;
+pub const STEALTH_CAMERA_FIT: f32 = 1.7;
+pub const STEALTH_WALL_HEIGHT: f32 = 2.4;
+/// Guards as a fraction of the runner's height.
+pub const STEALTH_GUARD_SCALE: f32 = 0.85;
+
+pub const STEALTH_FLOOR_COLOR: Color = Color::srgb(0.1, 0.13, 0.19);
+pub const STEALTH_WALL_COLOR: Color = Color::srgb(0.28, 0.38, 0.52);
+pub const STEALTH_CONE_COLOR: Color = Color::srgb(1.0, 0.34, 0.2);
+pub const STEALTH_EXIT_COLOR: Color = Color::srgb(0.55, 1.0, 0.7);

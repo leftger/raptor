@@ -16,6 +16,16 @@ pub enum Heading {
 }
 
 impl Heading {
+    /// Facing as an angle on the `X`/`Z` plane: `0` is `+X`, growing toward `+Z`.
+    pub fn angle(self) -> f32 {
+        match self {
+            Heading::PosX => 0.0,
+            Heading::PosZ => std::f32::consts::FRAC_PI_2,
+            Heading::NegX => std::f32::consts::PI,
+            Heading::NegZ => -std::f32::consts::FRAC_PI_2,
+        }
+    }
+
     pub fn delta(self) -> (i32, i32) {
         match self {
             Heading::PosX => (1, 0),

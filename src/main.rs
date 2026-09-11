@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 mod asteroids;
+mod breaker;
 mod cli;
 mod command;
 mod config;
@@ -11,8 +12,11 @@ mod lightcycle;
 mod load;
 mod music;
 mod platform;
+mod platformer;
 mod plugins;
+mod snake;
 mod state;
+mod stealth;
 
 use cli::Options;
 use config::{WINDOW_HEIGHT, WINDOW_TITLE, WINDOW_WIDTH};
