@@ -680,6 +680,25 @@ pub const STEALTH_HUG_LEAN: f32 = 0.85;
 // the character it is following. The wall-hug view is the deliberate exception,
 // for the reason given above it.
 const _: () = assert!(STEALTH_CAMERA_HEIGHT > STEALTH_WALL_HEIGHT);
+// --- The stealth radar ------------------------------------------------------
+//
+// A cell grid of the room on the HUD, shaded where it matters. The reference's
+// Soliton radar is a coarse map rather than a smooth one, so walls, the figure,
+// the patrols and what they can see are all just cells: no texture, no second
+// render, and it reads at a glance.
+pub const RADAR_CELL_SIZE: f32 = 7.0;
+pub const RADAR_CELL_GAP: f32 = 1.0;
+pub const RADAR_MARGIN: f32 = 16.0;
+pub const RADAR_PANEL_COLOR: Color = Color::srgba(0.01, 0.05, 0.03, 0.75);
+/// Open floor, which is left to the panel: the map draws what is in the way.
+pub const RADAR_FLOOR_COLOR: Color = Color::srgba(0.04, 0.14, 0.09, 0.0);
+pub const RADAR_SOLID_COLOR: Color = Color::srgb(0.10, 0.45, 0.24);
+pub const RADAR_CONE_COLOR: Color = Color::srgba(0.20, 0.78, 0.95, 0.5);
+pub const RADAR_GUARD_COLOR: Color = Color::srgb(0.95, 0.28, 0.34);
+pub const RADAR_PLAYER_COLOR: Color = Color::srgb(0.80, 1.0, 0.88);
+// A cell has to be big enough to read a corridor on, and small enough that the
+// panel does not cover the room it is describing.
+const _: () = assert!(RADAR_CELL_SIZE >= 4.0 && RADAR_CELL_SIZE <= 12.0);
 /// How quickly the camera catches up with the character, per second. Fast
 /// enough that its lag stays a steady offset rather than swinging the aim. This
 /// is also what eases it down into the wall-hug view and back up out of it.

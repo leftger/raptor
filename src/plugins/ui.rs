@@ -27,6 +27,8 @@ impl Plugin for UiPlugin {
                     update_status_text,
                     update_selection_info,
                     update_folio_panel,
+                    sync_radar,
+                    update_radar,
                 ),
             );
     }
@@ -72,6 +74,108 @@ struct FolioPanel;
 
 #[derive(Component)]
 struct FolioPanelText;
+
+/// The radar panel, while a stealth run is on and gone when it is not.
+#[derive(Component)]
+struct RadarPanel;
+
+/// One room cell of the radar, so a shade can be set without rebuilding the grid.
+#[derive(Component)]
+struct RadarCell {
+    cell: (i32, i32),
+}
+
+/// Builds the radar for a stealth run and tears it down when the run ends.
+fn sync_radar(
+    mut commands: Commands,
+    state: Res<LightcycleState>,
+    panels: Query<Entity, With<RadarPanel>>,
+) {
+    if state
+        .run
+        .as_ref()
+        .and_then(|run| run.source_stealth())
+        .is_none()
+    {
+        for panel in &panels {
+            commands.entity(panel).despawn();
+        }
+        return;
+    }
+    if !panels.is_empty() {
+        return;
+    }
+
+    // The grid is fixed for the run, so it is built once and only recoloured.
+    let half_x = config::STEALTH_WIDTH / 2;
+    let half_z = config::STEALTH_HEIGHT / 2;
+    let cell = config::RADAR_CELL_SIZE;
+    commands
+        .spawn((
+            RadarPanel,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(config::RADAR_MARGIN),
+                right: Val::Px(config::RADAR_MARGIN),
+                width: Val::Px((half_x * 2 - 1) as f32 * cell),
+                height: Val::Px((half_z * 2 - 1) as f32 * cell),
+                ..default()
+            },
+            BackgroundColor(config::RADAR_PANEL_COLOR),
+            Pickable::IGNORE,
+        ))
+        .with_children(|panel| {
+            for z in -half_z + 1..half_z {
+                for x in -half_x + 1..half_x {
+                    // A map, so room +Z runs up the panel: north on the radar is
+                    // north in the room, whichever way the camera happens to face.
+                    let across = (x + half_x - 1) as f32 * cell;
+                    let down = (half_z - 1 - z) as f32 * cell;
+                    panel.spawn((
+                        RadarCell { cell: (x, z) },
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(across),
+                            top: Val::Px(down),
+                            width: Val::Px(cell - config::RADAR_CELL_GAP),
+                            height: Val::Px(cell - config::RADAR_CELL_GAP),
+                            ..default()
+                        },
+                        BackgroundColor(config::RADAR_FLOOR_COLOR),
+                        Pickable::IGNORE,
+                    ));
+                }
+            }
+        });
+}
+
+/// Shades the radar: cover, the figure, the patrols, and everything a patrol can
+/// see.
+///
+/// The sight test is the sim's own, so the radar cannot disagree with the guards
+/// about where is safe to stand — which is the one thing a stealth map must get
+/// right.
+fn update_radar(state: Res<LightcycleState>, mut cells: Query<(&RadarCell, &mut BackgroundColor)>) {
+    let Some(room) = state.run.as_ref().and_then(|run| run.source_stealth()) else {
+        return;
+    };
+    for (cell, mut shade) in &mut cells {
+        let at = cell.cell;
+        let guard_here = room.guards.iter().any(|guard| guard.cell() == at);
+        let seen = room.guards.iter().any(|guard| room.guard_sees(guard, at));
+        shade.0 = if at == room.character {
+            config::RADAR_PLAYER_COLOR
+        } else if guard_here {
+            config::RADAR_GUARD_COLOR
+        } else if seen {
+            config::RADAR_CONE_COLOR
+        } else if room.is_solid(at) {
+            config::RADAR_SOLID_COLOR
+        } else {
+            config::RADAR_FLOOR_COLOR
+        };
+    }
+}
 
 fn setup_ui(mut commands: Commands) {
     commands
