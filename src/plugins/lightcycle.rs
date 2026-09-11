@@ -5055,18 +5055,25 @@ fn update_chase_camera(
             .single()
             .map(|transform| transform.translation)
             .unwrap_or_else(|_| config::ground_position(room.character.0, room.character.1));
-        // Pressing into a wall is the peek gesture: the camera swings round to
-        // look along that wall, past the corner, from whichever side has floor.
-        // The usual view is the same thing aimed at +Z, hence the default angle.
-        let peek = room
+        // The camera sits behind whatever the view is looking along. By default
+        // that is -Z, which is the fixed bearing this camera has always used: the
+        // camera is on the +Z side. Getting this backwards puts the camera behind
+        // the room instead, which mirrors the player's controls on screen.
+        //
+        // Pressing into a wall swings the view to look along the wall instead,
+        // past the corner, from whichever side has floor.
+        let looking = room
             .peek
-            .map(heading_angle)
-            .unwrap_or(std::f32::consts::FRAC_PI_2);
+            .map(|heading| {
+                let angle = heading_angle(heading);
+                Vec2::new(angle.cos(), angle.sin())
+            })
+            .unwrap_or(Vec2::new(0.0, -1.0));
         let target = focus
             + Vec3::new(
-                -peek.cos() * config::STEALTH_CAMERA_DISTANCE,
+                -looking.x * config::STEALTH_CAMERA_DISTANCE,
                 config::STEALTH_CAMERA_HEIGHT,
-                -peek.sin() * config::STEALTH_CAMERA_DISTANCE,
+                -looking.y * config::STEALTH_CAMERA_DISTANCE,
             );
         // A swing round a corner is quick and the usual follow is not: the whole
         // point of peeking is a guard who is walking into view. Telling the two
