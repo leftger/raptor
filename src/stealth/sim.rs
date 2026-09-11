@@ -371,6 +371,8 @@ impl StealthSim {
     pub fn update(&mut self, dt: f32) -> StealthEvents {
         let mut events = StealthEvents::default();
         self.walking = false;
+        // The hug from the previous frame, which the creep test below needs.
+        let hugged = self.hug;
         self.hug = None;
         self.peek = None;
         if self.phase != StealthPhase::Sneaking {
@@ -386,20 +388,31 @@ impl StealthSim {
         self.walking =
             wanted.is_some_and(|heading| !self.is_solid(step_cell(self.character, heading)));
 
-        // Pressing into a solid is the wall-hug gesture: the figure turns so that
-        // its back is against the wall, which is the pose that reads as sheltering
-        // behind cover, and the wall is reported so the renderer can lean it in.
+        // Wall hugging, in two parts.
         //
-        // Only the facing changes here. `tick` moves by the held direction rather
-        // than by this, so the character still does not step into the wall.
-        if let Some(heading) = wanted
-            && self.is_solid(step_cell(self.character, heading))
-        {
-            self.hug = Some(heading);
-            self.heading = heading.opposite();
+        // Pressing into a solid turns the figure's back to it. That hug then holds
+        // while the player keeps a direction into the *same* wall or along it, so
+        // the figure creeps along cover with its back to it rather than letting go
+        // the moment the key changes. Walking away, letting go, or reaching the
+        // end of the wall all release it.
+        //
+        // Only the facing and the reported wall change here. `tick` moves by the
+        // held direction, so the figure never steps into the wall, and creeping is
+        // the ordinary movement rules applied along the wall's face.
+        let hugging = wanted
+            .filter(|heading| self.is_solid(step_cell(self.character, *heading)))
+            .or_else(|| {
+                hugged.filter(|wall| {
+                    self.is_solid(step_cell(self.character, *wall))
+                        && wanted.is_some_and(|heading| along_wall(*wall).contains(&heading))
+                })
+            });
+        if let Some(wall) = hugging {
+            self.hug = Some(wall);
+            self.heading = wall.opposite();
             // The side with more floor: a camera looking past the corner wants the
-            // open way, and which side that is changes as the player moves.
-            self.peek = along_wall(heading)
+            // open way, and which side that is changes as the player creeps.
+            self.peek = along_wall(wall)
                 .into_iter()
                 .map(|across| (self.open_run(across), across))
                 .max_by_key(|(run, _)| *run)
