@@ -94,6 +94,7 @@ impl Plugin for LightcyclePlugin {
                         update_trail_mesh.run_if(in_lightcycle_mode),
                         animate_parent_gate.run_if(in_lightcycle_mode),
                         animate_city_beacons.run_if(in_lightcycle_mode),
+                        animate_stack_frames.run_if(in_lightcycle_mode),
                         update_document_focus.run_if(in_lightcycle_mode),
                         update_disc_focus.run_if(in_lightcycle_mode),
                         sync_disc_entities.run_if(in_lightcycle_mode),
@@ -150,8 +151,9 @@ struct LightcycleAssets {
     trail_material: Handle<StandardMaterial>,
     /// Data-plate materials for the hex-dump highway.
     hex_materials: [Handle<StandardMaterial>; 3],
-    /// The translucent wall of the memory flood.
+    /// The translucent wall of the memory flood, and its lit crest.
     flood_material: Handle<StandardMaterial>,
+    flood_crest_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
     city_floor_material: Handle<StandardMaterial>,
     city_foundation_material: Handle<StandardMaterial>,
@@ -241,6 +243,12 @@ struct FloodEntity;
 #[derive(Component)]
 struct RivalEntity {
     index: usize,
+}
+
+/// One disc of a directory's call-stack tower, indexed by path depth.
+#[derive(Component)]
+struct StackFrameEntity {
+    level: usize,
 }
 
 /// Small mesh burst emitted at the crash point.
@@ -806,6 +814,13 @@ fn setup_lightcycle_assets(
         }),
         flood_material: materials.add(StandardMaterial {
             base_color: config::FLOOD_COLOR,
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            double_sided: true,
+            ..default()
+        }),
+        flood_crest_material: materials.add(StandardMaterial {
+            base_color: config::FLOOD_CREST_COLOR,
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             double_sided: true,
@@ -4305,6 +4320,18 @@ fn animate_city_beacons(time: Res<Time>, mut beacons: Query<(&CityBeacon, &mut T
     }
 }
 
+/// Bobs the call-stack discs, so a directory's stack reads as live hardware
+/// rather than a static prop.
+fn animate_stack_frames(time: Res<Time>, mut discs: Query<(&StackFrameEntity, &mut Transform)>) {
+    let elapsed = time.elapsed_secs();
+    for (disc, mut transform) in &mut discs {
+        let level = disc.level as f32;
+        let rest = config::STACK_FRAME_THICKNESS * 0.5 + level * config::STACK_FRAME_GAP;
+        let phase = elapsed * config::STACK_FRAME_BOB_SPEED + level * 0.6;
+        transform.translation.y = rest + phase.sin() * config::STACK_FRAME_BOB;
+    }
+}
+
 fn update_document_focus(
     mut state: ResMut<LightcycleState>,
     mut marker: Query<&mut Transform, With<DocumentFocusMarker>>,
@@ -4400,23 +4427,32 @@ fn decorate_directory_run(
     run: &ActiveRun,
 ) {
     let span = config::GRID_SPACING;
-    let width = (run.arena.max.0 - run.arena.min.0 + 1) as f32 * span * 0.8;
-    let depth_z = (run.arena.max.1 - run.arena.min.1 + 1) as f32 * span * 0.8;
     let center_x = (run.arena.min.0 + run.arena.max.0) as f32 * 0.5 * span;
     let center_z = (run.arena.min.1 + run.arena.max.1) as f32 * 0.5 * span;
 
-    // Call stack: one glass plate per path level.
+    // Call stack: one disc per path level, in a small tower at the arena's
+    // edge. It sits on a road cell, so it is on flat ground by construction and
+    // never lands inside a building.
     let depth = path.components().count().min(config::STACK_FRAME_MAX);
-    for level in 0..depth {
-        let y = config::STACK_FRAME_BASE_Y + level as f32 * config::STACK_FRAME_SPACING;
-        commands.spawn((
-            LightcycleSceneRoot,
-            Mesh3d(assets.unit_cube.clone()),
-            MeshMaterial3d(assets.trail_material.clone()),
-            Transform::from_xyz(center_x, y, center_z).with_scale(Vec3::new(width, 0.1, depth_z)),
-            Visibility::Visible,
-            Pickable::IGNORE,
-        ));
+    if let Some(anchor) = stack_anchor(&run.arena.roads, run.arena.max) {
+        let base_x = anchor.0 as f32 * span;
+        let base_z = anchor.1 as f32 * span;
+        for level in 0..depth {
+            commands.spawn((
+                LightcycleSceneRoot,
+                StackFrameEntity { level },
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.trail_material.clone()),
+                Transform::from_xyz(base_x, config::STACK_FRAME_THICKNESS * 0.5, base_z)
+                    .with_scale(Vec3::new(
+                        config::STACK_FRAME_WIDTH,
+                        config::STACK_FRAME_THICKNESS,
+                        config::STACK_FRAME_WIDTH,
+                    )),
+                Visibility::Visible,
+                Pickable::IGNORE,
+            ));
+        }
     }
 
     // Hex-dump highway: a sampled byte stream laid as emissive data plates.
@@ -4483,6 +4519,13 @@ fn decorate_directory_run(
         .with_scale(Vec3::new(flood.width, config::FLOOD_HEIGHT, 0.4)),
         Visibility::Hidden,
         Pickable::IGNORE,
+        // A brighter band along the crest: a translucent sheet on its own reads
+        // as a scan line, the lit top edge makes it a wall.
+        children![(
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.flood_crest_material.clone()),
+            Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3::new(1.0, 0.06, 1.2)),
+        )],
     ));
 
     // Scheduler race: threads start across the directory and run for the gate.
@@ -4519,6 +4562,21 @@ fn is_quarantined(path: &Path) -> bool {
     path.components().any(|component| {
         let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
         config::QUARANTINE_NAMES.contains(&name.as_str())
+    })
+}
+
+/// Picks the road cell to stand a call-stack tower on: the one nearest the
+/// arena's far corner, so it sits at the edge of the play space instead of in
+/// the middle of it. Roads are flat ground by construction, which is what keeps
+/// the tower out of the buildings.
+fn stack_anchor(
+    roads: &std::collections::BTreeSet<(i32, i32)>,
+    corner: (i32, i32),
+) -> Option<(i32, i32)> {
+    roads.iter().copied().min_by_key(|cell| {
+        let dx = (corner.0 - cell.0) as i64;
+        let dz = (corner.1 - cell.1) as i64;
+        dx * dx + dz * dz
     })
 }
 
@@ -7365,8 +7423,8 @@ mod tests {
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
         glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing, hug_camera_shot,
         is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
-        pose_world_position, rail_segments, road_marking_mesh, trail_centerline, trail_heights,
-        trim_polyline_end, wrap_angle,
+        pose_world_position, rail_segments, road_marking_mesh, stack_anchor, trail_centerline,
+        trail_heights, trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
@@ -8322,6 +8380,19 @@ mod tests {
         assert!(is_quarantined(Path::new("/srv/.git")));
         assert!(!is_quarantined(Path::new("/home/me/project/src")));
         assert!(!is_quarantined(Path::new("/home/me")));
+    }
+
+    #[test]
+    fn the_call_stack_stands_on_the_road_nearest_the_corner() {
+        let roads: BTreeSet<(i32, i32)> = [(0, 0), (5, 0), (5, 5), (2, 9)].into_iter().collect();
+        assert_eq!(stack_anchor(&roads, (6, 6)), Some((5, 5)));
+        assert_eq!(stack_anchor(&roads, (0, -4)), Some((0, 0)));
+        assert_eq!(stack_anchor(&roads, (5, 5)), Some((5, 5)));
+        assert_eq!(
+            stack_anchor(&BTreeSet::new(), (3, 3)),
+            None,
+            "nothing to stand on"
+        );
     }
 
     #[test]

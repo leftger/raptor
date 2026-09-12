@@ -190,9 +190,16 @@ pub const GC_INTERVAL_SECONDS: f32 = 24.0;
 pub const GC_PAUSE_SECONDS: f32 = 0.55;
 /// Simulated-time scale during the collector's pause.
 pub const GC_SLOW_SCALE: f32 = 0.2;
-/// Translucent plates stacked above a directory by its depth: the call stack.
-pub const STACK_FRAME_BASE_Y: f32 = 7.0;
-pub const STACK_FRAME_SPACING: f32 = 2.0;
+/// The call stack, drawn as a small tower of discs at the arena's edge.
+///
+/// It used to be one arena-wide plate per path level floating overhead, which
+/// sat right across the chase camera. As a compact floor-level stack it still
+/// grows with the path, but it is beside the track instead of in front of it.
+pub const STACK_FRAME_WIDTH: f32 = 1.15;
+pub const STACK_FRAME_THICKNESS: f32 = 0.16;
+pub const STACK_FRAME_GAP: f32 = 0.44;
+pub const STACK_FRAME_BOB: f32 = 0.11;
+pub const STACK_FRAME_BOB_SPEED: f32 = 1.7;
 pub const STACK_FRAME_MAX: usize = 6;
 
 /// Hex-dump highway: emissive data plates laid along the directory's roads.
@@ -219,6 +226,8 @@ pub const FLOOD_DELAY_SECONDS: f32 = 18.0;
 /// Seconds the flood takes to cross the arena once it starts.
 pub const FLOOD_CROSSING_SECONDS: f32 = 42.0;
 pub const FLOOD_COLOR: Color = Color::srgba(1.0, 0.25, 0.15, 0.4);
+/// The lit band along the flood's crest, so the hazard reads as a wall.
+pub const FLOOD_CREST_COLOR: Color = Color::srgba(1.0, 0.62, 0.35, 0.85);
 pub const FLOOD_HEIGHT: f32 = 7.0;
 
 // --- Scheduler race --------------------------------------------------------

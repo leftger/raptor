@@ -476,8 +476,9 @@ world keeps up a running machine metaphor:
   glass sheet.
 * **Hex-dump highway** — the roads carry a sampled byte stream as emissive data
   plates, seeded from the directory's path so a folder always lays out the same.
-* **Call stack** — each level of the path stacks a translucent frame above the
-  arena, so `/home/you/project` is visibly three frames deep.
+* **Call stack** — one disc per path level, stacked in a small tower on the road
+  at the arena's edge, so `/home/you/project` is visibly three frames deep. It
+  stands beside the track rather than across the view.
 * **Disk seek** — every directory hop plays a mechanical head-seek cue.
 * **Cache hit** — revisiting a directory you have already opened grants a short
   ground-speed surge.
