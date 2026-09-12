@@ -1269,6 +1269,11 @@ fn apply_mode_swap(
     mut transition: ResMut<ModeTransition>,
     mut mode: ResMut<InteractionMode>,
     mut state: ResMut<LightcycleState>,
+    navigator: Res<NavigatorResource>,
+    mut cache: ResMut<CacheState>,
+    mut flood: ResMut<FloodState>,
+    mut race: ResMut<SchedulerRace>,
+    mut history: ResMut<HistoryState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
@@ -1288,7 +1293,32 @@ fn apply_mode_swap(
     if target == InteractionMode::Lightcycle
         && let Some(run) = state.pending_run.take()
     {
+        // Riding out of the explorer view spawns the same directory run the
+        // loader would, so it has to be dressed and logged the same way. The
+        // opening room's `DirectoryLoaded` arrived while the explorer camera was
+        // still up and was dropped, which left that one room without its stack,
+        // its highway plates or its flood.
+        let path = navigator.0.current_path.clone();
         spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+        decorate_directory_run(
+            &mut commands,
+            &assets,
+            &mut meshes,
+            &mut state,
+            &mut flood,
+            &mut race,
+            &path,
+            &run,
+        );
+        // The room you started in is a room like any other: it belongs in the
+        // commit log, and having been there counts as a cache hit later.
+        history.commit(&path);
+        let hit = !cache.visited.insert(path);
+        state.cache_boost = if hit {
+            config::CACHE_BOOST_SECONDS
+        } else {
+            0.0
+        };
         state.run = Some(run);
     }
 
