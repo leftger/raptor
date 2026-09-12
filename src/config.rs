@@ -183,6 +183,32 @@ pub const STACK_FRAME_BASE_Y: f32 = 7.0;
 pub const STACK_FRAME_SPACING: f32 = 2.0;
 pub const STACK_FRAME_MAX: usize = 6;
 
+/// Hex-dump highway: emissive data plates laid along the directory's roads.
+pub const HEX_PLATE_COLORS: [Color; 3] = [
+    Color::srgb(0.05, 0.25, 0.3),
+    Color::srgb(0.1, 0.7, 0.75),
+    Color::srgb(0.3, 0.98, 0.85),
+];
+pub const HEX_PLATE_MAX: usize = 640;
+
+/// Directory names that open as a quarantined vault chased by the flood.
+pub const QUARANTINE_NAMES: [&str; 8] = [
+    "node_modules",
+    ".git",
+    "target",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    ".cache",
+    "build",
+];
+/// The flood waits this long before it starts rising.
+pub const FLOOD_DELAY_SECONDS: f32 = 18.0;
+/// Seconds the flood takes to cross the arena once it starts.
+pub const FLOOD_CROSSING_SECONDS: f32 = 42.0;
+pub const FLOOD_COLOR: Color = Color::srgba(1.0, 0.25, 0.15, 0.4);
+pub const FLOOD_HEIGHT: f32 = 7.0;
+
 pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
 pub const LIGHTCYCLE_CITY_FLOOR_COLOR: Color = Color::srgb(0.008, 0.012, 0.025);
 pub const LIGHTCYCLE_CITY_FOUNDATION_COLOR: Color = Color::srgb(0.018, 0.025, 0.055);

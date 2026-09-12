@@ -7,8 +7,8 @@ use crate::lightcycle::{LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::plugins::music::MusicState;
 use crate::state::{
-    InteractionMode, MachineState, NavigatorResource, PauseState, SelectionState, UiNotice,
-    UiSettings,
+    FloodState, InteractionMode, MachineState, NavigatorResource, PauseState, SelectionState,
+    UiNotice, UiSettings,
 };
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -680,6 +680,7 @@ fn update_status_text(
     load_state: Res<DirectoryLoadState>,
     ui_notice: Res<UiNotice>,
     lightcycle: Res<LightcycleState>,
+    flood: Res<FloodState>,
     document_load: Res<DocumentLoadState>,
     music: Res<MusicState>,
     diagnostics: Res<DiagnosticsStore>,
@@ -925,6 +926,12 @@ fn update_status_text(
     }
 
     if *mode == InteractionMode::Lightcycle {
+        if lightcycle.quarantined {
+            status = format!("{status} | QUARANTINE");
+        }
+        if flood.active && flood.timer > flood.delay {
+            status = format!("{status} | MEM OVERFLOW");
+        }
         if lightcycle.cache_boost > 0.0 {
             status = format!("{status} | CACHE HIT");
         }

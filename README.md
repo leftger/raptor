@@ -467,6 +467,35 @@ re-deals the same board.
   is spent, beat the seeded target to clear the board; fall short and the run
   crashes out.
 
+## Inside the Machine
+
+Riding a directory is meant to feel like travelling a motherboard, and the
+world keeps up a running machine metaphor:
+
+* **PCB trace trail** — the trail is a lit copper trace rather than a plain
+  glass sheet.
+* **Hex-dump highway** — the roads carry a sampled byte stream as emissive data
+  plates, seeded from the directory's path so a folder always lays out the same.
+* **Call stack** — each level of the path stacks a translucent frame above the
+  arena, so `/home/you/project` is visibly three frames deep.
+* **Disk seek** — every directory hop plays a mechanical head-seek cue.
+* **Cache hit** — revisiting a directory you have already opened grants a short
+  ground-speed surge.
+* **Garbage collector** — every so often the collector runs and the world
+  stalls for a beat while the sweep passes.
+* **Memory flood** — after a short delay a wall of spilled memory rises across
+  the arena. Fall behind it and the run ends in a buffer overflow.
+* **Quarantine vault** — directories named for heavy build or hidden folders
+  (`node_modules`, `.git`, `target`, `vendor`, `__pycache__`, `.venv`,
+  `.cache`, `build`) open as a quarantined vault: warning pylons at the corners
+  and a flood that starts sooner.
+* **Header telemetry** — a syscall trace ticks past the header alongside `PC`,
+  `SP`, clock speed and die temperature, scaled by how much of the directory is
+  loaded.
+
+The pause menu (`P` / `Esc`) lists every game so you can warp straight into any
+of them without hunting for a file.
+
 ## Procedural Music
 
 RAPTOR synthesizes its own soundtrack with [Glicol](https://glicol.org), driven

@@ -31,8 +31,8 @@ use crate::plugins::transition::{ModeTransition, gods_eye_pose};
 use crate::qbert::{QbertPhase, QbertSim};
 use crate::snake::SnakeSim;
 use crate::state::{
-    CacheState, DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
-    OrbitCameraResource, PauseState, TrailSceneRoot,
+    CacheState, DirectorySceneRoot, FloodState, InteractionMode, LightcycleSceneRoot,
+    NavigatorResource, OrbitCameraResource, PauseState, TrailSceneRoot,
 };
 use crate::stealth::{StealthPhase, StealthSim};
 use crate::surfer::{SurferPhase, SurferSim};
@@ -52,6 +52,7 @@ impl Plugin for LightcyclePlugin {
             .init_resource::<LightcycleState>()
             .init_resource::<PauseState>()
             .init_resource::<CacheState>()
+            .init_resource::<FloodState>()
             .add_message::<DocumentRequested>()
             .add_message::<DocumentLoaded>()
             .add_message::<DocumentLoadFailed>()
@@ -82,6 +83,7 @@ impl Plugin for LightcyclePlugin {
                     (
                         read_lightcycle_input.run_if(in_lightcycle_mode),
                         step_lightcycle.run_if(in_lightcycle_mode),
+                        update_flood.run_if(in_lightcycle_mode),
                         restore_directory_arena.run_if(in_lightcycle_mode),
                         spawn_crash_effect.run_if(in_lightcycle_mode),
                         update_crash_effects.run_if(in_lightcycle_mode),
@@ -142,6 +144,10 @@ struct LightcycleAssets {
     entry_halo_mesh: Handle<Mesh>,
     cycle_scene: Handle<WorldAsset>,
     trail_material: Handle<StandardMaterial>,
+    /// Data-plate materials for the hex-dump highway.
+    hex_materials: [Handle<StandardMaterial>; 3],
+    /// The translucent wall of the memory flood.
+    flood_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
     city_floor_material: Handle<StandardMaterial>,
     city_foundation_material: Handle<StandardMaterial>,
@@ -222,6 +228,10 @@ struct LightcycleAssets {
 
 #[derive(Component)]
 struct CycleEntity;
+
+/// The rising memory-flood wall of a directory run.
+#[derive(Component)]
+struct FloodEntity;
 
 /// Small mesh burst emitted at the crash point.
 #[derive(Component)]
@@ -775,6 +785,22 @@ fn setup_lightcycle_assets(
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
+        hex_materials: std::array::from_fn(|index| {
+            let colour = config::HEX_PLATE_COLORS[index];
+            materials.add(StandardMaterial {
+                base_color: colour,
+                emissive: LinearRgba::from(colour) * 1.8,
+                unlit: true,
+                ..default()
+            })
+        }),
+        flood_material: materials.add(StandardMaterial {
+            base_color: config::FLOOD_COLOR,
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            double_sided: true,
+            ..default()
+        }),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
         city_floor_material: materials.add(StandardMaterial {
             base_color: config::LIGHTCYCLE_CITY_FLOOR_COLOR,
@@ -4297,6 +4323,7 @@ fn reset_on_directory_loaded(
     mode: Res<InteractionMode>,
     mut state: ResMut<LightcycleState>,
     mut cache: ResMut<CacheState>,
+    mut flood: ResMut<FloodState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
@@ -4312,7 +4339,14 @@ fn reset_on_directory_loaded(
 
         let run = build_active_run(&event.path, event.contents.nodes.clone());
         spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
-        spawn_stack_frames(&mut commands, &assets, &event.path, &run);
+        decorate_directory_run(
+            &mut commands,
+            &assets,
+            &mut state,
+            &mut flood,
+            &event.path,
+            &run,
+        );
 
         // A directory already opened is a cache hit: a short speed surge for
         // the rest of the run, plus the disk-head seek on the hop in.
@@ -4335,22 +4369,25 @@ fn reset_on_directory_loaded(
 }
 
 /// Stacks a translucent plate above the arena for each level of the directory
-/// path: the rider's call stack.
-fn spawn_stack_frames(
+/// path (the call stack), lays the hex-dump highway along its roads, rings a
+/// quarantined vault with pylons, and spawns the memory-flood wall.
+#[allow(clippy::too_many_arguments)]
+fn decorate_directory_run(
     commands: &mut Commands,
     assets: &LightcycleAssets,
+    state: &mut LightcycleState,
+    flood: &mut FloodState,
     path: &Path,
     run: &ActiveRun,
 ) {
-    let depth = path.components().count().min(config::STACK_FRAME_MAX);
-    if depth == 0 {
-        return;
-    }
     let span = config::GRID_SPACING;
     let width = (run.arena.max.0 - run.arena.min.0 + 1) as f32 * span * 0.8;
     let depth_z = (run.arena.max.1 - run.arena.min.1 + 1) as f32 * span * 0.8;
     let center_x = (run.arena.min.0 + run.arena.max.0) as f32 * 0.5 * span;
     let center_z = (run.arena.min.1 + run.arena.max.1) as f32 * 0.5 * span;
+
+    // Call stack: one glass plate per path level.
+    let depth = path.components().count().min(config::STACK_FRAME_MAX);
     for level in 0..depth {
         let y = config::STACK_FRAME_BASE_Y + level as f32 * config::STACK_FRAME_SPACING;
         commands.spawn((
@@ -4361,6 +4398,151 @@ fn spawn_stack_frames(
             Visibility::Visible,
             Pickable::IGNORE,
         ));
+    }
+
+    // Hex-dump highway: a sampled byte stream laid as emissive data plates.
+    let mut seed = path_hash(path);
+    let stride = (run.arena.roads.len() / config::HEX_PLATE_MAX).max(1);
+    for &cell in run.arena.roads.iter().step_by(stride) {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let level = ((seed >> 33) % config::HEX_PLATE_COLORS.len() as u64) as usize;
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.hex_materials[level].clone()),
+            Transform::from_xyz(cell.0 as f32 * span, 0.07, cell.1 as f32 * span)
+                .with_scale(Vec3::new(span * 0.22, 0.06, span * 0.62)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
+    }
+
+    // Quarantine vault: risky directory names get warning pylons at the corners.
+    let quarantined = is_quarantined(path);
+    state.quarantined = quarantined;
+    if quarantined {
+        let px = (run.arena.max.0 - run.arena.min.0) as f32 * span;
+        let pz = (run.arena.max.1 - run.arena.min.1) as f32 * span;
+        for (dx, dz) in [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)] {
+            commands.spawn((
+                LightcycleSceneRoot,
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.galaga_bug_material.clone()),
+                Transform::from_xyz(center_x + dx * px, 3.0, center_z + dz * pz)
+                    .with_scale(Vec3::new(1.2, 6.0, 1.2)),
+                Visibility::Visible,
+                Pickable::IGNORE,
+            ));
+        }
+    }
+
+    // The flood starts at the arena's low-Z edge and rises toward high Z.
+    flood.active = true;
+    flood.timer = 0.0;
+    flood.delay = if quarantined {
+        config::FLOOD_DELAY_SECONDS * 0.6
+    } else {
+        config::FLOOD_DELAY_SECONDS
+    };
+    flood.min_z = run.arena.min.1 as f32;
+    flood.max_z = run.arena.max.1 as f32;
+    flood.center_x = center_x;
+    flood.width = ((run.arena.max.0 - run.arena.min.0) as f32 + 2.0) * span;
+    flood.plane = flood.min_z;
+    commands.spawn((
+        LightcycleSceneRoot,
+        FloodEntity,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.flood_material.clone()),
+        Transform::from_xyz(
+            flood.center_x,
+            config::FLOOD_HEIGHT * 0.5,
+            flood.min_z * span,
+        )
+        .with_scale(Vec3::new(flood.width, config::FLOOD_HEIGHT, 0.4)),
+        Visibility::Hidden,
+        Pickable::IGNORE,
+    ));
+}
+
+/// True when any component of the path names a well-known heavy or hidden
+/// build directory worth a quarantine.
+fn is_quarantined(path: &Path) -> bool {
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
+        config::QUARANTINE_NAMES.contains(&name.as_str())
+    })
+}
+
+/// Stable hash of a path, for seeding the hex-dump pattern.
+fn path_hash(path: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Raises the memory flood along a directory run and crashes the rider when it
+/// catches them. Contact is a plain grid-Z comparison: the bike is caught once
+/// it falls behind the flood's line.
+fn update_flood(
+    time: Res<Time>,
+    pause: Res<PauseState>,
+    mut state: ResMut<LightcycleState>,
+    mut flood: ResMut<FloodState>,
+    mut effects: MessageWriter<MusicSfx>,
+    mut walls: Query<(&FloodEntity, &mut Transform, &mut Visibility)>,
+) {
+    if pause.paused {
+        return;
+    }
+    let directory = state
+        .run
+        .as_ref()
+        .is_some_and(|run| matches!(run.environment, RunEnvironment::Directory { .. }));
+    if !directory || !flood.active {
+        for (_, _, mut visibility) in &mut walls {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    }
+
+    let span = (flood.max_z - flood.min_z).max(1.0);
+    flood.timer += time.delta_secs();
+    let rising = flood.timer - flood.delay;
+    if rising < 0.0 {
+        flood.plane = flood.min_z;
+        for (_, mut transform, mut visibility) in &mut walls {
+            transform.translation.z = flood.min_z * config::GRID_SPACING;
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    }
+
+    let progress = (rising / config::FLOOD_CROSSING_SECONDS).min(1.0);
+    flood.plane = flood.min_z + progress * span;
+    for (_, mut transform, mut visibility) in &mut walls {
+        transform.translation.z = flood.plane * config::GRID_SPACING;
+        *visibility = Visibility::Visible;
+    }
+
+    if let Some(run) = state.run.as_mut()
+        && run.sim.phase == RunPhase::Running
+        && (run.sim.cell.1 as f32) < flood.plane - 0.5
+    {
+        run.sim.phase = RunPhase::Crashed;
+        run.crash_label = Some("a buffer overflow".to_string());
+        state.crash_fx = Some(crate::lightcycle::CrashFx::new(
+            config::LIGHTCYCLE_CRASH_FX_DURATION,
+        ));
+        effects.write(MusicSfx::Crash);
+    }
+
+    if progress >= 1.0 {
+        // The spill is reclaimed and the flood recedes to the far edge.
+        flood.timer = 0.0;
     }
 }
 
@@ -4890,6 +5072,7 @@ fn restart_run(run: &mut ActiveRun) {
 fn restore_directory_arena(
     mut state: ResMut<LightcycleState>,
     navigator: Res<NavigatorResource>,
+    mut flood: ResMut<FloodState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
@@ -4902,6 +5085,14 @@ fn restore_directory_arena(
     despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
     let run = build_active_run(&navigator.0.current_path, navigator.0.entries.clone());
     spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+    decorate_directory_run(
+        &mut commands,
+        &assets,
+        &mut state,
+        &mut flood,
+        &navigator.0.current_path,
+        &run,
+    );
     state.clock = 0.0;
     state.crash_fx = None;
     state.entry_fx = None;
@@ -6969,8 +7160,9 @@ mod tests {
         city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
         glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing, hug_camera_shot,
-        nearest_heading, pose_forward, pose_rotation, pose_world_position, rail_segments,
-        road_marking_mesh, trail_centerline, trail_heights, trim_polyline_end, wrap_angle,
+        is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
+        pose_world_position, rail_segments, road_marking_mesh, trail_centerline, trail_heights,
+        trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
@@ -6980,6 +7172,7 @@ mod tests {
     use bevy::camera::primitives::MeshAabb;
     use bevy::prelude::{Vec2, Vec3};
     use std::collections::BTreeSet;
+    use std::path::Path;
 
     const RADIUS: f32 = config::LIGHTCYCLE_TURN_RADIUS;
 
@@ -7915,6 +8108,27 @@ mod tests {
         assert!(
             !run.source_snake().expect("snake state").exit_open,
             "so the gate is solid at the start of the run"
+        );
+    }
+
+    #[test]
+    fn heavy_build_directories_are_quarantined() {
+        assert!(is_quarantined(Path::new("/home/me/project/node_modules")));
+        assert!(is_quarantined(Path::new("/home/me/project/target/debug")));
+        assert!(is_quarantined(Path::new("/srv/.git")));
+        assert!(!is_quarantined(Path::new("/home/me/project/src")));
+        assert!(!is_quarantined(Path::new("/home/me")));
+    }
+
+    #[test]
+    fn the_hex_pattern_seed_is_stable_for_a_path() {
+        assert_eq!(
+            path_hash(Path::new("/home/me/project")),
+            path_hash(Path::new("/home/me/project"))
+        );
+        assert_ne!(
+            path_hash(Path::new("/home/me/project")),
+            path_hash(Path::new("/home/me/other"))
         );
     }
 }

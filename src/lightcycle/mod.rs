@@ -593,6 +593,8 @@ pub struct LightcycleState {
     pub gc_timer: f32,
     /// Seconds left of the collector's world stall.
     pub gc_pause: f32,
+    /// True while the current directory is a quarantined vault.
+    pub quarantined: bool,
 }
 
 /// Timeline for the crash animation.

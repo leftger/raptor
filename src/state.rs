@@ -64,6 +64,22 @@ pub struct MachineState {
     pub temperature: f32,
 }
 
+/// The rising memory flood that chases a directory run.
+///
+/// `plane` is the flood's grid-Z line, in the same cell coordinates the arena
+/// and the bike use, so contact is a plain comparison.
+#[derive(Resource, Default)]
+pub struct FloodState {
+    pub active: bool,
+    pub timer: f32,
+    pub delay: f32,
+    pub min_z: f32,
+    pub max_z: f32,
+    pub center_x: f32,
+    pub width: f32,
+    pub plane: f32,
+}
+
 #[derive(Resource)]
 pub struct OrbitCameraResource {
     pub yaw: f32,
