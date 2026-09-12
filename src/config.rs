@@ -934,7 +934,7 @@ pub const TETRIS_COLS: usize = 10;
 pub const TETRIS_ROWS: usize = 20;
 pub const TETRIS_TARGET_LINES: u32 = 10;
 pub const TETRIS_FALL_SECONDS: f32 = 0.5;
-pub const TETRIS_CAMERA_BACK: f32 = 30.0;
+pub const TETRIS_CAMERA_BACK: f32 = 36.0;
 pub const TETRIS_COLORS: [Color; 7] = [
     Color::srgb(0.9, 0.2, 0.4),
     Color::srgb(0.2, 0.8, 0.9),
