@@ -29,11 +29,10 @@ use crate::platformer::{PlatformerPhase, PlatformerSim};
 use crate::plinko::{PlinkoPhase, PlinkoSim};
 use crate::plugins::transition::{ModeTransition, gods_eye_pose};
 use crate::qbert::{QbertPhase, QbertSim};
-use crate::scheduler::{RaceSim, start_cells};
 use crate::snake::SnakeSim;
 use crate::state::{
     CacheState, DirectorySceneRoot, FloodState, HistoryState, InteractionMode, LightcycleSceneRoot,
-    NavigatorResource, OrbitCameraResource, PauseState, SchedulerRace, StackMotion, TrailSceneRoot,
+    NavigatorResource, OrbitCameraResource, PauseState, StackMotion, TrailSceneRoot,
 };
 use crate::stealth::{StealthPhase, StealthSim};
 use crate::surfer::{SurferPhase, SurferSim};
@@ -54,7 +53,6 @@ impl Plugin for LightcyclePlugin {
             .init_resource::<PauseState>()
             .init_resource::<CacheState>()
             .init_resource::<FloodState>()
-            .init_resource::<SchedulerRace>()
             .init_resource::<HistoryState>()
             .init_resource::<StackMotion>()
             .add_message::<DocumentRequested>()
@@ -89,7 +87,6 @@ impl Plugin for LightcyclePlugin {
                         step_lightcycle.run_if(in_lightcycle_mode),
                         update_flood.run_if(in_lightcycle_mode),
                         update_gc_sweep.run_if(in_lightcycle_mode),
-                        update_scheduler_race.run_if(in_lightcycle_mode),
                         restore_directory_arena.run_if(in_lightcycle_mode),
                         spawn_crash_effect.run_if(in_lightcycle_mode),
                         update_crash_effects.run_if(in_lightcycle_mode),
@@ -156,9 +153,6 @@ struct LightcycleAssets {
     /// The translucent wall of the memory flood, and its lit crest.
     flood_material: Handle<StandardMaterial>,
     flood_crest_material: Handle<StandardMaterial>,
-    /// Marker worn by scheduler-race rivals, so they are never mistaken for the
-    /// player's own cycle.
-    rival_material: Handle<StandardMaterial>,
     /// The collector's sweep: the visible cause of the GC stall.
     gc_sweep_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
@@ -249,12 +243,6 @@ struct FloodEntity;
 /// The collector's sweep, crossing a directory arena while it stalls the world.
 #[derive(Component)]
 struct GcSweepEntity;
-
-/// One rival thread of the scheduler race, indexed into `RaceSim.racers`.
-#[derive(Component)]
-struct RivalEntity {
-    index: usize,
-}
 
 /// One frame of a directory's call stack: its path depth, and the pose the
 /// animation oscillates around.
@@ -839,12 +827,6 @@ fn setup_lightcycle_assets(
             double_sided: true,
             ..default()
         }),
-        rival_material: materials.add(StandardMaterial {
-            base_color: config::SCHEDULER_RIVAL_COLOR,
-            emissive: LinearRgba::from(config::SCHEDULER_RIVAL_COLOR) * 2.0,
-            unlit: true,
-            ..default()
-        }),
         gc_sweep_material: materials.add(StandardMaterial {
             base_color: config::GC_SWEEP_COLOR,
             emissive: LinearRgba::from(config::GC_SWEEP_COLOR) * 2.6,
@@ -1272,7 +1254,6 @@ fn apply_mode_swap(
     navigator: Res<NavigatorResource>,
     mut cache: ResMut<CacheState>,
     mut flood: ResMut<FloodState>,
-    mut race: ResMut<SchedulerRace>,
     mut history: ResMut<HistoryState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -1310,7 +1291,6 @@ fn apply_mode_swap(
             &mut meshes,
             &mut state,
             &mut flood,
-            &mut race,
             &path,
             &run,
             hazards,
@@ -4500,7 +4480,6 @@ fn reset_on_directory_loaded(
     mut state: ResMut<LightcycleState>,
     mut cache: ResMut<CacheState>,
     mut flood: ResMut<FloodState>,
-    mut race: ResMut<SchedulerRace>,
     mut history: ResMut<HistoryState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -4523,7 +4502,6 @@ fn reset_on_directory_loaded(
             &mut meshes,
             &mut state,
             &mut flood,
-            &mut race,
             &event.path,
             &run,
             true,
@@ -4561,7 +4539,6 @@ fn decorate_directory_run(
     meshes: &mut Assets<Mesh>,
     state: &mut LightcycleState,
     flood: &mut FloodState,
-    race: &mut SchedulerRace,
     path: &Path,
     run: &ActiveRun,
     hazards: bool,
@@ -4696,49 +4673,6 @@ fn decorate_directory_run(
         Visibility::Hidden,
         Pickable::IGNORE,
     ));
-
-    // Scheduler race: threads start across the directory and run for the gate.
-    // A grace room runs no race at all, and spawns no rivals to run it.
-    race.sim = None;
-    race.notice.clear();
-    race.timer = 0.0;
-    if hazards
-        && run.arena.roads.len() >= config::SCHEDULER_MIN_ROADS
-        && let Some(portal) = run.arena.parent_portal.as_ref()
-    {
-        let starts = start_cells(&run.arena.roads, portal.to, config::SCHEDULER_RIVAL_COUNT);
-        if !starts.is_empty() {
-            race.sim = Some(RaceSim::new(starts, portal.to));
-        }
-    }
-    if hazards {
-        for index in 0..config::SCHEDULER_RIVAL_COUNT {
-            commands.spawn((
-                LightcycleSceneRoot,
-                RivalEntity { index },
-                Transform::from_xyz(0.0, 0.0, 0.0),
-                Visibility::Hidden,
-                Pickable::IGNORE,
-                children![
-                    (
-                        WorldAssetRoot(assets.cycle_scene.clone()),
-                        Transform::from_rotation(Quat::from_rotation_y(
-                            config::LIGHTCYCLE_MODEL_YAW
-                        ))
-                        .with_scale(Vec3::splat(config::LIGHTCYCLE_MODEL_SCALE * 0.72)),
-                    ),
-                    // A thread marker above the bike: the rival shares the player's
-                    // model, so without this it reads as a ghost of your own cycle.
-                    (
-                        Mesh3d(assets.unit_cube.clone()),
-                        MeshMaterial3d(assets.rival_material.clone()),
-                        Transform::from_xyz(0.0, config::LIGHTCYCLE_CYCLE_HEIGHT + 1.1, 0.0)
-                            .with_scale(Vec3::new(0.22, 0.9, 0.22)),
-                    ),
-                ],
-            ));
-        }
-    }
 }
 
 /// True when any component of the path names a well-known heavy or hidden
@@ -4887,119 +4821,6 @@ fn update_gc_sweep(
     let plane = gc_sweep_plane(state.gc_sweep, config::GC_SWEEP_SECONDS, min_z, max_z);
     transform.translation.z = plane * config::GRID_SPACING;
     *visibility = Visibility::Visible;
-}
-
-/// Runs the scheduler race: moves the rival threads, positions their entities,
-/// crashes the rider into a race condition on contact, and settles the result
-/// when either side reaches the gate first.
-fn update_scheduler_race(
-    time: Res<Time>,
-    pause: Res<PauseState>,
-    mut state: ResMut<LightcycleState>,
-    mut race: ResMut<SchedulerRace>,
-    mut effects: MessageWriter<MusicSfx>,
-    mut rivals: Query<(&RivalEntity, &mut Transform, &mut Visibility)>,
-) {
-    if race.timer > 0.0 {
-        race.timer = (race.timer - time.delta_secs()).max(0.0);
-        if race.timer == 0.0 {
-            race.notice.clear();
-        }
-    }
-    if pause.paused {
-        return;
-    }
-
-    let running = state.run.as_ref().is_some_and(|run| {
-        matches!(run.environment, RunEnvironment::Directory { .. })
-            && run.sim.phase == RunPhase::Running
-    });
-    if !running {
-        for (_, _, mut visibility) in &mut rivals {
-            *visibility = Visibility::Hidden;
-        }
-        race.sim = None;
-        return;
-    }
-
-    // Advance the threads, then judge the gate. The bike's cell and the gate
-    // are both grid coordinates, so the check is a plain distance.
-    let player_position = {
-        let run = state.run.as_ref().expect("checked above");
-        let Some(sim) = race.sim.as_mut() else {
-            for (_, _, mut visibility) in &mut rivals {
-                *visibility = Visibility::Hidden;
-            }
-            return;
-        };
-        let target = sim.target;
-        let player_cell = run.sim.cell;
-        let events = sim.update(time.delta_secs(), &run.arena.roads);
-        let player_at_gate =
-            (target.0 - player_cell.0).abs() + (target.1 - player_cell.1).abs() <= 1;
-        if player_at_gate {
-            race.notice = "TIME SLICE EARNED".to_string();
-            race.timer = config::SCHEDULER_NOTICE_SECONDS;
-            race.sim = None;
-        } else if events.rival_reached_gate {
-            race.notice = "CONTEXT SWITCH".to_string();
-            race.timer = config::SCHEDULER_NOTICE_SECONDS;
-            race.sim = None;
-        }
-        cycle_world_position(&run.sim)
-    };
-
-    if race.sim.is_none() {
-        if race.notice == "TIME SLICE EARNED" {
-            state.cache_boost = config::SCHEDULER_REWARD_SECONDS.max(state.cache_boost);
-        }
-        for (_, _, mut visibility) in &mut rivals {
-            *visibility = Visibility::Hidden;
-        }
-        return;
-    }
-
-    let mut contact = false;
-    for (rival, mut transform, mut visibility) in &mut rivals {
-        let racer = race
-            .sim
-            .as_ref()
-            .and_then(|sim| sim.racers.get(rival.index))
-            .copied();
-        let Some(racer) = racer else {
-            *visibility = Visibility::Hidden;
-            continue;
-        };
-        let position = Vec3::new(
-            racer.cell.0 as f32 * config::GRID_SPACING,
-            0.0,
-            racer.cell.1 as f32 * config::GRID_SPACING,
-        );
-        transform.translation = position;
-        if let Some(prev) = racer.prev {
-            let dx = (racer.cell.0 - prev.0) as f32;
-            let dz = (racer.cell.1 - prev.1) as f32;
-            if dx != 0.0 || dz != 0.0 {
-                transform.rotation = Quat::from_rotation_y(dx.atan2(dz));
-            }
-        }
-        *visibility = Visibility::Visible;
-        if player_position.distance(position) < config::SCHEDULER_HIT_RADIUS {
-            contact = true;
-        }
-    }
-
-    if contact
-        && let Some(run) = state.run.as_mut()
-        && run.sim.phase == RunPhase::Running
-    {
-        run.sim.phase = RunPhase::Crashed;
-        run.crash_label = Some("a race condition".to_string());
-        state.crash_fx = Some(crate::lightcycle::CrashFx::new(
-            config::LIGHTCYCLE_CRASH_FX_DURATION,
-        ));
-        effects.write(MusicSfx::Crash);
-    }
 }
 
 fn start_document_loads(
@@ -5313,13 +5134,13 @@ fn read_lightcycle_input(
         match history.rewind() {
             Some(path) => {
                 history.notice = "REWIND".to_string();
-                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+                history.notice_timer = config::HISTORY_NOTICE_SECONDS;
                 effects.write(MusicSfx::Seek);
                 requests.write(DirectoryRequested { path });
             }
             None => {
                 history.notice = "AT THE FIRST COMMIT".to_string();
-                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+                history.notice_timer = config::HISTORY_NOTICE_SECONDS;
             }
         }
         return;
@@ -5328,13 +5149,13 @@ fn read_lightcycle_input(
         match history.fast_forward() {
             Some(path) => {
                 history.notice = "FAST-FORWARD".to_string();
-                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+                history.notice_timer = config::HISTORY_NOTICE_SECONDS;
                 effects.write(MusicSfx::Seek);
                 requests.write(DirectoryRequested { path });
             }
             None => {
                 history.notice = "NOTHING TO REDO".to_string();
-                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+                history.notice_timer = config::HISTORY_NOTICE_SECONDS;
             }
         }
         return;
@@ -5581,7 +5402,6 @@ fn restore_directory_arena(
     mut state: ResMut<LightcycleState>,
     navigator: Res<NavigatorResource>,
     mut flood: ResMut<FloodState>,
-    mut race: ResMut<SchedulerRace>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
@@ -5600,7 +5420,6 @@ fn restore_directory_arena(
         &mut meshes,
         &mut state,
         &mut flood,
-        &mut race,
         &navigator.0.current_path,
         &run,
         true,

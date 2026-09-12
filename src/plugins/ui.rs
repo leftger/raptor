@@ -8,7 +8,7 @@ use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::plugins::music::MusicState;
 use crate::state::{
     FloodState, HistoryState, InteractionMode, MachineState, NavigatorResource, PauseState,
-    SchedulerRace, SelectionState, UiNotice, UiSettings,
+    SelectionState, UiNotice, UiSettings,
 };
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -693,7 +693,6 @@ fn update_status_text(
     ui_notice: Res<UiNotice>,
     lightcycle: Res<LightcycleState>,
     flood: Res<FloodState>,
-    race: Res<SchedulerRace>,
     history: Res<HistoryState>,
     document_load: Res<DocumentLoadState>,
     music: Res<MusicState>,
@@ -948,12 +947,6 @@ fn update_status_text(
         }
         if flood.active && flood.timer > flood.delay {
             status = format!("{status} | MEM OVERFLOW");
-        }
-        if race.sim.is_some() {
-            status = format!("{status} | SCHEDULER RACE");
-        }
-        if !race.notice.is_empty() {
-            status = format!("{status} | {}", race.notice);
         }
         if !history.notice.is_empty() {
             status = format!("{status} | {}", history.notice);

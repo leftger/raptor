@@ -142,9 +142,9 @@ pulse while light bars sweep up through the gap, so it is easy to spot from
 across the arena.
 
 The **first room of a session is a grace period**: it is dressed like every
-other directory, but no flood is armed and no scheduler race runs, and the
-status line says so. Everything you ride into after that is a normal room, and
-coming back to where you started later does not make it a grace room again.
+other directory, but the flood is not armed and the status line says so.
+Everything you ride into after that is a normal room, and coming back to where
+you started later does not make it a grace room again.
 
 Every folder's gate is cut into a different wall at a different offset, so you
 have to go looking for it, but it is derived from the folder's path rather than
@@ -505,11 +505,6 @@ world keeps up a running machine metaphor:
 * **Header telemetry** — a syscall trace ticks past the header alongside `PC`,
   `SP`, clock speed and die temperature, scaled by how much of the directory is
   loaded.
-* **Scheduler race** — three rival threads start across the directory and run
-  for the same gate you are. They ride the same model as you, so each wears a
-  magenta marker overhead to make it obvious they are not your own cycle. Touch
-  one and the run ends in a race condition; reach the gate first for a time slice
-  (a speed surge).
 * **Git time machine** — the directories you ride form a commit log. `Z`
   rewinds to the previous commit (and its arena), `Y` fast-forwards the redo
   branch back. The status line shows `HISTORY n`, with `↻` when a redo is

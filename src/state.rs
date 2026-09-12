@@ -171,15 +171,6 @@ impl FloodState {
     }
 }
 
-/// The rival threads racing the rider through a directory, plus the last
-/// result notice shown on the status line.
-#[derive(Resource, Default)]
-pub struct SchedulerRace {
-    pub sim: Option<crate::scheduler::RaceSim>,
-    pub notice: String,
-    pub timer: f32,
-}
-
 /// Directory visit history, played as a version-control time machine.
 ///
 /// `past` is the commit log of directories already ridden; `future` holds what

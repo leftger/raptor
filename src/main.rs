@@ -21,7 +21,6 @@ mod platformer;
 mod plinko;
 mod plugins;
 mod qbert;
-mod scheduler;
 mod snake;
 mod state;
 mod stealth;
