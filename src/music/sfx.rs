@@ -22,6 +22,8 @@ pub enum MusicSfx {
     Victory,
     /// Snappy falling zap for an asteroid-field beam.
     Zap,
+    /// Mechanical disk-head seek: a short low thud for directory hops.
+    Seek,
 }
 
 /// One frame of effect output. `freq` is ignored by effects whose oscillator is
@@ -37,13 +39,14 @@ pub struct SfxVoice {
 impl MusicSfx {
     /// Every effect, in graph order. The score walks this to declare and mix the
     /// chains, so a new variant cannot be forgotten in the output.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Crash,
         Self::Turn,
         Self::Beam,
         Self::Portal,
         Self::Victory,
         Self::Zap,
+        Self::Seek,
     ];
 
     /// Glicol reference chain this effect drives.
@@ -55,6 +58,7 @@ impl MusicSfx {
             Self::Portal => "~sfx_portal",
             Self::Victory => "~sfx_victory",
             Self::Zap => "~sfx_zap",
+            Self::Seek => "~sfx_seek",
         }
     }
 
@@ -72,6 +76,7 @@ impl MusicSfx {
                 format!("{chain}: squ 523.25 >> lpf 2600.0 0.7 >> mul 0.0 >> pan 0.0;")
             }
             Self::Zap => format!("{chain}: squ 1800.0 >> lpf 5200.0 0.7 >> mul 0.0 >> pan 0.0;"),
+            Self::Seek => format!("{chain}: noise 3 >> lpf 3200.0 0.7 >> mul 0.0 >> pan 0.0;"),
         }
     }
 
@@ -83,12 +88,13 @@ impl MusicSfx {
             Self::Portal => 0.5,
             Self::Victory => 1.8,
             Self::Zap => 0.12,
+            Self::Seek => 0.24,
         }
     }
 
     /// False for the noise-based crash, whose first node has no frequency.
     pub fn uses_pitch(self) -> bool {
-        !matches!(self, Self::Crash)
+        !matches!(self, Self::Crash | Self::Seek)
     }
 
     /// Envelope and motion at `progress` (0..1 through the effect).
@@ -141,6 +147,13 @@ impl MusicSfx {
                 freq: 1800.0 - 1500.0 * p,
                 cutoff: 5200.0,
                 gain: 0.24 * (1.0 - p).powf(1.4),
+                pan: 0.0,
+            },
+            Self::Seek => SfxVoice {
+                // A low mechanical thud that darkens as the head settles.
+                freq: 0.0,
+                cutoff: 900.0 * (1.0 - p) + 400.0,
+                gain: 0.26 * (1.0 - p).powf(2.2),
                 pan: 0.0,
             },
         }

@@ -587,6 +587,12 @@ pub struct LightcycleState {
     /// Bullet time is held down while riding a disc-wars ring. Set from input
     /// each frame; the ring's fixed step is scaled while it is true.
     pub slow_motion: bool,
+    /// Seconds of cache-hit ground-speed surge remaining.
+    pub cache_boost: f32,
+    /// Countdown to the next garbage-collector sweep of a directory arena.
+    pub gc_timer: f32,
+    /// Seconds left of the collector's world stall.
+    pub gc_pause: f32,
 }
 
 /// Timeline for the crash animation.

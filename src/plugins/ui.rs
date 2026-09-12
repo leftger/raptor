@@ -7,7 +7,8 @@ use crate::lightcycle::{LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::plugins::music::MusicState;
 use crate::state::{
-    InteractionMode, NavigatorResource, PauseState, SelectionState, UiNotice, UiSettings,
+    InteractionMode, MachineState, NavigatorResource, PauseState, SelectionState, UiNotice,
+    UiSettings,
 };
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -18,6 +19,7 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default())
+            .init_resource::<MachineState>()
             .add_systems(Startup, setup_ui)
             .add_systems(
                 Update,
@@ -32,6 +34,7 @@ impl Plugin for UiPlugin {
                     sync_radar,
                     update_radar,
                     sync_pause_menu,
+                    update_machine_stats,
                 ),
             );
     }
@@ -81,6 +84,10 @@ struct FolioPanelText;
 /// The pause/warp menu overlay, present only while a lightcycle run is paused.
 #[derive(Component)]
 struct PauseMenuPanel;
+
+/// The fake machine telemetry line in the header.
+#[derive(Component)]
+struct MachineStatsText;
 
 /// The radar panel, while a stealth run is on and gone when it is not.
 #[derive(Component)]
@@ -154,6 +161,66 @@ fn sync_radar(
                 }
             }
         });
+}
+
+/// A fake syscall trace the header ticker scrolls through.
+const SYSCALL_TRACE: [&str; 8] = [
+    "mov rax, [rdi]",
+    "call read",
+    "test rax, rax",
+    "jz .retry",
+    "push rbp",
+    "add rsp, 0x18",
+    "int 0x80",
+    "ret",
+];
+
+/// Drives the machine telemetry: a syscall trace cursor plus PC/SP, clock, and
+/// temperature readouts that scale with how much of the directory is loaded.
+fn update_machine_stats(
+    time: Res<Time>,
+    mode: Res<InteractionMode>,
+    lightcycle: Res<LightcycleState>,
+    navigator: Res<NavigatorResource>,
+    mut machine: ResMut<MachineState>,
+    mut text: Query<&mut Text, With<MachineStatsText>>,
+) {
+    let Ok(mut text) = text.single_mut() else {
+        return;
+    };
+
+    if *mode != InteractionMode::Lightcycle {
+        if **text != "CPU IDLE · BUS 0x00" {
+            **text = "CPU IDLE · BUS 0x00".to_string();
+        }
+        return;
+    }
+
+    let steps = (time.elapsed_secs() / 0.35) as usize;
+    let (dirs, files) = navigator.0.count_by_type();
+    let load = files as f32 + dirs as f32 * 0.5;
+    let boost = if lightcycle.cache_boost > 0.0 {
+        900.0
+    } else {
+        0.0
+    };
+    machine.index = steps % SYSCALL_TRACE.len();
+    machine.pc = (0x1000 + steps as u32 * 4) & 0xFFFF;
+    machine.sp = 0xFFF0_u32.wrapping_sub(steps as u32 * 4) & 0xFFFF;
+    machine.clock_mhz = 3200.0 + (load * 40.0).min(2600.0) + boost;
+    machine.temperature = 38.0 + (load * 0.35).min(28.0);
+
+    let trace = SYSCALL_TRACE[machine.index];
+    let line = format!(
+        "{trace} · PC 0x{:04X} · SP 0x{:04X} · {:.2} GHz · {:.0}°C",
+        machine.pc,
+        machine.sp,
+        machine.clock_mhz / 1000.0,
+        machine.temperature,
+    );
+    if **text != line {
+        **text = line;
+    }
 }
 
 /// Builds, refreshes and tears down the pause/warp menu overlay.
@@ -297,6 +364,20 @@ fn setup_ui(mut commands: Commands) {
                             ..default()
                         },
                         TextColor(config::TEXT_SECONDARY),
+                    ));
+                    // Machine telemetry sits at the far right of the header.
+                    header.spawn((
+                        MachineStatsText,
+                        Node {
+                            margin: UiRect::left(Val::Auto),
+                            ..default()
+                        },
+                        Text::new(""),
+                        TextFont {
+                            font_size: bevy::text::FontSize::Px(config::LABEL_FONT_SIZE),
+                            ..default()
+                        },
+                        TextColor(config::TEXT_PRIMARY),
                     ));
                 });
 
@@ -612,7 +693,7 @@ fn update_status_text(
     let mut status = if *mode == InteractionMode::Lightcycle {
         match &lightcycle.run {
             Some(run) => {
-                let mut status = format!("MODE: LIGHTCYCLE | TRAIL: {}", run.sim.trail.len());
+                let mut status = format!("MODE: LIGHTCYCLE | BUS TRACE: {}", run.sim.trail.len());
                 if run.sim.phase == crate::lightcycle::logic::RunPhase::Ready {
                     status = format!("{status} | READY: no empty spawn cell");
                 }
@@ -841,6 +922,15 @@ fn update_status_text(
             "SHOWING FIRST {} ENTRIES | {status}",
             crate::config::MAX_DIRECTORY_ENTRIES
         );
+    }
+
+    if *mode == InteractionMode::Lightcycle {
+        if lightcycle.cache_boost > 0.0 {
+            status = format!("{status} | CACHE HIT");
+        }
+        if lightcycle.gc_pause > 0.0 {
+            status = format!("{status} | GC PAUSE");
+        }
     }
 
     if ui_settings.show_fps

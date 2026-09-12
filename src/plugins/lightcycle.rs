@@ -31,7 +31,7 @@ use crate::plugins::transition::{ModeTransition, gods_eye_pose};
 use crate::qbert::{QbertPhase, QbertSim};
 use crate::snake::SnakeSim;
 use crate::state::{
-    DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
+    CacheState, DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
     OrbitCameraResource, PauseState, TrailSceneRoot,
 };
 use crate::stealth::{StealthPhase, StealthSim};
@@ -51,6 +51,7 @@ impl Plugin for LightcyclePlugin {
         app.init_resource::<InteractionMode>()
             .init_resource::<LightcycleState>()
             .init_resource::<PauseState>()
+            .init_resource::<CacheState>()
             .add_message::<DocumentRequested>()
             .add_message::<DocumentLoaded>()
             .add_message::<DocumentLoadFailed>()
@@ -583,7 +584,7 @@ fn trail_glass_material() -> StandardMaterial {
         ior: 1.45,
         attenuation_color: config::LIGHTCYCLE_TRAIL_ATTENUATION,
         attenuation_distance: 0.8,
-        emissive: LinearRgba::rgb(0.05, 0.55, 0.7),
+        emissive: LinearRgba::from(config::PCB_TRACE_COLOR) * config::PCB_TRACE_EMISSIVE,
         clearcoat: 1.0,
         clearcoat_perceptual_roughness: 0.06,
         double_sided: true,
@@ -4290,13 +4291,16 @@ fn update_document_focus(
 }
 
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn reset_on_directory_loaded(
     mut loaded: MessageReader<DirectoryLoaded>,
     mode: Res<InteractionMode>,
     mut state: ResMut<LightcycleState>,
+    mut cache: ResMut<CacheState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
+    mut effects: MessageWriter<MusicSfx>,
     old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
 ) {
     if *mode != InteractionMode::Lightcycle {
@@ -4308,12 +4312,55 @@ fn reset_on_directory_loaded(
 
         let run = build_active_run(&event.path, event.contents.nodes.clone());
         spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+        spawn_stack_frames(&mut commands, &assets, &event.path, &run);
+
+        // A directory already opened is a cache hit: a short speed surge for
+        // the rest of the run, plus the disk-head seek on the hop in.
+        let hit = !cache.visited.insert(event.path.clone());
+        state.cache_boost = if hit {
+            config::CACHE_BOOST_SECONDS
+        } else {
+            0.0
+        };
+        state.gc_timer = config::GC_INTERVAL_SECONDS;
+        state.gc_pause = 0.0;
+        effects.write(MusicSfx::Seek);
 
         state.clock = 0.0;
         state.crash_fx = None;
         state.entry_fx = None;
         state.restore_directory = false;
         state.run = Some(run);
+    }
+}
+
+/// Stacks a translucent plate above the arena for each level of the directory
+/// path: the rider's call stack.
+fn spawn_stack_frames(
+    commands: &mut Commands,
+    assets: &LightcycleAssets,
+    path: &Path,
+    run: &ActiveRun,
+) {
+    let depth = path.components().count().min(config::STACK_FRAME_MAX);
+    if depth == 0 {
+        return;
+    }
+    let span = config::GRID_SPACING;
+    let width = (run.arena.max.0 - run.arena.min.0 + 1) as f32 * span * 0.8;
+    let depth_z = (run.arena.max.1 - run.arena.min.1 + 1) as f32 * span * 0.8;
+    let center_x = (run.arena.min.0 + run.arena.max.0) as f32 * 0.5 * span;
+    let center_z = (run.arena.min.1 + run.arena.max.1) as f32 * 0.5 * span;
+    for level in 0..depth {
+        let y = config::STACK_FRAME_BASE_Y + level as f32 * config::STACK_FRAME_SPACING;
+        commands.spawn((
+            LightcycleSceneRoot,
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.trail_material.clone()),
+            Transform::from_xyz(center_x, y, center_z).with_scale(Vec3::new(width, 0.1, depth_z)),
+            Visibility::Visible,
+            Pickable::IGNORE,
+        ));
     }
 }
 
@@ -4782,7 +4829,7 @@ fn read_lightcycle_input(
             state.restore_directory = true;
         } else if let Some(parent) = navigator.0.begin_go_to_parent() {
             run.sim.pause_for_directory_change();
-            run.entering_label = Some("parent directory".to_string());
+            run.entering_label = Some("RET → parent".to_string());
             run.crash_label = None;
             requests.write(DirectoryRequested { path: parent });
         }
@@ -4908,13 +4955,38 @@ fn step_lightcycle(
     }
 
     let fixed_step = config::LIGHTCYCLE_FIXED_STEP;
+    // Directory arenas run the collector on a timer: when it fires the world
+    // stalls for a beat, then the sweep passes and play resumes. A revisit to
+    // an already-opened directory rides a cache-hit surge instead.
+    let dt = time.delta_secs();
+    if !source_run {
+        state.cache_boost = (state.cache_boost - dt).max(0.0);
+        if state.gc_pause > 0.0 {
+            state.gc_pause = (state.gc_pause - dt).max(0.0);
+        } else {
+            state.gc_timer -= dt;
+            if state.gc_timer <= 0.0 {
+                state.gc_timer = config::GC_INTERVAL_SECONDS;
+                state.gc_pause = config::GC_PAUSE_SECONDS;
+                effects.write(MusicSfx::Seek);
+            }
+        }
+    }
+
     // Bullet time stretches the simulated step without changing the real-time
     // cadence, so the bike, its disc, and the opponent all slow together.
-    let step = if source_run && state.slow_motion {
+    let mut step = if source_run && state.slow_motion {
         fixed_step * config::DISC_BULLET_TIME_SCALE
     } else {
         fixed_step
     };
+    if !source_run && state.gc_pause > 0.0 {
+        step *= config::GC_SLOW_SCALE;
+    }
+    if !source_run && state.cache_boost > 0.0 {
+        let heat = state.cache_boost / config::CACHE_BOOST_SECONDS;
+        step *= 1.0 + (config::CACHE_BOOST_SCALE - 1.0) * heat;
+    }
     let mut substeps = 0;
 
     while state.clock >= fixed_step && substeps < config::LIGHTCYCLE_MAX_SUBSTEPS {
@@ -5067,7 +5139,7 @@ fn step_lightcycle(
                             "street barrier".to_string()
                         }
                     }
-                    CrashReason::Wall => "arena wall".to_string(),
+                    CrashReason::Wall => "a dead bus line".to_string(),
                 };
                 run.crash_label = Some(label);
                 run.entering_label = None;
@@ -5078,7 +5150,7 @@ fn step_lightcycle(
                     .and_then(|nodes| nodes.get(index))
                     .map(|node| (node.name.clone(), node.path.clone()));
                 if let Some((name, path)) = details {
-                    run.entering_label = Some(name);
+                    run.entering_label = Some(format!("DMA → {name}"));
                     run.crash_label = None;
                     effects.write(MusicSfx::Beam);
                     state.entry_fx = Some(crate::lightcycle::EntryFx::new(
@@ -5087,7 +5159,7 @@ fn step_lightcycle(
                     ));
                 } else {
                     run.sim.phase = RunPhase::Crashed;
-                    run.crash_label = Some("missing directory".to_string());
+                    run.crash_label = Some("unmapped address".to_string());
                 }
             }
             StepOutcome::EnteringDocument(index) => {
@@ -5102,7 +5174,7 @@ fn step_lightcycle(
                     documents.write(DocumentRequested { path });
                 } else {
                     run.sim.phase = RunPhase::Running;
-                    run.crash_label = Some("missing document".to_string());
+                    run.crash_label = Some("unreadable sector".to_string());
                 }
             }
             StepOutcome::EnteringSource(index) => {
@@ -5117,18 +5189,18 @@ fn step_lightcycle(
                     sources.write(SourceRequested { path });
                 } else {
                     run.sim.phase = RunPhase::Running;
-                    run.crash_label = Some("missing source".to_string());
+                    run.crash_label = Some("unmapped sector".to_string());
                 }
             }
             StepOutcome::GoToParent => {
                 if let Some(parent) = navigator.0.begin_go_to_parent() {
-                    run.entering_label = Some("parent directory".to_string());
+                    run.entering_label = Some("RET → parent".to_string());
                     run.crash_label = None;
                     effects.write(MusicSfx::Portal);
                     requests.write(DirectoryRequested { path: parent });
                 } else {
                     run.sim.phase = RunPhase::Crashed;
-                    run.crash_label = Some("arena wall".to_string());
+                    run.crash_label = Some("a dead bus line".to_string());
                 }
             }
             StepOutcome::CloseDocument => {

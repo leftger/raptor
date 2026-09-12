@@ -46,6 +46,24 @@ pub struct PauseState {
     pub warp_index: usize,
 }
 
+/// Which directories the rider has already opened, so a revisit can be a
+/// cache hit.
+#[derive(Resource, Default)]
+pub struct CacheState {
+    pub visited: std::collections::HashSet<PathBuf>,
+}
+
+/// The fake machine telemetry shown in the HUD: a syscall trace cursor and
+/// register/clock readouts.
+#[derive(Resource, Default)]
+pub struct MachineState {
+    pub index: usize,
+    pub pc: u32,
+    pub sp: u32,
+    pub clock_mhz: f32,
+    pub temperature: f32,
+}
+
 #[derive(Resource)]
 pub struct OrbitCameraResource {
     pub yaw: f32,

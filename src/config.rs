@@ -158,6 +158,31 @@ pub const LIGHTCYCLE_TRAIL_COLOR: Color = Color::srgba(0.55, 0.95, 1.0, 1.0);
 /// Tint of light passing through the trail, slightly greener than the surface
 /// so the sheet reads as thick glass rather than a cyan decal.
 pub const LIGHTCYCLE_TRAIL_ATTENUATION: Color = Color::srgba(0.35, 0.9, 0.85, 1.0);
+
+// --- Machine-innards theming ----------------------------------------------
+//
+// The trail is the rider's copper trace on a motherboard, the directory hop is
+// a disk seek, revisiting a hot directory is a cache hit, and the collector
+// periodically stalls the world. All flavor over existing systems.
+
+/// Emissive of the trail sheet: a lit PCB trace rather than a plain glass wall.
+pub const PCB_TRACE_COLOR: Color = Color::srgb(0.25, 0.98, 0.8);
+pub const PCB_TRACE_EMISSIVE: f32 = 2.4;
+/// A revisit to an already-visited directory grants a short speed surge.
+pub const CACHE_BOOST_SECONDS: f32 = 5.0;
+/// Peak ground-speed multiplier at the moment of the hit.
+pub const CACHE_BOOST_SCALE: f32 = 1.4;
+/// Seconds between garbage-collector sweeps of a directory arena.
+pub const GC_INTERVAL_SECONDS: f32 = 24.0;
+/// How long the collector stalls the world once it runs.
+pub const GC_PAUSE_SECONDS: f32 = 0.55;
+/// Simulated-time scale during the collector's pause.
+pub const GC_SLOW_SCALE: f32 = 0.2;
+/// Translucent plates stacked above a directory by its depth: the call stack.
+pub const STACK_FRAME_BASE_Y: f32 = 7.0;
+pub const STACK_FRAME_SPACING: f32 = 2.0;
+pub const STACK_FRAME_MAX: usize = 6;
+
 pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
 pub const LIGHTCYCLE_CITY_FLOOR_COLOR: Color = Color::srgb(0.008, 0.012, 0.025);
 pub const LIGHTCYCLE_CITY_FOUNDATION_COLOR: Color = Color::srgb(0.018, 0.025, 0.055);
