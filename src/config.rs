@@ -209,6 +209,26 @@ pub const FLOOD_CROSSING_SECONDS: f32 = 42.0;
 pub const FLOOD_COLOR: Color = Color::srgba(1.0, 0.25, 0.15, 0.4);
 pub const FLOOD_HEIGHT: f32 = 7.0;
 
+// --- Scheduler race --------------------------------------------------------
+
+/// Rival threads sharing the directory's roads.
+pub const SCHEDULER_RIVAL_COUNT: usize = 3;
+/// Seconds a rival spends on each cell.
+pub const SCHEDULER_STEP_SECONDS: f32 = 0.3;
+/// Roads a directory needs before a race is worth running.
+pub const SCHEDULER_MIN_ROADS: usize = 10;
+/// How close a rival has to get for the rider to be caught.
+pub const SCHEDULER_HIT_RADIUS: f32 = 1.1;
+/// How long the result notice stays up.
+pub const SCHEDULER_NOTICE_SECONDS: f32 = 2.5;
+/// Speed surge awarded for beating every thread to the gate.
+pub const SCHEDULER_REWARD_SECONDS: f32 = 4.0;
+
+// --- Git time machine ------------------------------------------------------
+
+/// Directories remembered for rewind / fast-forward.
+pub const HISTORY_LIMIT: usize = 32;
+
 pub const LIGHTCYCLE_WALL_COLOR: Color = Color::srgba(0.0, 0.7, 0.6, 1.0);
 pub const LIGHTCYCLE_CITY_FLOOR_COLOR: Color = Color::srgb(0.008, 0.012, 0.025);
 pub const LIGHTCYCLE_CITY_FOUNDATION_COLOR: Color = Color::srgb(0.018, 0.025, 0.055);

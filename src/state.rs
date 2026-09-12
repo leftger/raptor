@@ -1,7 +1,7 @@
 use crate::config;
 use crate::filesystem::Navigator;
 use bevy::prelude::{Component, Resource};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Resource)]
 pub struct NavigatorResource(pub Navigator);
@@ -78,6 +78,77 @@ pub struct FloodState {
     pub center_x: f32,
     pub width: f32,
     pub plane: f32,
+}
+
+/// The rival threads racing the rider through a directory, plus the last
+/// result notice shown on the status line.
+#[derive(Resource, Default)]
+pub struct SchedulerRace {
+    pub sim: Option<crate::scheduler::RaceSim>,
+    pub notice: String,
+    pub timer: f32,
+}
+
+/// Directory visit history, played as a version-control time machine.
+///
+/// `past` is the commit log of directories already ridden; `future` holds what
+/// a rewind undid, so a fast-forward can put it back.
+#[derive(Resource, Default)]
+pub struct HistoryState {
+    pub past: Vec<PathBuf>,
+    pub future: Vec<PathBuf>,
+    /// Last rewind/fast-forward result shown on the status line.
+    pub notice: String,
+    pub notice_timer: f32,
+}
+
+impl HistoryState {
+    /// Records riding into `path`. A load that lands where the log already
+    /// points (a rewind or fast-forward arriving) is not a new commit, and any
+    /// redo branch is dropped when the rider genuinely goes somewhere new.
+    pub fn commit(&mut self, path: &Path) {
+        if self.past.last().is_some_and(|last| last == path) {
+            return;
+        }
+        self.past.push(path.to_path_buf());
+        if self.past.len() > config::HISTORY_LIMIT {
+            self.past.remove(0);
+        }
+        self.future.clear();
+    }
+
+    /// Steps back one directory: the present lands on the redo stack and the
+    /// previous commit becomes the target.
+    pub fn rewind(&mut self) -> Option<PathBuf> {
+        if !self.can_rewind() {
+            return None;
+        }
+        let current = self.past.pop()?;
+        self.future.push(current);
+        self.past.last().cloned()
+    }
+
+    /// Steps forward again, undoing a rewind.
+    pub fn fast_forward(&mut self) -> Option<PathBuf> {
+        let target = self.future.pop()?;
+        self.past.push(target.clone());
+        Some(target)
+    }
+
+    /// How deep the commit log is, for the HUD.
+    pub fn depth(&self) -> usize {
+        self.past.len()
+    }
+
+    /// True while a redo branch is waiting.
+    pub fn can_rewind(&self) -> bool {
+        self.past.len() > 1
+    }
+
+    /// True while a fast-forward is available.
+    pub fn can_fast_forward(&self) -> bool {
+        !self.future.is_empty()
+    }
 }
 
 #[derive(Resource)]
@@ -183,3 +254,74 @@ pub struct LightcycleSceneRoot;
 /// Trail mesh chunks owned by the lightcycle mode.
 #[derive(Component, Debug)]
 pub struct TrailSceneRoot;
+
+#[cfg(test)]
+mod tests {
+    use super::HistoryState;
+    use std::path::{Path, PathBuf};
+
+    fn path(name: &str) -> PathBuf {
+        PathBuf::from(name)
+    }
+
+    #[test]
+    fn a_revisit_of_the_same_directory_is_not_a_new_commit() {
+        let mut history = HistoryState::default();
+        history.commit(Path::new("/a"));
+        history.commit(Path::new("/a"));
+        assert_eq!(history.depth(), 1, "the log should not grow on a revisit");
+    }
+
+    #[test]
+    fn rewinding_walks_back_and_fast_forwarding_restores() {
+        let mut history = HistoryState::default();
+        history.commit(Path::new("/a"));
+        history.commit(Path::new("/b"));
+        history.commit(Path::new("/c"));
+
+        assert_eq!(history.rewind(), Some(path("/b")));
+        assert_eq!(history.rewind(), Some(path("/a")));
+        assert!(history.can_fast_forward());
+
+        assert_eq!(history.fast_forward(), Some(path("/b")));
+        assert_eq!(history.fast_forward(), Some(path("/c")));
+        assert!(!history.can_fast_forward(), "the redo branch is spent");
+    }
+
+    #[test]
+    fn the_first_commit_has_nowhere_to_rewind_to() {
+        let mut history = HistoryState::default();
+        history.commit(Path::new("/a"));
+        assert_eq!(history.rewind(), None);
+        assert_eq!(
+            history.depth(),
+            1,
+            "a refused rewind must not consume the log"
+        );
+    }
+
+    #[test]
+    fn going_somewhere_new_drops_the_redo_branch() {
+        let mut history = HistoryState::default();
+        history.commit(Path::new("/a"));
+        history.commit(Path::new("/b"));
+        assert_eq!(history.rewind(), Some(path("/a")));
+        assert!(history.can_fast_forward());
+
+        history.commit(Path::new("/elsewhere"));
+        assert!(
+            !history.can_fast_forward(),
+            "a new commit forks the history"
+        );
+        assert_eq!(history.depth(), 2);
+    }
+
+    #[test]
+    fn the_log_is_capped() {
+        let mut history = HistoryState::default();
+        for index in 0..(crate::config::HISTORY_LIMIT + 8) {
+            history.commit(Path::new(&format!("/dir{index}")));
+        }
+        assert_eq!(history.depth(), crate::config::HISTORY_LIMIT);
+    }
+}

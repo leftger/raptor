@@ -7,8 +7,8 @@ use crate::lightcycle::{LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::plugins::music::MusicState;
 use crate::state::{
-    FloodState, InteractionMode, MachineState, NavigatorResource, PauseState, SelectionState,
-    UiNotice, UiSettings,
+    FloodState, HistoryState, InteractionMode, MachineState, NavigatorResource, PauseState,
+    SchedulerRace, SelectionState, UiNotice, UiSettings,
 };
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
@@ -681,6 +681,8 @@ fn update_status_text(
     ui_notice: Res<UiNotice>,
     lightcycle: Res<LightcycleState>,
     flood: Res<FloodState>,
+    race: Res<SchedulerRace>,
+    history: Res<HistoryState>,
     document_load: Res<DocumentLoadState>,
     music: Res<MusicState>,
     diagnostics: Res<DiagnosticsStore>,
@@ -931,6 +933,22 @@ fn update_status_text(
         }
         if flood.active && flood.timer > flood.delay {
             status = format!("{status} | MEM OVERFLOW");
+        }
+        if race.sim.is_some() {
+            status = format!("{status} | SCHEDULER RACE");
+        }
+        if !race.notice.is_empty() {
+            status = format!("{status} | {}", race.notice);
+        }
+        if !history.notice.is_empty() {
+            status = format!("{status} | {}", history.notice);
+        } else if history.depth() > 1 {
+            let redo = if history.can_fast_forward() {
+                " ↻"
+            } else {
+                ""
+            };
+            status = format!("{status} | HISTORY {}{redo}", history.depth());
         }
         if lightcycle.cache_boost > 0.0 {
             status = format!("{status} | CACHE HIT");

@@ -29,10 +29,11 @@ use crate::platformer::{PlatformerPhase, PlatformerSim};
 use crate::plinko::{PlinkoPhase, PlinkoSim};
 use crate::plugins::transition::{ModeTransition, gods_eye_pose};
 use crate::qbert::{QbertPhase, QbertSim};
+use crate::scheduler::{RaceSim, start_cells};
 use crate::snake::SnakeSim;
 use crate::state::{
-    CacheState, DirectorySceneRoot, FloodState, InteractionMode, LightcycleSceneRoot,
-    NavigatorResource, OrbitCameraResource, PauseState, TrailSceneRoot,
+    CacheState, DirectorySceneRoot, FloodState, HistoryState, InteractionMode, LightcycleSceneRoot,
+    NavigatorResource, OrbitCameraResource, PauseState, SchedulerRace, TrailSceneRoot,
 };
 use crate::stealth::{StealthPhase, StealthSim};
 use crate::surfer::{SurferPhase, SurferSim};
@@ -53,6 +54,8 @@ impl Plugin for LightcyclePlugin {
             .init_resource::<PauseState>()
             .init_resource::<CacheState>()
             .init_resource::<FloodState>()
+            .init_resource::<SchedulerRace>()
+            .init_resource::<HistoryState>()
             .add_message::<DocumentRequested>()
             .add_message::<DocumentLoaded>()
             .add_message::<DocumentLoadFailed>()
@@ -84,6 +87,7 @@ impl Plugin for LightcyclePlugin {
                         read_lightcycle_input.run_if(in_lightcycle_mode),
                         step_lightcycle.run_if(in_lightcycle_mode),
                         update_flood.run_if(in_lightcycle_mode),
+                        update_scheduler_race.run_if(in_lightcycle_mode),
                         restore_directory_arena.run_if(in_lightcycle_mode),
                         spawn_crash_effect.run_if(in_lightcycle_mode),
                         update_crash_effects.run_if(in_lightcycle_mode),
@@ -232,6 +236,12 @@ struct CycleEntity;
 /// The rising memory-flood wall of a directory run.
 #[derive(Component)]
 struct FloodEntity;
+
+/// One rival thread of the scheduler race, indexed into `RaceSim.racers`.
+#[derive(Component)]
+struct RivalEntity {
+    index: usize,
+}
 
 /// Small mesh burst emitted at the crash point.
 #[derive(Component)]
@@ -4324,6 +4334,8 @@ fn reset_on_directory_loaded(
     mut state: ResMut<LightcycleState>,
     mut cache: ResMut<CacheState>,
     mut flood: ResMut<FloodState>,
+    mut race: ResMut<SchedulerRace>,
+    mut history: ResMut<HistoryState>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
@@ -4344,9 +4356,11 @@ fn reset_on_directory_loaded(
             &assets,
             &mut state,
             &mut flood,
+            &mut race,
             &event.path,
             &run,
         );
+        history.commit(&event.path);
 
         // A directory already opened is a cache hit: a short speed surge for
         // the rest of the run, plus the disk-head seek on the hop in.
@@ -4377,6 +4391,7 @@ fn decorate_directory_run(
     assets: &LightcycleAssets,
     state: &mut LightcycleState,
     flood: &mut FloodState,
+    race: &mut SchedulerRace,
     path: &Path,
     run: &ActiveRun,
 ) {
@@ -4465,6 +4480,33 @@ fn decorate_directory_run(
         Visibility::Hidden,
         Pickable::IGNORE,
     ));
+
+    // Scheduler race: threads start across the directory and run for the gate.
+    race.sim = None;
+    race.notice.clear();
+    race.timer = 0.0;
+    if run.arena.roads.len() >= config::SCHEDULER_MIN_ROADS
+        && let Some(portal) = run.arena.parent_portal.as_ref()
+    {
+        let starts = start_cells(&run.arena.roads, portal.to, config::SCHEDULER_RIVAL_COUNT);
+        if !starts.is_empty() {
+            race.sim = Some(RaceSim::new(starts, portal.to));
+        }
+    }
+    for index in 0..config::SCHEDULER_RIVAL_COUNT {
+        commands.spawn((
+            LightcycleSceneRoot,
+            RivalEntity { index },
+            Transform::from_xyz(0.0, 0.0, 0.0),
+            Visibility::Hidden,
+            Pickable::IGNORE,
+            children![(
+                WorldAssetRoot(assets.cycle_scene.clone()),
+                Transform::from_rotation(Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW))
+                    .with_scale(Vec3::splat(config::LIGHTCYCLE_MODEL_SCALE * 0.85)),
+            )],
+        ));
+    }
 }
 
 /// True when any component of the path names a well-known heavy or hidden
@@ -4543,6 +4585,119 @@ fn update_flood(
     if progress >= 1.0 {
         // The spill is reclaimed and the flood recedes to the far edge.
         flood.timer = 0.0;
+    }
+}
+
+/// Runs the scheduler race: moves the rival threads, positions their entities,
+/// crashes the rider into a race condition on contact, and settles the result
+/// when either side reaches the gate first.
+fn update_scheduler_race(
+    time: Res<Time>,
+    pause: Res<PauseState>,
+    mut state: ResMut<LightcycleState>,
+    mut race: ResMut<SchedulerRace>,
+    mut effects: MessageWriter<MusicSfx>,
+    mut rivals: Query<(&RivalEntity, &mut Transform, &mut Visibility)>,
+) {
+    if race.timer > 0.0 {
+        race.timer = (race.timer - time.delta_secs()).max(0.0);
+        if race.timer == 0.0 {
+            race.notice.clear();
+        }
+    }
+    if pause.paused {
+        return;
+    }
+
+    let running = state.run.as_ref().is_some_and(|run| {
+        matches!(run.environment, RunEnvironment::Directory { .. })
+            && run.sim.phase == RunPhase::Running
+    });
+    if !running {
+        for (_, _, mut visibility) in &mut rivals {
+            *visibility = Visibility::Hidden;
+        }
+        race.sim = None;
+        return;
+    }
+
+    // Advance the threads, then judge the gate. The bike's cell and the gate
+    // are both grid coordinates, so the check is a plain distance.
+    let player_position = {
+        let run = state.run.as_ref().expect("checked above");
+        let Some(sim) = race.sim.as_mut() else {
+            for (_, _, mut visibility) in &mut rivals {
+                *visibility = Visibility::Hidden;
+            }
+            return;
+        };
+        let target = sim.target;
+        let player_cell = run.sim.cell;
+        let events = sim.update(time.delta_secs(), &run.arena.roads);
+        let player_at_gate =
+            (target.0 - player_cell.0).abs() + (target.1 - player_cell.1).abs() <= 1;
+        if player_at_gate {
+            race.notice = "TIME SLICE EARNED".to_string();
+            race.timer = config::SCHEDULER_NOTICE_SECONDS;
+            race.sim = None;
+        } else if events.rival_reached_gate {
+            race.notice = "CONTEXT SWITCH".to_string();
+            race.timer = config::SCHEDULER_NOTICE_SECONDS;
+            race.sim = None;
+        }
+        cycle_world_position(&run.sim)
+    };
+
+    if race.sim.is_none() {
+        if race.notice == "TIME SLICE EARNED" {
+            state.cache_boost = config::SCHEDULER_REWARD_SECONDS.max(state.cache_boost);
+        }
+        for (_, _, mut visibility) in &mut rivals {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    }
+
+    let mut contact = false;
+    for (rival, mut transform, mut visibility) in &mut rivals {
+        let racer = race
+            .sim
+            .as_ref()
+            .and_then(|sim| sim.racers.get(rival.index))
+            .copied();
+        let Some(racer) = racer else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        let position = Vec3::new(
+            racer.cell.0 as f32 * config::GRID_SPACING,
+            0.0,
+            racer.cell.1 as f32 * config::GRID_SPACING,
+        );
+        transform.translation = position;
+        if let Some(prev) = racer.prev {
+            let dx = (racer.cell.0 - prev.0) as f32;
+            let dz = (racer.cell.1 - prev.1) as f32;
+            if dx != 0.0 || dz != 0.0 {
+                transform.rotation = Quat::from_rotation_y(dx.atan2(dz));
+            }
+        }
+        *visibility = Visibility::Visible;
+        if player_position.distance(position) < config::SCHEDULER_HIT_RADIUS {
+            contact = true;
+        }
+    }
+
+    if contact
+        && let Some(run) = state.run.as_mut()
+        && run.sim.phase == RunPhase::Running
+    {
+        run.sim.phase = RunPhase::Crashed;
+        run.crash_label = Some("a race condition".to_string());
+        state.crash_fx = Some(crate::lightcycle::CrashFx::new(
+            config::LIGHTCYCLE_CRASH_FX_DURATION,
+        ));
+        effects.write(MusicSfx::Crash);
     }
 }
 
@@ -4797,13 +4952,22 @@ fn read_lightcycle_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     transition: Res<ModeTransition>,
+    time: Res<Time>,
     mut state: ResMut<LightcycleState>,
     mut pause: ResMut<PauseState>,
+    mut history: ResMut<HistoryState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
     mut effects: MessageWriter<MusicSfx>,
     mut warps: MessageWriter<WarpRequested>,
 ) {
+    if history.notice_timer > 0.0 {
+        history.notice_timer = (history.notice_timer - time.delta_secs()).max(0.0);
+        if history.notice_timer == 0.0 {
+            history.notice.clear();
+        }
+    }
+
     // Riding controls belong to the run, not to the flight arriving at it.
     if transition.is_active() {
         state.slow_motion = false;
@@ -4838,6 +5002,39 @@ fn read_lightcycle_input(
     }
     if pause_key {
         pause.paused = true;
+        return;
+    }
+
+    // Git time machine: Z rewinds to the previous directory ridden and Y puts
+    // the present back. Both re-enter an arena, so the layout returns with it.
+    if keys.just_pressed(KeyCode::KeyZ) {
+        match history.rewind() {
+            Some(path) => {
+                history.notice = "REWIND".to_string();
+                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+                effects.write(MusicSfx::Seek);
+                requests.write(DirectoryRequested { path });
+            }
+            None => {
+                history.notice = "AT THE FIRST COMMIT".to_string();
+                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+            }
+        }
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyY) {
+        match history.fast_forward() {
+            Some(path) => {
+                history.notice = "FAST-FORWARD".to_string();
+                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+                effects.write(MusicSfx::Seek);
+                requests.write(DirectoryRequested { path });
+            }
+            None => {
+                history.notice = "NOTHING TO REDO".to_string();
+                history.notice_timer = config::SCHEDULER_NOTICE_SECONDS;
+            }
+        }
         return;
     }
 
@@ -5069,10 +5266,12 @@ fn restart_run(run: &mut ActiveRun) {
 }
 
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 fn restore_directory_arena(
     mut state: ResMut<LightcycleState>,
     navigator: Res<NavigatorResource>,
     mut flood: ResMut<FloodState>,
+    mut race: ResMut<SchedulerRace>,
     assets: Res<LightcycleAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
@@ -5090,6 +5289,7 @@ fn restore_directory_arena(
         &assets,
         &mut state,
         &mut flood,
+        &mut race,
         &navigator.0.current_path,
         &run,
     );

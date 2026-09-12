@@ -492,6 +492,13 @@ world keeps up a running machine metaphor:
 * **Header telemetry** — a syscall trace ticks past the header alongside `PC`,
   `SP`, clock speed and die temperature, scaled by how much of the directory is
   loaded.
+* **Scheduler race** — three rival threads start across the directory and run
+  for the same gate you are. Touch one and the run ends in a race condition;
+  reach the gate first for a time slice (a speed surge).
+* **Git time machine** — the directories you ride form a commit log. `Z`
+  rewinds to the previous commit (and its arena), `Y` fast-forwards the redo
+  branch back. The status line shows `HISTORY n`, with `↻` when a redo is
+  waiting.
 
 The pause menu (`P` / `Esc`) lists every game so you can warp straight into any
 of them without hunting for a file.
