@@ -965,8 +965,12 @@ fn update_status_text(
         if lightcycle.cache_boost > 0.0 {
             status = format!("{status} | CACHE HIT");
         }
+        // The stall itself is under a third of a second, so the label follows
+        // the sweep instead: it is up for as long as the wave is on the arena.
         if lightcycle.gc_pause > 0.0 {
-            status = format!("{status} | GC PAUSE");
+            status = format!("{status} | **GC PAUSE**");
+        } else if lightcycle.gc_sweep > 0.0 {
+            status = format!("{status} | GC SWEEP");
         }
     }
 

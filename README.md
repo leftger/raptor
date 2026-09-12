@@ -483,8 +483,10 @@ world keeps up a running machine metaphor:
 * **Disk seek** — every directory hop plays a mechanical head-seek cue.
 * **Cache hit** — revisiting a directory you have already opened grants a short
   ground-speed surge.
-* **Garbage collector** — every so often the collector runs and the world
-  stalls for a beat while the sweep passes.
+* **Garbage collector** — every so often the collector runs: a bright sweep
+  crosses the arena and the world stumbles for a beat as it passes, so the
+  slowdown has a visible cause. The status line shows `GC SWEEP`, then
+  `**GC PAUSE**` while the step is scaled down.
 * **Memory flood** — after a short delay a wall of spilled memory rises across
   the arena. Fall behind it and the run ends in a buffer overflow. Restarting
   sends the flood back to the edge, so a respawn is never killed by the wall

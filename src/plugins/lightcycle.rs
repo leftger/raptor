@@ -87,6 +87,7 @@ impl Plugin for LightcyclePlugin {
                         read_lightcycle_input.run_if(in_lightcycle_mode),
                         step_lightcycle.run_if(in_lightcycle_mode),
                         update_flood.run_if(in_lightcycle_mode),
+                        update_gc_sweep.run_if(in_lightcycle_mode),
                         update_scheduler_race.run_if(in_lightcycle_mode),
                         restore_directory_arena.run_if(in_lightcycle_mode),
                         spawn_crash_effect.run_if(in_lightcycle_mode),
@@ -157,6 +158,8 @@ struct LightcycleAssets {
     /// Marker worn by scheduler-race rivals, so they are never mistaken for the
     /// player's own cycle.
     rival_material: Handle<StandardMaterial>,
+    /// The collector's sweep: the visible cause of the GC stall.
+    gc_sweep_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
     city_floor_material: Handle<StandardMaterial>,
     city_foundation_material: Handle<StandardMaterial>,
@@ -241,6 +244,10 @@ struct CycleEntity;
 /// The rising memory-flood wall of a directory run.
 #[derive(Component)]
 struct FloodEntity;
+
+/// The collector's sweep, crossing a directory arena while it stalls the world.
+#[derive(Component)]
+struct GcSweepEntity;
 
 /// One rival thread of the scheduler race, indexed into `RaceSim.racers`.
 #[derive(Component)]
@@ -833,6 +840,14 @@ fn setup_lightcycle_assets(
             base_color: config::SCHEDULER_RIVAL_COLOR,
             emissive: LinearRgba::from(config::SCHEDULER_RIVAL_COLOR) * 2.0,
             unlit: true,
+            ..default()
+        }),
+        gc_sweep_material: materials.add(StandardMaterial {
+            base_color: config::GC_SWEEP_COLOR,
+            emissive: LinearRgba::from(config::GC_SWEEP_COLOR) * 2.6,
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            double_sided: true,
             ..default()
         }),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
@@ -4413,6 +4428,7 @@ fn reset_on_directory_loaded(
         };
         state.gc_timer = config::GC_INTERVAL_SECONDS;
         state.gc_pause = 0.0;
+        state.gc_sweep = 0.0;
         effects.write(MusicSfx::Seek);
 
         state.clock = 0.0;
@@ -4537,6 +4553,28 @@ fn decorate_directory_run(
             MeshMaterial3d(assets.flood_crest_material.clone()),
             Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3::new(1.0, 0.06, 1.2)),
         )],
+    ));
+
+    // The collector's sweep rides the same arena bounds as the flood, so it
+    // needs no state of its own beyond its countdown.
+    state.gc_sweep = 0.0;
+    commands.spawn((
+        LightcycleSceneRoot,
+        GcSweepEntity,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.gc_sweep_material.clone()),
+        Transform::from_xyz(
+            flood.center_x,
+            config::GC_SWEEP_HEIGHT * 0.5,
+            flood.min_z * span,
+        )
+        .with_scale(Vec3::new(
+            flood.width,
+            config::GC_SWEEP_HEIGHT,
+            config::GC_SWEEP_THICKNESS,
+        )),
+        Visibility::Hidden,
+        Pickable::IGNORE,
     ));
 
     // Scheduler race: threads start across the directory and run for the gate.
@@ -4693,6 +4731,39 @@ fn update_flood(
         // The spill is reclaimed and the flood recedes to the far edge.
         flood.timer = 0.0;
     }
+}
+
+/// Where the collector's sweep stands, in grid Z, for the time left on its
+/// countdown. It enters at the arena's low-Z edge and leaves at the high-Z one,
+/// so `remaining == duration` is the start and `remaining == 0` is the end.
+fn gc_sweep_plane(remaining: f32, duration: f32, min_z: f32, max_z: f32) -> f32 {
+    let travelled = 1.0 - (remaining / duration.max(f32::EPSILON)).clamp(0.0, 1.0);
+    min_z + (max_z - min_z) * travelled
+}
+
+/// Draws the collector's sweep. The stall in `step_lightcycle` is what the
+/// player feels; this is what tells them why.
+fn update_gc_sweep(
+    pause: Res<PauseState>,
+    state: Res<LightcycleState>,
+    mut sweeps: Query<(&GcSweepEntity, &mut Transform, &mut Visibility)>,
+) {
+    let Ok((_, mut transform, mut visibility)) = sweeps.single_mut() else {
+        return;
+    };
+    if pause.paused || state.gc_sweep <= 0.0 {
+        *visibility = Visibility::Hidden;
+        return;
+    }
+    let Some(run) = state.run.as_ref() else {
+        *visibility = Visibility::Hidden;
+        return;
+    };
+    let min_z = run.arena.min.1 as f32;
+    let max_z = run.arena.max.1 as f32;
+    let plane = gc_sweep_plane(state.gc_sweep, config::GC_SWEEP_SECONDS, min_z, max_z);
+    transform.translation.z = plane * config::GRID_SPACING;
+    *visibility = Visibility::Visible;
 }
 
 /// Runs the scheduler race: moves the rival threads, positions their entities,
@@ -5308,6 +5379,11 @@ fn read_lightcycle_input(
         // The wall that ended the last run would otherwise still be standing
         // past the spawn cell, killing the respawn on its first frame.
         flood.recede();
+        // A restarted run starts with the collector idle too, rather than
+        // inheriting a sweep that was half way across the old one.
+        state.gc_pause = 0.0;
+        state.gc_sweep = 0.0;
+        state.gc_timer = config::GC_INTERVAL_SECONDS;
         state.clock = 0.0;
         state.crash_fx = None;
         state.entry_fx = None;
@@ -5464,6 +5540,7 @@ fn step_lightcycle(
     let dt = time.delta_secs();
     if !source_run {
         state.cache_boost = (state.cache_boost - dt).max(0.0);
+        state.gc_sweep = (state.gc_sweep - dt).max(0.0);
         if state.gc_pause > 0.0 {
             state.gc_pause = (state.gc_pause - dt).max(0.0);
         } else {
@@ -5471,6 +5548,7 @@ fn step_lightcycle(
             if state.gc_timer <= 0.0 {
                 state.gc_timer = config::GC_INTERVAL_SECONDS;
                 state.gc_pause = config::GC_PAUSE_SECONDS;
+                state.gc_sweep = config::GC_SWEEP_SECONDS;
                 effects.write(MusicSfx::Seek);
             }
         }
@@ -7471,8 +7549,8 @@ mod tests {
         chase_camera_rig, chase_rig_radius, city_base_trim_mesh, city_body_height, city_body_mesh,
         city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
-        glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing, hug_camera_shot,
-        is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
+        gc_sweep_plane, glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing,
+        hug_camera_shot, is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
         pose_world_position, rail_segments, road_marking_mesh, stack_frame_mesh, trail_centerline,
         trail_heights, trim_polyline_end, wrap_angle,
     };
@@ -8430,6 +8508,20 @@ mod tests {
         assert!(is_quarantined(Path::new("/srv/.git")));
         assert!(!is_quarantined(Path::new("/home/me/project/src")));
         assert!(!is_quarantined(Path::new("/home/me")));
+    }
+
+    #[test]
+    fn the_collectors_sweep_crosses_the_whole_arena() {
+        let duration = config::GC_SWEEP_SECONDS;
+        assert_eq!(gc_sweep_plane(duration, duration, -4.0, 8.0), -4.0);
+        assert_eq!(gc_sweep_plane(0.0, duration, -4.0, 8.0), 8.0);
+        let middle = gc_sweep_plane(duration * 0.5, duration, -4.0, 8.0);
+        assert!((middle - 2.0).abs() < 0.001, "half way is the middle");
+        assert!(
+            gc_sweep_plane(duration * 0.25, duration, -4.0, 8.0)
+                > gc_sweep_plane(duration * 0.75, duration, -4.0, 8.0),
+            "as the countdown falls, the sweep moves on"
+        );
     }
 
     #[test]

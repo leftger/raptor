@@ -187,9 +187,18 @@ pub const CACHE_BOOST_SCALE: f32 = 1.4;
 /// Seconds between garbage-collector sweeps of a directory arena.
 pub const GC_INTERVAL_SECONDS: f32 = 24.0;
 /// How long the collector stalls the world once it runs.
-pub const GC_PAUSE_SECONDS: f32 = 0.55;
+pub const GC_PAUSE_SECONDS: f32 = 0.3;
 /// Simulated-time scale during the collector's pause.
 pub const GC_SLOW_SCALE: f32 = 0.2;
+/// How long the collector's visible sweep takes to cross the arena.
+///
+/// The sweep is the reason for the stall, so it lasts longer than the stall
+/// itself: you see the wave coming, the world stumbles as it passes, and the
+/// wave carries on to the far edge.
+pub const GC_SWEEP_SECONDS: f32 = 1.4;
+pub const GC_SWEEP_HEIGHT: f32 = 2.6;
+pub const GC_SWEEP_THICKNESS: f32 = 0.35;
+pub const GC_SWEEP_COLOR: Color = Color::srgba(0.55, 1.0, 0.85, 0.45);
 /// The call stack: one open frame per path level, up in the ceiling.
 ///
 /// A solid plate per level sat right across the chase camera. These are hollow
