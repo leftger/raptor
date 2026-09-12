@@ -5,6 +5,7 @@
 //! status line can say so.
 
 use crate::config;
+use crate::disc::SourceGame;
 use bevy::prelude::{Message, Resource};
 use bevy::tasks::{IoTaskPool, Task, futures::check_ready};
 use std::path::PathBuf;
@@ -55,6 +56,12 @@ pub struct SourceLoadResult {
 #[derive(Message, Debug)]
 pub struct SourceRequested {
     pub path: PathBuf,
+}
+
+/// Warp straight into a game without needing a real file of that language.
+#[derive(Message, Debug)]
+pub struct WarpRequested {
+    pub game: SourceGame,
 }
 
 #[derive(Message, Debug)]

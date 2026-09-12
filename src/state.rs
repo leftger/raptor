@@ -38,6 +38,14 @@ pub struct UiNotice {
     pub message: Option<String>,
 }
 
+/// Pause-menu state for the lightcycle mode: whether the run is frozen and
+/// which warp target the menu cursor points at.
+#[derive(Resource, Default)]
+pub struct PauseState {
+    pub paused: bool,
+    pub warp_index: usize,
+}
+
 #[derive(Resource)]
 pub struct OrbitCameraResource {
     pub yaw: f32,

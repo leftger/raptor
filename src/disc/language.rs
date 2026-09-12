@@ -59,6 +59,51 @@ pub enum SourceGame {
     Plinko,
 }
 
+impl SourceGame {
+    /// How many games there are, for fixed-size tables and the warp menu.
+    pub const COUNT: usize = 15;
+
+    /// Every game, in menu order.
+    pub const ALL: [SourceGame; Self::COUNT] = [
+        SourceGame::DiscWars,
+        SourceGame::Asteroids,
+        SourceGame::Snake,
+        SourceGame::Platformer,
+        SourceGame::Breaker,
+        SourceGame::Stealth,
+        SourceGame::RiverSurfer,
+        SourceGame::Galaga,
+        SourceGame::PacMan,
+        SourceGame::Columns,
+        SourceGame::Tetris,
+        SourceGame::Frogger,
+        SourceGame::Qbert,
+        SourceGame::Bomberman,
+        SourceGame::Plinko,
+    ];
+
+    /// Display name used by the pause/warp menu.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DiscWars => "Disc Wars",
+            Self::Asteroids => "Asteroids",
+            Self::Snake => "Snake",
+            Self::Platformer => "Platformer",
+            Self::Breaker => "Brick Breaker",
+            Self::Stealth => "Stealth",
+            Self::RiverSurfer => "River Surfer",
+            Self::Galaga => "Galaga",
+            Self::PacMan => "Pac-Man",
+            Self::Columns => "Columns",
+            Self::Tetris => "Tetris",
+            Self::Frogger => "Frogger",
+            Self::Qbert => "Q*bert",
+            Self::Bomberman => "Bomberman",
+            Self::Plinko => "Plinko",
+        }
+    }
+}
+
 impl SourceLanguage {
     /// How many languages the allowlist covers, for fixed-size tables.
     pub const COUNT: usize = 16;
@@ -156,6 +201,16 @@ impl SourceLanguage {
             Self::Php => SourceGame::Bomberman,
             Self::R => SourceGame::Plinko,
         }
+    }
+
+    /// A representative language hosting the given game, for the warp menu's
+    /// synthetic file.
+    pub fn for_game(game: SourceGame) -> Self {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|language| language.game() == game)
+            .unwrap_or(Self::Rust)
     }
 
     /// Tool the "compiler" opponent is themed after. Flavor text only; nothing

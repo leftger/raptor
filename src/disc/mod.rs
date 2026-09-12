@@ -19,4 +19,4 @@ pub mod load;
 pub use combat::{DiscEvents, DiscPhase, DiscSim, PlayerSnapshot};
 pub use language::{SourceGame, SourceLanguage};
 pub use layout::{DiscLayout, build_capped_disc_arena, build_disc_arena, build_flat_arena};
-pub use load::{SourceLoadFailed, SourceLoadState, SourceLoaded, SourceRequested};
+pub use load::{SourceLoadFailed, SourceLoadState, SourceLoaded, SourceRequested, WarpRequested};

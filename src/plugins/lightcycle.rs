@@ -5,8 +5,8 @@ use crate::columns::{ColumnsPhase, ColumnsSim};
 use crate::config;
 use crate::disc::{
     DiscEvents, DiscLayout, DiscPhase, DiscSim, PlayerSnapshot, SourceGame, SourceLanguage,
-    SourceLoadFailed, SourceLoadState, SourceLoaded, SourceRequested, build_capped_disc_arena,
-    build_disc_arena, build_flat_arena,
+    SourceLoadFailed, SourceLoadState, SourceLoaded, SourceRequested, WarpRequested,
+    build_capped_disc_arena, build_disc_arena, build_flat_arena,
 };
 use crate::document::{
     DocumentLayout, DocumentLoadFailed, DocumentLoadState, DocumentLoaded, DocumentRequested,
@@ -32,7 +32,7 @@ use crate::qbert::{QbertPhase, QbertSim};
 use crate::snake::SnakeSim;
 use crate::state::{
     DirectorySceneRoot, InteractionMode, LightcycleSceneRoot, NavigatorResource,
-    OrbitCameraResource, TrailSceneRoot,
+    OrbitCameraResource, PauseState, TrailSceneRoot,
 };
 use crate::stealth::{StealthPhase, StealthSim};
 use crate::surfer::{SurferPhase, SurferSim};
@@ -42,7 +42,7 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct LightcyclePlugin;
 
@@ -50,12 +50,14 @@ impl Plugin for LightcyclePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InteractionMode>()
             .init_resource::<LightcycleState>()
+            .init_resource::<PauseState>()
             .add_message::<DocumentRequested>()
             .add_message::<DocumentLoaded>()
             .add_message::<DocumentLoadFailed>()
             .add_message::<SourceRequested>()
             .add_message::<SourceLoaded>()
             .add_message::<SourceLoadFailed>()
+            .add_message::<WarpRequested>()
             .add_systems(Startup, setup_lightcycle_assets)
             .add_systems(
                 Update,
@@ -70,6 +72,7 @@ impl Plugin for LightcyclePlugin {
                         start_source_loads,
                         poll_source_loads,
                         reset_on_source_loaded,
+                        handle_warp_requests,
                         apply_load_failure,
                         apply_document_load_failure,
                         apply_source_load_failure,
@@ -4455,6 +4458,68 @@ fn reset_on_source_loaded(
     }
 }
 
+/// Warps into a game from the pause menu, using a synthetic file of the
+/// game's representative language. Mirrors `reset_on_source_loaded` so the
+/// swap looks identical to entering a real file.
+#[allow(clippy::type_complexity)]
+fn handle_warp_requests(
+    mut requests: MessageReader<WarpRequested>,
+    mut state: ResMut<LightcycleState>,
+    assets: Res<LightcycleAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut commands: Commands,
+    mut pause: ResMut<PauseState>,
+    old_lightcycle_entities: Query<Entity, Or<(With<LightcycleSceneRoot>, With<TrailSceneRoot>)>>,
+) {
+    let Some(request) = requests.read().next() else {
+        return;
+    };
+    let language = SourceLanguage::for_game(request.game);
+    let bytes = warp_bytes(language);
+    let path = PathBuf::from(format!("warp/level.{}", language.name()));
+    despawn_lightcycle_entities(&mut commands, &old_lightcycle_entities);
+    let run = build_source_run(&path, language, &bytes);
+    spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
+    state.clock = 0.0;
+    state.crash_fx = None;
+    state.entry_fx = None;
+    state.restore_directory = false;
+    state.run = Some(run);
+    pause.paused = false;
+}
+
+/// A short synthetic source file so the warp menu can build any game without
+/// hunting for a real file of that language.
+fn warp_bytes(language: SourceLanguage) -> Vec<u8> {
+    let text = match language {
+        SourceLanguage::Rust => "fn warp() {\n    let x = 1;\n}\nfn chase() {}\n",
+        SourceLanguage::C => "int warp(void) {\n    return 1;\n}\nint chase(void) { return 0; }\n",
+        SourceLanguage::Cpp => "int warp() {\n    return 1;\n}\nint chase() { return 0; }\n",
+        SourceLanguage::Python => "def warp():\n    return 1\n\ndef chase():\n    return 0\n",
+        SourceLanguage::Slint => "export component Warp {\n    in property <int> x: 1;\n}\n",
+        SourceLanguage::Lua => {
+            "local function warp()\n    return 1\nend\nlocal function chase() return 0 end\n"
+        }
+        SourceLanguage::Shell => "warp() {\n    echo 1\n}\nchase() { echo 0; }\n",
+        SourceLanguage::Toml => "[warp]\nvalue = 1\n[chase]\nvalue = 0\n",
+        SourceLanguage::Json => "{\n  \"warp\": 1,\n  \"chase\": 0\n}\n",
+        SourceLanguage::Go => {
+            "package warp\n\nfunc warp() int {\n    return 1\n}\nfunc chase() int { return 0 }\n"
+        }
+        SourceLanguage::Ruby => "def warp\n  1\nend\n\ndef chase\n  0\nend\n",
+        SourceLanguage::Yaml => "warp: 1\nchase: 0\n",
+        SourceLanguage::JavaScript => {
+            "function warp() {\n    return 1;\n}\nconst chase = () => 0;\n"
+        }
+        SourceLanguage::Zig => "fn warp() i32 {\n    return 1;\n}\nfn chase() i32 { return 0; }\n",
+        SourceLanguage::Php => {
+            "<?php\nfunction warp() {\n    return 1;\n}\nfunction chase() { return 0; }\n"
+        }
+        SourceLanguage::R => "warp <- function() {\n    1\n}\nchase <- function() { 0 }\n",
+    };
+    text.as_bytes().to_vec()
+}
+
 fn apply_source_load_failure(
     mut failed: MessageReader<SourceLoadFailed>,
     mut sources: ResMut<SourceLoadState>,
@@ -4478,13 +4543,46 @@ fn read_lightcycle_input(
     mouse: Res<ButtonInput<MouseButton>>,
     transition: Res<ModeTransition>,
     mut state: ResMut<LightcycleState>,
+    mut pause: ResMut<PauseState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
     mut effects: MessageWriter<MusicSfx>,
+    mut warps: MessageWriter<WarpRequested>,
 ) {
     // Riding controls belong to the run, not to the flight arriving at it.
     if transition.is_active() {
         state.slow_motion = false;
+        return;
+    }
+
+    // The pause menu owns the controls while it is up: navigate with W/S or
+    // the arrows, warp with Enter/Space/click, and resume with Esc or P.
+    let pause_key = keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyP);
+    if pause.paused {
+        let up = keys.just_pressed(KeyCode::KeyW) || keys.just_pressed(KeyCode::ArrowUp);
+        let down = keys.just_pressed(KeyCode::KeyS) || keys.just_pressed(KeyCode::ArrowDown);
+        if up {
+            pause.warp_index = (pause.warp_index + SourceGame::COUNT - 1) % SourceGame::COUNT;
+        }
+        if down {
+            pause.warp_index = (pause.warp_index + 1) % SourceGame::COUNT;
+        }
+        if pause_key {
+            pause.paused = false;
+        }
+        let warp = keys.just_pressed(KeyCode::Enter)
+            || keys.just_pressed(KeyCode::Space)
+            || mouse.just_pressed(MouseButton::Left);
+        if warp {
+            warps.write(WarpRequested {
+                game: SourceGame::ALL[pause.warp_index],
+            });
+        }
+        state.slow_motion = false;
+        return;
+    }
+    if pause_key {
+        pause.paused = true;
         return;
     }
 
@@ -4740,6 +4838,7 @@ fn restore_directory_arena(
 fn step_lightcycle(
     time: Res<Time>,
     transition: Res<ModeTransition>,
+    pause: Res<PauseState>,
     mut state: ResMut<LightcycleState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
@@ -4753,6 +4852,13 @@ fn step_lightcycle(
     // down the first street.
     if transition.is_active() {
         state.clock = 0.0;
+        return;
+    }
+
+    // The pause menu freezes the sim in place; no clock accrues, so there is
+    // no catch-up burst when the run resumes.
+    if pause.paused {
+        state.slow_motion = false;
         return;
     }
 

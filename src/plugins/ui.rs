@@ -1,12 +1,14 @@
 use crate::asteroids::AsteroidsPhase;
 use crate::config;
-use crate::disc::DiscPhase;
+use crate::disc::{DiscPhase, SourceGame};
 use crate::document::DocumentLoadState;
 use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
 use crate::lightcycle::{LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::plugins::music::MusicState;
-use crate::state::{InteractionMode, NavigatorResource, SelectionState, UiNotice, UiSettings};
+use crate::state::{
+    InteractionMode, NavigatorResource, PauseState, SelectionState, UiNotice, UiSettings,
+};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 use std::path::PathBuf;
@@ -29,6 +31,7 @@ impl Plugin for UiPlugin {
                     update_folio_panel,
                     sync_radar,
                     update_radar,
+                    sync_pause_menu,
                 ),
             );
     }
@@ -74,6 +77,10 @@ struct FolioPanel;
 
 #[derive(Component)]
 struct FolioPanelText;
+
+/// The pause/warp menu overlay, present only while a lightcycle run is paused.
+#[derive(Component)]
+struct PauseMenuPanel;
 
 /// The radar panel, while a stealth run is on and gone when it is not.
 #[derive(Component)]
@@ -147,6 +154,63 @@ fn sync_radar(
                 }
             }
         });
+}
+
+/// Builds, refreshes and tears down the pause/warp menu overlay.
+fn sync_pause_menu(
+    mut commands: Commands,
+    mode: Res<InteractionMode>,
+    pause: Res<PauseState>,
+    panels: Query<Entity, With<PauseMenuPanel>>,
+    mut labels: Query<&mut Text, With<PauseMenuPanel>>,
+) {
+    if *mode != InteractionMode::Lightcycle || !pause.paused {
+        for panel in &panels {
+            commands.entity(panel).despawn();
+        }
+        return;
+    }
+
+    let mut text = String::from("PAUSED\n\n");
+    for (index, game) in SourceGame::ALL.iter().enumerate() {
+        let cursor = if index == pause.warp_index {
+            "> "
+        } else {
+            "  "
+        };
+        text.push_str(&format!("{cursor}{:>2}. {}\n", index + 1, game.label()));
+    }
+    text.push_str("\nW/S select · ENTER/SPACE warp · ESC/P resume");
+
+    if let Ok(mut label) = labels.single_mut() {
+        if **label != text {
+            **label = text;
+        }
+        return;
+    }
+
+    commands
+        .spawn((
+            PauseMenuPanel,
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(50.0),
+                top: percent(50.0),
+                width: px(360.0),
+                padding: UiRect::all(px(20.0)),
+                ..default()
+            },
+            BackgroundColor(config::UI_PANEL_COLOR),
+            Pickable::IGNORE,
+        ))
+        .with_child((
+            Text::new(text),
+            TextFont {
+                font_size: bevy::text::FontSize::Px(20.0),
+                ..default()
+            },
+            TextColor(config::TEXT_PRIMARY),
+        ));
 }
 
 /// Shades the radar: cover, the figure, the patrols, and everything a patrol can
