@@ -476,16 +476,19 @@ world keeps up a running machine metaphor:
   glass sheet.
 * **Hex-dump highway** — the roads carry a sampled byte stream as emissive data
   plates, seeded from the directory's path so a folder always lays out the same.
-* **Call stack** — one disc per path level, stacked in a small tower on the road
-  at the arena's edge, so `/home/you/project` is visibly three frames deep. It
-  stands beside the track rather than across the view.
+* **Call stack** — one open frame per path level, up in the ceiling, so
+  `/home/you/project` is visibly three frames deep. The frames are hollow and
+  overhang the arena's edge: you look up *through* the stack rather than at a
+  sheet of glass across the road.
 * **Disk seek** — every directory hop plays a mechanical head-seek cue.
 * **Cache hit** — revisiting a directory you have already opened grants a short
   ground-speed surge.
 * **Garbage collector** — every so often the collector runs and the world
   stalls for a beat while the sweep passes.
 * **Memory flood** — after a short delay a wall of spilled memory rises across
-  the arena. Fall behind it and the run ends in a buffer overflow.
+  the arena. Fall behind it and the run ends in a buffer overflow. Restarting
+  sends the flood back to the edge, so a respawn is never killed by the wall
+  that ended the last run.
 * **Quarantine vault** — directories named for heavy build or hidden folders
   (`node_modules`, `.git`, `target`, `vendor`, `__pycache__`, `.venv`,
   `.cache`, `build`) open as a quarantined vault: warning pylons at the corners
@@ -494,8 +497,10 @@ world keeps up a running machine metaphor:
   `SP`, clock speed and die temperature, scaled by how much of the directory is
   loaded.
 * **Scheduler race** — three rival threads start across the directory and run
-  for the same gate you are. Touch one and the run ends in a race condition;
-  reach the gate first for a time slice (a speed surge).
+  for the same gate you are. They ride the same model as you, so each wears a
+  magenta marker overhead to make it obvious they are not your own cycle. Touch
+  one and the run ends in a race condition; reach the gate first for a time slice
+  (a speed surge).
 * **Git time machine** — the directories you ride form a commit log. `Z`
   rewinds to the previous commit (and its arena), `Y` fast-forwards the redo
   branch back. The status line shows `HISTORY n`, with `↻` when a redo is

@@ -190,16 +190,20 @@ pub const GC_INTERVAL_SECONDS: f32 = 24.0;
 pub const GC_PAUSE_SECONDS: f32 = 0.55;
 /// Simulated-time scale during the collector's pause.
 pub const GC_SLOW_SCALE: f32 = 0.2;
-/// The call stack, drawn as a small tower of discs at the arena's edge.
+/// The call stack: one open frame per path level, up in the ceiling.
 ///
-/// It used to be one arena-wide plate per path level floating overhead, which
-/// sat right across the chase camera. As a compact floor-level stack it still
-/// grows with the path, but it is beside the track instead of in front of it.
-pub const STACK_FRAME_WIDTH: f32 = 1.15;
-pub const STACK_FRAME_THICKNESS: f32 = 0.16;
-pub const STACK_FRAME_GAP: f32 = 0.44;
-pub const STACK_FRAME_BOB: f32 = 0.11;
-pub const STACK_FRAME_BOB_SPEED: f32 = 1.7;
+/// A solid plate per level sat right across the chase camera. These are hollow
+/// rectangles over the arena's edges instead, so the middle stays clear: you
+/// look up through the stack rather than at it.
+pub const STACK_FRAME_BASE_Y: f32 = 8.0;
+pub const STACK_FRAME_SPACING: f32 = 2.2;
+/// Width of the frame's border bars.
+pub const STACK_FRAME_BAR: f32 = 1.1;
+pub const STACK_FRAME_THICKNESS: f32 = 0.14;
+/// How far the frames overhang the arena walls.
+pub const STACK_FRAME_MARGIN: f32 = 1.5;
+pub const STACK_FRAME_BOB: f32 = 0.06;
+pub const STACK_FRAME_BOB_SPEED: f32 = 0.9;
 pub const STACK_FRAME_MAX: usize = 6;
 
 /// Hex-dump highway: emissive data plates laid along the directory's roads.
@@ -226,6 +230,8 @@ pub const FLOOD_DELAY_SECONDS: f32 = 18.0;
 /// Seconds the flood takes to cross the arena once it starts.
 pub const FLOOD_CROSSING_SECONDS: f32 = 42.0;
 pub const FLOOD_COLOR: Color = Color::srgba(1.0, 0.25, 0.15, 0.4);
+/// Rival scheduler threads wear this so they never read as ghost lightcycles.
+pub const SCHEDULER_RIVAL_COLOR: Color = Color::srgb(1.0, 0.15, 0.75);
 /// The lit band along the flood's crest, so the hazard reads as a wall.
 pub const FLOOD_CREST_COLOR: Color = Color::srgba(1.0, 0.62, 0.35, 0.85);
 pub const FLOOD_HEIGHT: f32 = 7.0;

@@ -154,6 +154,9 @@ struct LightcycleAssets {
     /// The translucent wall of the memory flood, and its lit crest.
     flood_material: Handle<StandardMaterial>,
     flood_crest_material: Handle<StandardMaterial>,
+    /// Marker worn by scheduler-race rivals, so they are never mistaken for the
+    /// player's own cycle.
+    rival_material: Handle<StandardMaterial>,
     wall_material: Handle<StandardMaterial>,
     city_floor_material: Handle<StandardMaterial>,
     city_foundation_material: Handle<StandardMaterial>,
@@ -824,6 +827,12 @@ fn setup_lightcycle_assets(
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             double_sided: true,
+            ..default()
+        }),
+        rival_material: materials.add(StandardMaterial {
+            base_color: config::SCHEDULER_RIVAL_COLOR,
+            emissive: LinearRgba::from(config::SCHEDULER_RIVAL_COLOR) * 2.0,
+            unlit: true,
             ..default()
         }),
         wall_material: materials.add(unlit_material(config::LIGHTCYCLE_WALL_COLOR)),
@@ -4320,13 +4329,13 @@ fn animate_city_beacons(time: Res<Time>, mut beacons: Query<(&CityBeacon, &mut T
     }
 }
 
-/// Bobs the call-stack discs, so a directory's stack reads as live hardware
+/// Bobs the call-stack frames, so a directory's stack reads as live hardware
 /// rather than a static prop.
 fn animate_stack_frames(time: Res<Time>, mut discs: Query<(&StackFrameEntity, &mut Transform)>) {
     let elapsed = time.elapsed_secs();
     for (disc, mut transform) in &mut discs {
         let level = disc.level as f32;
-        let rest = config::STACK_FRAME_THICKNESS * 0.5 + level * config::STACK_FRAME_GAP;
+        let rest = config::STACK_FRAME_BASE_Y + level * config::STACK_FRAME_SPACING;
         let phase = elapsed * config::STACK_FRAME_BOB_SPEED + level * 0.6;
         transform.translation.y = rest + phase.sin() * config::STACK_FRAME_BOB;
     }
@@ -4385,6 +4394,7 @@ fn reset_on_directory_loaded(
         decorate_directory_run(
             &mut commands,
             &assets,
+            &mut meshes,
             &mut state,
             &mut flood,
             &mut race,
@@ -4420,6 +4430,7 @@ fn reset_on_directory_loaded(
 fn decorate_directory_run(
     commands: &mut Commands,
     assets: &LightcycleAssets,
+    meshes: &mut Assets<Mesh>,
     state: &mut LightcycleState,
     flood: &mut FloodState,
     race: &mut SchedulerRace,
@@ -4430,25 +4441,25 @@ fn decorate_directory_run(
     let center_x = (run.arena.min.0 + run.arena.max.0) as f32 * 0.5 * span;
     let center_z = (run.arena.min.1 + run.arena.max.1) as f32 * 0.5 * span;
 
-    // Call stack: one disc per path level, in a small tower at the arena's
-    // edge. It sits on a road cell, so it is on flat ground by construction and
-    // never lands inside a building.
+    // Call stack: one hollow frame per path level, up in the ceiling. The middle
+    // is open, so the chase camera looks through the stack instead of at it, and
+    // the bars overhang the arena's edge rather than crossing the road.
     let depth = path.components().count().min(config::STACK_FRAME_MAX);
-    if let Some(anchor) = stack_anchor(&run.arena.roads, run.arena.max) {
-        let base_x = anchor.0 as f32 * span;
-        let base_z = anchor.1 as f32 * span;
+    if depth > 0 {
+        let frame = meshes.add(stack_frame_mesh(
+            (run.arena.max.0 - run.arena.min.0 + 1) as f32 * span
+                + config::STACK_FRAME_MARGIN * 2.0,
+            (run.arena.max.1 - run.arena.min.1 + 1) as f32 * span
+                + config::STACK_FRAME_MARGIN * 2.0,
+        ));
         for level in 0..depth {
+            let y = config::STACK_FRAME_BASE_Y + level as f32 * config::STACK_FRAME_SPACING;
             commands.spawn((
                 LightcycleSceneRoot,
                 StackFrameEntity { level },
-                Mesh3d(assets.unit_cube.clone()),
+                Mesh3d(frame.clone()),
                 MeshMaterial3d(assets.trail_material.clone()),
-                Transform::from_xyz(base_x, config::STACK_FRAME_THICKNESS * 0.5, base_z)
-                    .with_scale(Vec3::new(
-                        config::STACK_FRAME_WIDTH,
-                        config::STACK_FRAME_THICKNESS,
-                        config::STACK_FRAME_WIDTH,
-                    )),
+                Transform::from_xyz(center_x, y, center_z),
                 Visibility::Visible,
                 Pickable::IGNORE,
             ));
@@ -4547,11 +4558,21 @@ fn decorate_directory_run(
             Transform::from_xyz(0.0, 0.0, 0.0),
             Visibility::Hidden,
             Pickable::IGNORE,
-            children![(
-                WorldAssetRoot(assets.cycle_scene.clone()),
-                Transform::from_rotation(Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW))
-                    .with_scale(Vec3::splat(config::LIGHTCYCLE_MODEL_SCALE * 0.85)),
-            )],
+            children![
+                (
+                    WorldAssetRoot(assets.cycle_scene.clone()),
+                    Transform::from_rotation(Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW))
+                        .with_scale(Vec3::splat(config::LIGHTCYCLE_MODEL_SCALE * 0.72)),
+                ),
+                // A thread marker above the bike: the rival shares the player's
+                // model, so without this it reads as a ghost of your own cycle.
+                (
+                    Mesh3d(assets.unit_cube.clone()),
+                    MeshMaterial3d(assets.rival_material.clone()),
+                    Transform::from_xyz(0.0, config::LIGHTCYCLE_CYCLE_HEIGHT + 1.1, 0.0)
+                        .with_scale(Vec3::new(0.22, 0.9, 0.22)),
+                ),
+            ],
         ));
     }
 }
@@ -4565,19 +4586,43 @@ fn is_quarantined(path: &Path) -> bool {
     })
 }
 
-/// Picks the road cell to stand a call-stack tower on: the one nearest the
-/// arena's far corner, so it sits at the edge of the play space instead of in
-/// the middle of it. Roads are flat ground by construction, which is what keeps
-/// the tower out of the buildings.
-fn stack_anchor(
-    roads: &std::collections::BTreeSet<(i32, i32)>,
-    corner: (i32, i32),
-) -> Option<(i32, i32)> {
-    roads.iter().copied().min_by_key(|cell| {
-        let dx = (corner.0 - cell.0) as i64;
-        let dz = (corner.1 - cell.1) as i64;
-        dx * dx + dz * dz
-    })
+/// Builds the outline of one call-stack frame: four bars around an open middle,
+/// centred on the origin so it can be lifted to its ceiling height.
+fn stack_frame_mesh(width: f32, depth: f32) -> Mesh {
+    let bar = config::STACK_FRAME_BAR;
+    let thickness = config::STACK_FRAME_THICKNESS;
+    // Measured to the outside of the bars, so they sit on the edge rather than
+    // hanging past it.
+    let half_x = (width - bar) * 0.5;
+    let half_z = (depth - bar) * 0.5;
+    // The near bar doubles as the base the other three merge onto.
+    let mut mesh = Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(Vec3::new(0.0, 0.0, -half_z))
+            .with_scale(Vec3::new(width, thickness, bar)),
+    );
+    let far = Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(Vec3::new(0.0, 0.0, half_z))
+            .with_scale(Vec3::new(width, thickness, bar)),
+    );
+    let left = Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(Vec3::new(-half_x, 0.0, 0.0)).with_scale(Vec3::new(
+            bar,
+            thickness,
+            depth - bar * 2.0,
+        )),
+    );
+    let right = Mesh::from(Cuboid::default()).transformed_by(
+        Transform::from_translation(Vec3::new(half_x, 0.0, 0.0)).with_scale(Vec3::new(
+            bar,
+            thickness,
+            depth - bar * 2.0,
+        )),
+    );
+    for segment in [far, left, right] {
+        mesh.merge(&segment)
+            .expect("stack frame cuboids must be merge-compatible");
+    }
+    mesh
 }
 
 /// Stable hash of a path, for seeding the hex-dump pattern.
@@ -5018,6 +5063,7 @@ fn read_lightcycle_input(
     mut state: ResMut<LightcycleState>,
     mut pause: ResMut<PauseState>,
     mut history: ResMut<HistoryState>,
+    mut flood: ResMut<FloodState>,
     mut navigator: ResMut<NavigatorResource>,
     mut requests: MessageWriter<DirectoryRequested>,
     mut effects: MessageWriter<MusicSfx>,
@@ -5259,6 +5305,9 @@ fn read_lightcycle_input(
 
     if restart {
         restart_run(&mut run);
+        // The wall that ended the last run would otherwise still be standing
+        // past the spawn cell, killing the respawn on its first frame.
+        flood.recede();
         state.clock = 0.0;
         state.crash_fx = None;
         state.entry_fx = None;
@@ -5349,6 +5398,7 @@ fn restore_directory_arena(
     decorate_directory_run(
         &mut commands,
         &assets,
+        &mut meshes,
         &mut state,
         &mut flood,
         &mut race,
@@ -7423,7 +7473,7 @@ mod tests {
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
         glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing, hug_camera_shot,
         is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
-        pose_world_position, rail_segments, road_marking_mesh, stack_anchor, trail_centerline,
+        pose_world_position, rail_segments, road_marking_mesh, stack_frame_mesh, trail_centerline,
         trail_heights, trim_polyline_end, wrap_angle,
     };
     use crate::config;
@@ -7432,7 +7482,7 @@ mod tests {
     };
     use crate::stealth::StealthSim;
     use bevy::camera::primitives::MeshAabb;
-    use bevy::prelude::{Vec2, Vec3};
+    use bevy::prelude::{Cuboid, Mesh, Vec2, Vec3};
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -8383,15 +8433,19 @@ mod tests {
     }
 
     #[test]
-    fn the_call_stack_stands_on_the_road_nearest_the_corner() {
-        let roads: BTreeSet<(i32, i32)> = [(0, 0), (5, 0), (5, 5), (2, 9)].into_iter().collect();
-        assert_eq!(stack_anchor(&roads, (6, 6)), Some((5, 5)));
-        assert_eq!(stack_anchor(&roads, (0, -4)), Some((0, 0)));
-        assert_eq!(stack_anchor(&roads, (5, 5)), Some((5, 5)));
+    fn a_stack_frame_is_an_open_outline() {
+        let frame = stack_frame_mesh(20.0, 12.0);
+        let single = Mesh::from(Cuboid::default());
+        let triangles = |mesh: &Mesh| mesh.indices().map(|i| i.len()).unwrap_or(0);
         assert_eq!(
-            stack_anchor(&BTreeSet::new(), (3, 3)),
-            None,
-            "nothing to stand on"
+            frame.count_vertices(),
+            single.count_vertices() * 4,
+            "four bars make the outline"
+        );
+        assert_eq!(
+            triangles(&frame),
+            triangles(&single) * 4,
+            "and nothing fills the middle"
         );
     }
 

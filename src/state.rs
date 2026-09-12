@@ -115,6 +115,18 @@ pub struct FloodState {
     pub plane: f32,
 }
 
+impl FloodState {
+    /// Sends the flood back to the arena's edge and restarts its countdown.
+    ///
+    /// A restarted run gets its full delay back: otherwise the wall it died to
+    /// is still standing past the spawn cell, and the respawn dies instantly to
+    /// a hazard it never had a chance to outrun.
+    pub fn recede(&mut self) {
+        self.timer = 0.0;
+        self.plane = self.min_z;
+    }
+}
+
 /// The rival threads racing the rider through a directory, plus the last
 /// result notice shown on the status line.
 #[derive(Resource, Default)]
