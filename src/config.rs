@@ -921,7 +921,7 @@ pub const COLUMNS_ROWS: usize = 12;
 pub const COLUMNS_GEM_COLORS: usize = 4;
 pub const COLUMNS_FALL_SECONDS: f32 = 0.55;
 pub const COLUMNS_SEED_ROWS: usize = 4;
-pub const COLUMNS_CAMERA_BACK: f32 = 24.0;
+pub const COLUMNS_CAMERA_BACK: f32 = 28.0;
 pub const COLUMNS_GEM_COLORS_LIST: [Color; 4] = [
     Color::srgb(0.95, 0.2, 0.4),
     Color::srgb(0.2, 0.85, 0.9),
@@ -934,7 +934,7 @@ pub const TETRIS_COLS: usize = 10;
 pub const TETRIS_ROWS: usize = 20;
 pub const TETRIS_TARGET_LINES: u32 = 10;
 pub const TETRIS_FALL_SECONDS: f32 = 0.5;
-pub const TETRIS_CAMERA_BACK: f32 = 26.0;
+pub const TETRIS_CAMERA_BACK: f32 = 30.0;
 pub const TETRIS_COLORS: [Color; 7] = [
     Color::srgb(0.9, 0.2, 0.4),
     Color::srgb(0.2, 0.8, 0.9),
@@ -987,7 +987,7 @@ pub const PLINKO_HEIGHT: f32 = 24.0;
 pub const PLINKO_BALLS: usize = 10;
 pub const PLINKO_TARGET: u32 = 500;
 pub const PLINKO_PIN_ROWS: usize = 8;
-pub const PLINKO_CAMERA_BACK: f32 = 26.0;
+pub const PLINKO_CAMERA_BACK: f32 = 34.0;
 pub const PLINKO_PIN_COLOR: Color = Color::srgb(0.85, 0.9, 1.0);
 pub const PLINKO_BALL_COLOR: Color = Color::srgb(0.95, 0.75, 0.3);
 

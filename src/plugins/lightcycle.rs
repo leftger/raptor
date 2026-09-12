@@ -1884,12 +1884,38 @@ fn spawn_plinko_board(
     _meshes: &mut Assets<Mesh>,
     sim: &PlinkoSim,
 ) {
+    // A dark backdrop behind the board makes the pins and balls read clearly.
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.qbert_cube_dim.clone()),
+        Transform::from_xyz(0.0, 0.0, -0.35).with_scale(Vec3::new(
+            config::PLINKO_WIDTH + 1.5,
+            config::PLINKO_HEIGHT + 1.5,
+            0.2,
+        )),
+        Visibility::Visible,
+        Pickable::IGNORE,
+    ));
+    // The drop rail along the top, where the cycle slides to aim.
+    commands.spawn((
+        LightcycleSceneRoot,
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.stealth_wall_material.clone()),
+        Transform::from_xyz(0.0, config::PLINKO_HEIGHT * 0.5 + 0.35, 0.0).with_scale(Vec3::new(
+            config::PLINKO_WIDTH + 1.0,
+            0.6,
+            0.6,
+        )),
+        Visibility::Visible,
+        Pickable::IGNORE,
+    ));
     for pin in &sim.pins {
         commands.spawn((
             LightcycleSceneRoot,
             Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.plinko_pin_material.clone()),
-            Transform::from_xyz(pin.x, pin.y, 0.0).with_scale(Vec3::splat(0.42)),
+            Transform::from_xyz(pin.x, pin.y, 0.0).with_scale(Vec3::splat(0.62)),
             Visibility::Visible,
             Pickable::IGNORE,
         ));
@@ -1901,7 +1927,7 @@ fn spawn_plinko_board(
             Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.disc_accent_materials[slot].clone()),
             Transform::from_xyz(x, -config::PLINKO_HEIGHT * 0.5 - 1.0, 0.0)
-                .with_scale(Vec3::new(1.7, 0.4, 0.4)),
+                .with_scale(Vec3::new(1.9, 1.3, 0.9)),
             Visibility::Visible,
             Pickable::IGNORE,
         ));
@@ -1912,7 +1938,7 @@ fn spawn_plinko_board(
             PlinkoBallEntity { index },
             Mesh3d(assets.unit_cube.clone()),
             MeshMaterial3d(assets.plinko_ball_material.clone()),
-            Transform::from_xyz(0.0, config::PLINKO_HEIGHT * 0.5, 0.0),
+            Transform::from_xyz(0.0, config::PLINKO_HEIGHT * 0.5, 0.0).with_scale(Vec3::splat(1.1)),
             Visibility::Hidden,
             Pickable::IGNORE,
         ));
@@ -6389,7 +6415,7 @@ fn update_cycle_transform(
         return;
     }
     if let Some(sim) = run.source_plinko() {
-        transform.translation = Vec3::new(sim.aim, config::PLINKO_HEIGHT * 0.5 - 1.0, 1.5);
+        transform.translation = Vec3::new(sim.aim, config::PLINKO_HEIGHT * 0.5 - 1.0, 0.0);
         transform.rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Y);
         return;
     }
