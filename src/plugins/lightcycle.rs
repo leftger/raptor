@@ -4346,14 +4346,32 @@ fn animate_city_beacons(time: Res<Time>, mut beacons: Query<(&CityBeacon, &mut T
 
 /// Bobs the call-stack frames, so a directory's stack reads as live hardware
 /// rather than a static prop.
-fn animate_stack_frames(time: Res<Time>, mut discs: Query<(&StackFrameEntity, &mut Transform)>) {
+fn animate_stack_frames(time: Res<Time>, mut plates: Query<(&StackFrameEntity, &mut Transform)>) {
     let elapsed = time.elapsed_secs();
-    for (disc, mut transform) in &mut discs {
-        let level = disc.level as f32;
-        let rest = config::STACK_FRAME_BASE_Y + level * config::STACK_FRAME_SPACING;
-        let phase = elapsed * config::STACK_FRAME_BOB_SPEED + level * 0.6;
-        transform.translation.y = rest + phase.sin() * config::STACK_FRAME_BOB;
+    for (plate, mut transform) in &mut plates {
+        let level = plate.level;
+        let rest = config::STACK_FRAME_BASE_Y + level as f32 * config::STACK_FRAME_SPACING;
+        let (rock_x, rock_z) = stack_frame_rock(level, elapsed);
+        transform.translation.y = rest + stack_frame_hover(level, elapsed);
+        transform.rotation = Quat::from_euler(EulerRot::XZY, rock_x, 0.0, rock_z);
     }
+}
+
+/// How far a plate floats above its rest height at `elapsed`.
+pub fn stack_frame_hover(level: usize, elapsed: f32) -> f32 {
+    let phase =
+        elapsed * config::STACK_FRAME_HOVER_SPEED + level as f32 * config::STACK_FRAME_PHASE_STEP;
+    phase.sin() * config::STACK_FRAME_HOVER
+}
+
+/// The plate's tilt about X and Z at `elapsed`, in radians. The two axes run at
+/// different rates, so a plate never repeats the same attitude twice in a row.
+pub fn stack_frame_rock(level: usize, elapsed: f32) -> (f32, f32) {
+    let offset = level as f32 * config::STACK_FRAME_PHASE_STEP;
+    let x = (elapsed * config::STACK_FRAME_ROCK_SPEED + offset).sin() * config::STACK_FRAME_ROCK;
+    let z = (elapsed * config::STACK_FRAME_ROCK_SPEED * 0.63 + offset * 1.7).cos()
+        * config::STACK_FRAME_ROCK;
+    (x, z)
 }
 
 fn update_document_focus(
@@ -4409,7 +4427,6 @@ fn reset_on_directory_loaded(
         decorate_directory_run(
             &mut commands,
             &assets,
-            &mut meshes,
             &mut state,
             &mut flood,
             &mut race,
@@ -4446,7 +4463,6 @@ fn reset_on_directory_loaded(
 fn decorate_directory_run(
     commands: &mut Commands,
     assets: &LightcycleAssets,
-    meshes: &mut Assets<Mesh>,
     state: &mut LightcycleState,
     flood: &mut FloodState,
     race: &mut SchedulerRace,
@@ -4457,29 +4473,26 @@ fn decorate_directory_run(
     let center_x = (run.arena.min.0 + run.arena.max.0) as f32 * 0.5 * span;
     let center_z = (run.arena.min.1 + run.arena.max.1) as f32 * 0.5 * span;
 
-    // Call stack: one hollow frame per path level, up in the ceiling. The middle
-    // is open, so the chase camera looks through the stack instead of at it, and
-    // the bars overhang the arena's edge rather than crossing the road.
+    // Call stack: one arena-wide glass plate per path level, floating over the
+    // arena. `animate_stack_frames` hovers and rocks them.
     let depth = path.components().count().min(config::STACK_FRAME_MAX);
-    if depth > 0 {
-        let frame = meshes.add(stack_frame_mesh(
-            (run.arena.max.0 - run.arena.min.0 + 1) as f32 * span
-                + config::STACK_FRAME_MARGIN * 2.0,
-            (run.arena.max.1 - run.arena.min.1 + 1) as f32 * span
-                + config::STACK_FRAME_MARGIN * 2.0,
+    let plate_x = (run.arena.max.0 - run.arena.min.0 + 1) as f32 * span * config::STACK_FRAME_INSET;
+    let plate_z = (run.arena.max.1 - run.arena.min.1 + 1) as f32 * span * config::STACK_FRAME_INSET;
+    for level in 0..depth {
+        let y = config::STACK_FRAME_BASE_Y + level as f32 * config::STACK_FRAME_SPACING;
+        commands.spawn((
+            LightcycleSceneRoot,
+            StackFrameEntity { level },
+            Mesh3d(assets.unit_cube.clone()),
+            MeshMaterial3d(assets.trail_material.clone()),
+            Transform::from_xyz(center_x, y, center_z).with_scale(Vec3::new(
+                plate_x,
+                config::STACK_FRAME_THICKNESS,
+                plate_z,
+            )),
+            Visibility::Visible,
+            Pickable::IGNORE,
         ));
-        for level in 0..depth {
-            let y = config::STACK_FRAME_BASE_Y + level as f32 * config::STACK_FRAME_SPACING;
-            commands.spawn((
-                LightcycleSceneRoot,
-                StackFrameEntity { level },
-                Mesh3d(frame.clone()),
-                MeshMaterial3d(assets.trail_material.clone()),
-                Transform::from_xyz(center_x, y, center_z),
-                Visibility::Visible,
-                Pickable::IGNORE,
-            ));
-        }
     }
 
     // Hex-dump highway: a sampled byte stream laid as emissive data plates.
@@ -4622,45 +4635,6 @@ fn is_quarantined(path: &Path) -> bool {
         let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
         config::QUARANTINE_NAMES.contains(&name.as_str())
     })
-}
-
-/// Builds the outline of one call-stack frame: four bars around an open middle,
-/// centred on the origin so it can be lifted to its ceiling height.
-fn stack_frame_mesh(width: f32, depth: f32) -> Mesh {
-    let bar = config::STACK_FRAME_BAR;
-    let thickness = config::STACK_FRAME_THICKNESS;
-    // Measured to the outside of the bars, so they sit on the edge rather than
-    // hanging past it.
-    let half_x = (width - bar) * 0.5;
-    let half_z = (depth - bar) * 0.5;
-    // The near bar doubles as the base the other three merge onto.
-    let mut mesh = Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(Vec3::new(0.0, 0.0, -half_z))
-            .with_scale(Vec3::new(width, thickness, bar)),
-    );
-    let far = Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(Vec3::new(0.0, 0.0, half_z))
-            .with_scale(Vec3::new(width, thickness, bar)),
-    );
-    let left = Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(Vec3::new(-half_x, 0.0, 0.0)).with_scale(Vec3::new(
-            bar,
-            thickness,
-            depth - bar * 2.0,
-        )),
-    );
-    let right = Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(Vec3::new(half_x, 0.0, 0.0)).with_scale(Vec3::new(
-            bar,
-            thickness,
-            depth - bar * 2.0,
-        )),
-    );
-    for segment in [far, left, right] {
-        mesh.merge(&segment)
-            .expect("stack frame cuboids must be merge-compatible");
-    }
-    mesh
 }
 
 /// Stable hash of a path, for seeding the hex-dump pattern.
@@ -5474,7 +5448,6 @@ fn restore_directory_arena(
     decorate_directory_run(
         &mut commands,
         &assets,
-        &mut meshes,
         &mut state,
         &mut flood,
         &mut race,
@@ -7551,8 +7524,8 @@ mod tests {
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
         gc_sweep_plane, glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing,
         hug_camera_shot, is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
-        pose_world_position, rail_segments, road_marking_mesh, stack_frame_mesh, trail_centerline,
-        trail_heights, trim_polyline_end, wrap_angle,
+        pose_world_position, rail_segments, road_marking_mesh, stack_frame_hover, stack_frame_rock,
+        trail_centerline, trail_heights, trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
@@ -7560,7 +7533,7 @@ mod tests {
     };
     use crate::stealth::StealthSim;
     use bevy::camera::primitives::MeshAabb;
-    use bevy::prelude::{Cuboid, Mesh, Vec2, Vec3};
+    use bevy::prelude::{Vec2, Vec3};
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -8525,20 +8498,36 @@ mod tests {
     }
 
     #[test]
-    fn a_stack_frame_is_an_open_outline() {
-        let frame = stack_frame_mesh(20.0, 12.0);
-        let single = Mesh::from(Cuboid::default());
-        let triangles = |mesh: &Mesh| mesh.indices().map(|i| i.len()).unwrap_or(0);
-        assert_eq!(
-            frame.count_vertices(),
-            single.count_vertices() * 4,
-            "four bars make the outline"
+    fn stack_plates_hover_within_their_travel_and_ripple() {
+        let peak = config::STACK_FRAME_HOVER;
+        let mut seen_low = false;
+        let mut seen_high = false;
+        for step in 0..200 {
+            let t = step as f32 * 0.05;
+            let hover = stack_frame_hover(0, t);
+            assert!(hover.abs() <= peak + 0.001, "hover {hover} left its travel");
+            seen_low |= hover < -peak * 0.5;
+            seen_high |= hover > peak * 0.5;
+        }
+        assert!(seen_low && seen_high, "the plate should actually travel");
+
+        // Levels are out of phase, so the stack ripples rather than sliding as
+        // one block.
+        assert!(
+            (stack_frame_hover(0, 0.0) - stack_frame_hover(1, 0.0)).abs() > 0.01,
+            "neighbouring plates should not move in lockstep"
         );
-        assert_eq!(
-            triangles(&frame),
-            triangles(&single) * 4,
-            "and nothing fills the middle"
-        );
+    }
+
+    #[test]
+    fn stack_plates_rock_within_their_limit() {
+        let limit = config::STACK_FRAME_ROCK;
+        for step in 0..200 {
+            let t = step as f32 * 0.05;
+            let (x, z) = stack_frame_rock(2, t);
+            assert!(x.abs() <= limit + 0.001, "rock x {x} left its limit");
+            assert!(z.abs() <= limit + 0.001, "rock z {z} left its limit");
+        }
     }
 
     #[test]

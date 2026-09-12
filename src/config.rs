@@ -199,20 +199,22 @@ pub const GC_SWEEP_SECONDS: f32 = 1.4;
 pub const GC_SWEEP_HEIGHT: f32 = 2.6;
 pub const GC_SWEEP_THICKNESS: f32 = 0.35;
 pub const GC_SWEEP_COLOR: Color = Color::srgba(0.55, 1.0, 0.85, 0.45);
-/// The call stack: one open frame per path level, up in the ceiling.
-///
-/// A solid plate per level sat right across the chase camera. These are hollow
-/// rectangles over the arena's edges instead, so the middle stays clear: you
-/// look up through the stack rather than at it.
-pub const STACK_FRAME_BASE_Y: f32 = 8.0;
-pub const STACK_FRAME_SPACING: f32 = 2.2;
-/// Width of the frame's border bars.
-pub const STACK_FRAME_BAR: f32 = 1.1;
-pub const STACK_FRAME_THICKNESS: f32 = 0.14;
-/// How far the frames overhang the arena walls.
-pub const STACK_FRAME_MARGIN: f32 = 1.5;
-pub const STACK_FRAME_BOB: f32 = 0.06;
-pub const STACK_FRAME_BOB_SPEED: f32 = 0.9;
+/// The call stack: one arena-wide glass plate per path level, floating over the
+/// arena. They hover and rock gently, so the stack reads as a live structure
+/// rather than six sheets of glass parked in the sky.
+pub const STACK_FRAME_BASE_Y: f32 = 7.0;
+pub const STACK_FRAME_SPACING: f32 = 2.0;
+/// Plate thickness, and how much of the arena each plate spans.
+pub const STACK_FRAME_THICKNESS: f32 = 0.1;
+pub const STACK_FRAME_INSET: f32 = 0.8;
+/// Vertical hover: amplitude in world units, and the rate of the oscillation.
+pub const STACK_FRAME_HOVER: f32 = 0.38;
+pub const STACK_FRAME_HOVER_SPEED: f32 = 1.1;
+/// Rocking: peak tilt in radians, and the rate.
+pub const STACK_FRAME_ROCK: f32 = 0.03;
+pub const STACK_FRAME_ROCK_SPEED: f32 = 0.7;
+/// Phase added per level, so the stack ripples instead of moving as one slab.
+pub const STACK_FRAME_PHASE_STEP: f32 = 0.75;
 pub const STACK_FRAME_MAX: usize = 6;
 
 /// Hex-dump highway: emissive data plates laid along the directory's roads.
