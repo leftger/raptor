@@ -150,7 +150,17 @@ pub const LIGHTCYCLE_CITY_BASE_TRIM_HEIGHT: f32 = 0.07;
 /// How far the skirt sticks out past the surface it outlines, in world units.
 pub const LIGHTCYCLE_CITY_BASE_TRIM_OVERHANG: f32 = 0.24;
 pub const LIGHTCYCLE_CITY_BEACON_LIMIT: usize = 24;
-pub const LIGHTCYCLE_CITY_ROAD_RENDER_LIMIT: usize = 16_384;
+/// How far the lane markings sit above the floor.
+pub const MARKING_HEIGHT: f32 = 0.025;
+
+/// Ceiling on the road cells that get lane markings.
+///
+/// This used to crop to the 16,384 cells nearest the arena centre, which left
+/// the lanes and their junction pads missing from the outer two thirds of a big
+/// district. Markings are flat quads now rather than boxes, so covering every
+/// road in a huge directory costs less than the old crop did; the ceiling is
+/// only here to bound a pathological arena.
+pub const LIGHTCYCLE_CITY_ROAD_RENDER_LIMIT: usize = 262_144;
 pub const LIGHTCYCLE_PORTAL_HEIGHT: f32 = 2.6;
 /// How many wall cells the parent gate covers. Wide enough that reaching the
 /// parent directory does not need single-cell precision.

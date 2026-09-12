@@ -4033,64 +4033,99 @@ fn spawn_road_markings(
     arena: &Arena,
 ) {
     let mut cells: Vec<_> = arena.roads.iter().copied().collect();
-    let center = arena.center();
-    cells.sort_unstable_by_key(|cell| {
-        ((cell.0 - center.0).abs() + (cell.1 - center.1).abs(), *cell)
-    });
-    cells.truncate(config::LIGHTCYCLE_CITY_ROAD_RENDER_LIMIT);
+    // Every road is marked unless the arena is past the ceiling, in which case
+    // the cells nearest the middle are the ones kept.
+    if cells.len() > config::LIGHTCYCLE_CITY_ROAD_RENDER_LIMIT {
+        let center = arena.center();
+        cells.sort_unstable_by_key(|cell| {
+            ((cell.0 - center.0).abs() + (cell.1 - center.1).abs(), *cell)
+        });
+        cells.truncate(config::LIGHTCYCLE_CITY_ROAD_RENDER_LIMIT);
+    }
 
     let theme = city_theme_index(arena.city_theme);
     for chunk in cells.chunks(config::MESH_CHUNK_SIZE) {
-        let mut chunk = chunk.iter();
-        let Some(&first) = chunk.next() else {
-            continue;
-        };
-        let mut mesh = road_marking_mesh(first, &arena.roads);
-        for &cell in chunk {
-            mesh.merge(&road_marking_mesh(cell, &arena.roads))
-                .expect("road marking meshes must be merge-compatible");
+        // One buffer per chunk, filled straight from the quad descriptions. Going
+        // through a mesh per road cell cost a hundred milliseconds on a district
+        // with fifty thousand of them, on every directory hop.
+        let mut quads = Vec::with_capacity(chunk.len() * 3);
+        for cell in chunk {
+            push_marking_quads(*cell, &arena.roads, &mut quads);
         }
         commands.spawn((
             LightcycleSceneRoot,
-            Mesh3d(meshes.add(mesh)),
+            Mesh3d(meshes.add(marking_chunk_mesh(&quads))),
             MeshMaterial3d(assets.city_accent_materials[theme][0].clone()),
             Pickable::IGNORE,
         ));
     }
 }
 
-fn road_marking_mesh(cell: (i32, i32), roads: &std::collections::BTreeSet<(i32, i32)>) -> Mesh {
+/// One flat quad of ground marking: where it sits, and how far it reaches on
+/// each ground axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MarkingQuad {
+    center: Vec3,
+    half_x: f32,
+    half_z: f32,
+}
+
+/// Appends the quads one road cell contributes: the junction pad, then a lane out
+/// to each marked neighbour. Takes the buffer rather than returning one, because
+/// a big district asks this for fifty thousand cells at once.
+fn push_marking_quads(
+    cell: (i32, i32),
+    roads: &std::collections::BTreeSet<(i32, i32)>,
+    quads: &mut Vec<MarkingQuad>,
+) {
     let spacing = config::GRID_SPACING;
     let line_width = 0.075;
-    let line_height = 0.035;
-    let center = config::ground_position(cell.0, cell.1) + Vec3::Y * 0.025;
-    let mut mesh = Mesh::from(Cuboid::default()).transformed_by(
-        Transform::from_translation(center).with_scale(Vec3::new(
-            line_width * 2.5,
-            line_height,
-            line_width * 2.5,
-        )),
-    );
-
+    let center = config::ground_position(cell.0, cell.1) + Vec3::Y * config::MARKING_HEIGHT;
+    let half = line_width * 1.25;
+    quads.push(MarkingQuad {
+        center,
+        half_x: half,
+        half_z: half,
+    });
     if roads.contains(&(cell.0 + 1, cell.1)) {
-        let segment =
-            Mesh::from(Cuboid::default()).transformed_by(
-                Transform::from_translation(center + Vec3::X * spacing * 0.5)
-                    .with_scale(Vec3::new(spacing, line_height, line_width)),
-            );
-        mesh.merge(&segment)
-            .expect("road marking cuboids must be merge-compatible");
+        quads.push(MarkingQuad {
+            center: center + Vec3::X * spacing * 0.5,
+            half_x: spacing * 0.5,
+            half_z: line_width * 0.5,
+        });
     }
     if roads.contains(&(cell.0, cell.1 + 1)) {
-        let segment =
-            Mesh::from(Cuboid::default()).transformed_by(
-                Transform::from_translation(center + Vec3::Z * spacing * 0.5)
-                    .with_scale(Vec3::new(line_width, line_height, spacing)),
-            );
-        mesh.merge(&segment)
-            .expect("road marking cuboids must be merge-compatible");
+        quads.push(MarkingQuad {
+            center: center + Vec3::Z * spacing * 0.5,
+            half_x: line_width * 0.5,
+            half_z: spacing * 0.5,
+        });
     }
-    mesh
+}
+
+/// Packs quads into one mesh, four vertices and two triangles each. The winding
+/// runs counter-clockwise seen from above so the faces point up and survive back
+/// face culling.
+fn marking_chunk_mesh(quads: &[MarkingQuad]) -> Mesh {
+    let mut positions = Vec::with_capacity(quads.len() * 4);
+    let mut normals = Vec::with_capacity(quads.len() * 4);
+    let mut indices = Vec::with_capacity(quads.len() * 6);
+    for quad in quads {
+        let base = positions.len() as u32;
+        let (x, y, z) = (quad.center.x, quad.center.y, quad.center.z);
+        for (dx, dz) in [(-1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (1.0, -1.0)] {
+            positions.push([x + dx * quad.half_x, y, z + dz * quad.half_z]);
+            normals.push([0.0, 1.0, 0.0]);
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(indices))
 }
 
 /// World-space plane each wall rail sits in, half a cell outside the playable area.
@@ -7537,13 +7572,13 @@ fn update_chase_camera(
 #[cfg(test)]
 mod tests {
     use super::{
-        CITY_TRIM_ACCENT, ChaseCamera, GateScanBar, arc_cell_pose, build_trail_mesh,
+        CITY_TRIM_ACCENT, ChaseCamera, GateScanBar, MarkingQuad, arc_cell_pose, build_trail_mesh,
         chase_camera_rig, chase_rig_radius, city_base_trim_mesh, city_body_height, city_body_mesh,
         city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
         gc_sweep_plane, glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing,
-        hug_camera_shot, is_quarantined, nearest_heading, pose_forward, pose_rotation,
-        pose_world_position, rail_segments, road_marking_mesh, stack_frame_glide,
+        hug_camera_shot, is_quarantined, marking_chunk_mesh, nearest_heading, pose_forward,
+        pose_rotation, pose_world_position, push_marking_quads, rail_segments, stack_frame_glide,
         stack_frame_hover, stack_frame_mesh, stack_frame_rock, stack_plunge, trail_centerline,
         trail_heights, trim_polyline_end, wrap_angle,
     };
@@ -7742,10 +7777,72 @@ mod tests {
     #[test]
     fn road_markings_join_neighboring_cells() {
         let isolated = BTreeSet::from([(0, 0)]);
-        let connected = BTreeSet::from([(0, 0), (1, 0), (0, 1)]);
+        let one_way = BTreeSet::from([(0, 0), (1, 0)]);
+        let both_ways = BTreeSet::from([(0, 0), (1, 0), (0, 1)]);
+        // A junction pad, plus a lane out to each marked neighbour.
+        let count = |roads: &BTreeSet<(i32, i32)>| {
+            let mut quads = Vec::new();
+            push_marking_quads((0, 0), roads, &mut quads);
+            quads.len()
+        };
+        assert_eq!(count(&isolated), 1);
+        assert_eq!(count(&one_way), 2);
+        assert_eq!(count(&both_ways), 3);
+    }
+
+    /// Markings are flat quads, so a district of any size can afford them all:
+    /// no cell may be dropped for being far from the middle.
+    #[test]
+    fn lane_markings_cover_a_whole_district() {
+        for span in [8_i32, 40, 160] {
+            let mut roads = BTreeSet::new();
+            for x in 0..span {
+                for z in 0..span {
+                    if x % 4 == 0 || z % 4 == 0 {
+                        roads.insert((x, z));
+                    }
+                }
+            }
+            assert!(roads.len() <= config::LIGHTCYCLE_CITY_ROAD_RENDER_LIMIT);
+            let mut quads = Vec::new();
+            for cell in &roads {
+                push_marking_quads(*cell, &roads, &mut quads);
+            }
+            assert!(
+                quads.len() >= roads.len(),
+                "every road cell keeps its junction pad"
+            );
+            let mesh = marking_chunk_mesh(&quads);
+            assert_eq!(mesh.count_vertices(), quads.len() * 4);
+            assert_eq!(
+                mesh.indices().map(|indices| indices.len()).unwrap_or(0),
+                quads.len() * 6
+            );
+        }
+    }
+
+    /// The quads have to face up: the wrong winding would make every marking in
+    /// the game invisible to a camera above the floor.
+    #[test]
+    fn lane_marking_faces_point_up() {
+        let quads = vec![MarkingQuad {
+            center: Vec3::new(1.0, 0.025, 2.0),
+            half_x: 0.5,
+            half_z: 0.25,
+        }];
+        let mesh = marking_chunk_mesh(&quads);
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|values| values.as_float3())
+            .expect("positions");
+        let a = Vec3::from(positions[0]);
+        let b = Vec3::from(positions[1]);
+        let c = Vec3::from(positions[2]);
+        let normal = (b - a).cross(c - b);
+        assert!(normal.y > 0.0, "quad faces down: {normal:?}");
         assert!(
-            road_marking_mesh((0, 0), &connected).count_vertices()
-                > road_marking_mesh((0, 0), &isolated).count_vertices()
+            positions.iter().all(|p| (p[1] - 0.025).abs() < 1e-6),
+            "markings are flat"
         );
     }
 

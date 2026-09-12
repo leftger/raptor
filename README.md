@@ -496,6 +496,10 @@ world keeps up a running machine metaphor:
   district's accent, and the districts differ in brightness, so riding from one
   folder into the next is a change of light as well as of layout. The explorer
   view keeps its neutral background.
+* **Lane markings** — every road cell carries a junction pad where the lanes
+  meet, joined into a lattice of traces across the whole district. Markings are
+  flat quads, so covering a fifty-thousand-cell directory costs less than the
+  old crop that stopped at the 16,384 cells nearest the middle.
 * **Disk seek** — every directory hop plays a mechanical head-seek cue.
 * **Cache hit** — revisiting a directory you have already opened grants a short
   ground-speed surge.
