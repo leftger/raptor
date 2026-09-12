@@ -233,13 +233,18 @@ pub const STACK_PLUNGE_STAGGER: f32 = 0.06;
 pub const STACK_PLUNGE_HOLD: f32 = 0.3;
 pub const STACK_FRAME_MAX: usize = 6;
 
-/// Hex-dump highway: emissive data plates laid along the directory's roads.
-pub const HEX_PLATE_COLORS: [Color; 3] = [
-    Color::srgb(0.05, 0.25, 0.3),
-    Color::srgb(0.1, 0.7, 0.75),
-    Color::srgb(0.3, 0.98, 0.85),
-];
-pub const HEX_PLATE_MAX: usize = 640;
+/// Hex-dump highway: the data plates a district lays along its roads.
+///
+/// The layout itself is procedural (see `ViaPattern`); this is just the ceiling
+/// on how many plates a big district may draw, kept low because one plate on
+/// every road cell buried the actual road.
+pub const HEX_PLATE_MAX: usize = 220;
+/// How much of a district's accent bleeds into the sky while riding it.
+pub const DISTRICT_SKY_MIX: f32 = 0.32;
+/// How much of the accent tints the key light over a district.
+pub const DISTRICT_LIGHT_MIX: f32 = 0.45;
+/// Key-light brightness spread between districts, as a fraction.
+pub const DISTRICT_LIGHT_SPREAD: f32 = 0.14;
 
 /// Directory names that open as a quarantined vault chased by the flood.
 pub const QUARANTINE_NAMES: [&str; 8] = [

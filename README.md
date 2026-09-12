@@ -480,13 +480,20 @@ world keeps up a running machine metaphor:
 * **PCB trace trail** — the trail is a lit copper trace rather than a plain
   glass sheet.
 * **Hex-dump highway** — the roads carry a sampled byte stream as emissive data
-  plates, seeded from the directory's path so a folder always lays out the same.
+  plates. Each district picks one of five layouts from its path seed — dotted,
+  dashed lines, clustered plazas, square rings, or sparse pads — so the ground
+  reads differently from one folder to the next instead of one pad on every
+  road cell.
 * **Call stack** — one open frame per path level, floating over the arena's
   edge, so `/home/you/project` is visibly three frames deep. Only the chunky
   border is drawn, so the road below stays visible, and each frame hovers,
   glides and rocks out of phase with the next. Every so often the whole stack
   plunges: each frame sinks to the same height mirrored below the floor, rests
   there for a beat, and rises back level by level.
+* **District ambience** — the sky tint and the key light are pulled toward the
+  district's accent, and the districts differ in brightness, so riding from one
+  folder into the next is a change of light as well as of layout. The explorer
+  view keeps its neutral background.
 * **Disk seek** — every directory hop plays a mechanical head-seek cue.
 * **Cache hit** — revisiting a directory you have already opened grants a short
   ground-speed surge.

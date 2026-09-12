@@ -19,7 +19,7 @@ use crate::galaga::{GalagaPhase, GalagaSim};
 use crate::lightcycle::logic::{
     Arena, ArenaKind, CellContent, CityStructure, CityStructureKind, CityTheme, CrashReason,
     GatePlacement, Heading, LightcycleSim, ParentPortal, RunPhase, StepOutcome, Wall,
-    classify_next_content,
+    classify_next_content, road_plates, stable_path_seed,
 };
 use crate::lightcycle::{ActiveRun, LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadFailed, DirectoryLoaded, DirectoryRequested};
@@ -137,7 +137,10 @@ impl Plugin for LightcyclePlugin {
                         .before(update_chase_camera),
                 )
                     .run_if(in_lightcycle_mode),
-            );
+            )
+            // Outside the chained group: that tuple is already at Bevy's arity
+            // limit, and the tint only has to land after the run it describes.
+            .add_systems(Update, apply_district_ambience.after(apply_mode_swap));
     }
 }
 
@@ -148,8 +151,6 @@ struct LightcycleAssets {
     entry_halo_mesh: Handle<Mesh>,
     cycle_scene: Handle<WorldAsset>,
     trail_material: Handle<StandardMaterial>,
-    /// Data-plate materials for the hex-dump highway.
-    hex_materials: [Handle<StandardMaterial>; 3],
     /// The translucent wall of the memory flood, and its lit crest.
     flood_material: Handle<StandardMaterial>,
     flood_crest_material: Handle<StandardMaterial>,
@@ -804,15 +805,6 @@ fn setup_lightcycle_assets(
         cycle_scene: asset_server
             .load(GltfAssetLabel::Scene(0).from_asset(config::LIGHTCYCLE_MODEL_ASSET)),
         trail_material: materials.add(trail_glass_material()),
-        hex_materials: std::array::from_fn(|index| {
-            let colour = config::HEX_PLATE_COLORS[index];
-            materials.add(StandardMaterial {
-                base_color: colour,
-                emissive: LinearRgba::from(colour) * 1.8,
-                unlit: true,
-                ..default()
-            })
-        }),
         flood_material: materials.add(StandardMaterial {
             base_color: config::FLOOD_COLOR,
             alpha_mode: AlphaMode::Blend,
@@ -4576,20 +4568,25 @@ fn decorate_directory_run(
         }
     }
 
-    // Hex-dump highway: a sampled byte stream laid as emissive data plates.
-    let mut seed = path_hash(path);
-    let stride = (run.arena.roads.len() / config::HEX_PLATE_MAX).max(1);
-    for &cell in run.arena.roads.iter().step_by(stride) {
-        seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let level = ((seed >> 33) % config::HEX_PLATE_COLORS.len() as u64) as usize;
+    // Hex-dump highway: the district's own procedural plate layout, wearing the
+    // district's accents.
+    let theme = city_theme_index(run.arena.city_theme);
+    for plate in road_plates(
+        stable_path_seed(path),
+        &run.arena.roads,
+        config::HEX_PLATE_MAX,
+    ) {
         commands.spawn((
             LightcycleSceneRoot,
             Mesh3d(assets.unit_cube.clone()),
-            MeshMaterial3d(assets.hex_materials[level].clone()),
-            Transform::from_xyz(cell.0 as f32 * span, 0.07, cell.1 as f32 * span)
-                .with_scale(Vec3::new(span * 0.22, 0.06, span * 0.62)),
+            MeshMaterial3d(assets.city_accent_materials[theme][plate.accent].clone()),
+            Transform::from_xyz(plate.cell.0 as f32 * span, 0.07, plate.cell.1 as f32 * span)
+                .with_rotation(Quat::from_rotation_y(plate.yaw))
+                .with_scale(Vec3::new(
+                    span * 0.22 * plate.scale,
+                    0.06,
+                    span * 0.62 * plate.scale,
+                )),
             Visibility::Visible,
             Pickable::IGNORE,
         ));
@@ -4675,6 +4672,70 @@ fn decorate_directory_run(
     ));
 }
 
+/// Paints the sky and the key light with the district's own accent.
+///
+/// The street plan and the theme already come from the directory's seed; this
+/// carries that identity into the ambience, so two directories do not just
+/// differ in layout but in light and air. Explorer mode keeps the plain
+/// background, so the filesystem view stays neutral.
+fn apply_district_ambience(
+    mode: Res<InteractionMode>,
+    state: Res<LightcycleState>,
+    mut clear: ResMut<ClearColor>,
+    light: Single<&mut DirectionalLight>,
+    mut applied: Local<Option<Option<usize>>>,
+) {
+    let riding = *mode == InteractionMode::Lightcycle;
+    let theme = (riding)
+        .then(|| {
+            state
+                .run
+                .as_ref()
+                .map(|run| city_theme_index(run.arena.city_theme))
+        })
+        .flatten();
+    if *applied == Some(theme) {
+        return;
+    }
+    *applied = Some(theme);
+
+    let mut light = light.into_inner();
+    let Some(index) = theme else {
+        clear.0 = config::BACKGROUND_COLOR;
+        let default_light = DirectionalLight::default();
+        light.color = default_light.color;
+        light.illuminance = default_light.illuminance;
+        return;
+    };
+
+    let palette = city_palette();
+    let accent = palette[index][0].1;
+    clear.0 = Color::LinearRgba(mix_linear(
+        config::BACKGROUND_COLOR.into(),
+        accent,
+        config::DISTRICT_SKY_MIX,
+    ));
+    light.color = Color::LinearRgba(mix_linear(
+        LinearRgba::WHITE,
+        accent,
+        config::DISTRICT_LIGHT_MIX,
+    ));
+    // Districts differ in brightness as well as hue, deterministically.
+    let spread = (index as f32 - 1.5) * config::DISTRICT_LIGHT_SPREAD;
+    light.illuminance = DirectionalLight::default().illuminance * (1.0 + spread);
+}
+
+/// Straight linear blend, used for the district tints.
+fn mix_linear(from: LinearRgba, to: LinearRgba, amount: f32) -> LinearRgba {
+    let amount = amount.clamp(0.0, 1.0);
+    LinearRgba::new(
+        from.red + (to.red - from.red) * amount,
+        from.green + (to.green - from.green) * amount,
+        from.blue + (to.blue - from.blue) * amount,
+        from.alpha + (to.alpha - from.alpha) * amount,
+    )
+}
+
 /// True when any component of the path names a well-known heavy or hidden
 /// build directory worth a quarantine.
 fn is_quarantined(path: &Path) -> bool {
@@ -4718,14 +4779,6 @@ fn stack_frame_mesh(width: f32, depth: f32) -> Mesh {
             .expect("stack frame cuboids must be merge-compatible");
     }
     mesh
-}
-
-/// Stable hash of a path, for seeding the hex-dump pattern.
-fn path_hash(path: &Path) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    path.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Raises the memory flood along a directory run and crashes the rider when it
@@ -7493,7 +7546,7 @@ mod tests {
         city_cap_mesh, city_foundation_mesh, city_palette, city_theme_index, cycle_cell_pose,
         document_line_advance, entry_effect_envelope, entry_halo_pose, gate_bar_height, gate_pulse,
         gc_sweep_plane, glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing,
-        hug_camera_shot, is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
+        hug_camera_shot, is_quarantined, nearest_heading, pose_forward, pose_rotation,
         pose_world_position, rail_segments, road_marking_mesh, stack_frame_glide,
         stack_frame_hover, stack_frame_mesh, stack_frame_rock, stack_plunge, trail_centerline,
         trail_heights, trim_polyline_end, wrap_angle,
@@ -8632,17 +8685,5 @@ mod tests {
             assert!(x.abs() <= limit + 0.001, "rock x {x} left its limit");
             assert!(z.abs() <= limit + 0.001, "rock z {z} left its limit");
         }
-    }
-
-    #[test]
-    fn the_hex_pattern_seed_is_stable_for_a_path() {
-        assert_eq!(
-            path_hash(Path::new("/home/me/project")),
-            path_hash(Path::new("/home/me/project"))
-        );
-        assert_ne!(
-            path_hash(Path::new("/home/me/project")),
-            path_hash(Path::new("/home/me/other"))
-        );
     }
 }

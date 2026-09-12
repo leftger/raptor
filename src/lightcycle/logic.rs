@@ -242,6 +242,128 @@ impl ParentPortal {
     }
 }
 
+/// How a district lays the data plates out along its roads.
+///
+/// Every district used to get one plate per sampled road cell, which read as
+/// clutter. The layout is now part of the district's seed, so each one has a
+/// recognisable ground pattern of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViaPattern {
+    /// Scattered singles.
+    Dotted,
+    /// Dashed lines running corner to corner.
+    Dashes,
+    /// A few dense plazas.
+    Clusters,
+    /// Square rings around a seeded plaza.
+    Rings,
+    /// Very few, bigger pads.
+    Sparse,
+}
+
+impl ViaPattern {
+    pub const ALL: [Self; 5] = [
+        Self::Dotted,
+        Self::Dashes,
+        Self::Clusters,
+        Self::Rings,
+        Self::Sparse,
+    ];
+
+    pub(crate) fn from_seed(seed: u64) -> Self {
+        // Mix the whole seed rather than slicing bits off it: taking a shifted
+        // window meant every small seed picked the same layout.
+        let mixed = cell_hash(seed, (7, 7));
+        Self::ALL[(mixed % Self::ALL.len() as u64) as usize]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dotted => "dotted",
+            Self::Dashes => "dashed",
+            Self::Clusters => "clustered",
+            Self::Rings => "ringed",
+            Self::Sparse => "sparse",
+        }
+    }
+}
+
+/// One decorative plate on a road cell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RoadPlate {
+    pub cell: (i32, i32),
+    /// Which district accent the plate wears: `0` primary, `1` secondary.
+    pub accent: usize,
+    /// Size multiplier on the base plate footprint.
+    pub scale: f32,
+    /// Rotation about Y, in radians.
+    pub yaw: f32,
+}
+
+/// Lays a district's data plates out on its roads.
+///
+/// The pattern comes from the same path seed as the street plan and the theme,
+/// so a directory always draws the same ground and two directories rarely draw
+/// the same one.
+pub fn road_plates(seed: u64, roads: &BTreeSet<(i32, i32)>, limit: usize) -> Vec<RoadPlate> {
+    let pattern = ViaPattern::from_seed(seed);
+    let cells: Vec<(i32, i32)> = roads.iter().copied().collect();
+    if cells.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    // The cluster and ring layouts need one or two plazas to work around.
+    let pick = |salt: u64| cells[(cell_hash(seed ^ salt, (0, 0)) as usize) % cells.len()];
+    let anchors = [pick(0x51ee_d001), pick(0x51ee_d002)];
+    let dash_phase = (seed >> 16) % 6;
+
+    let mut plates = Vec::new();
+    for &cell in &cells {
+        let noise = cell_hash(seed ^ 0x9e37_9a7e_u64, cell);
+        let kept = match pattern {
+            ViaPattern::Dotted => noise % 100 < 10,
+            // One cell in six along a diagonal, and only every other cell on it,
+            // so the plates read as dashes rather than a continuous line.
+            ViaPattern::Dashes => {
+                (cell.0 + cell.1).rem_euclid(6) == dash_phase as i32
+                    && (cell.0 - cell.1).rem_euclid(2) == 0
+            }
+            ViaPattern::Clusters => {
+                anchors.iter().any(|anchor| chebyshev(*anchor, cell) <= 3) && noise % 100 < 45
+            }
+            ViaPattern::Rings => anchors
+                .iter()
+                .any(|anchor| matches!(chebyshev(*anchor, cell), 2 | 4)),
+            ViaPattern::Sparse => noise % 100 < 5,
+        };
+        if !kept {
+            continue;
+        }
+        let base = match pattern {
+            ViaPattern::Sparse => 1.15,
+            _ => 0.85,
+        };
+        plates.push(RoadPlate {
+            cell,
+            accent: ((noise >> 17) % 2) as usize,
+            scale: base + ((noise >> 25) % 100) as f32 / 100.0 * 0.35,
+            // Dashes lie along their line; everything else is axis-aligned.
+            yaw: if pattern == ViaPattern::Dashes {
+                0.0
+            } else {
+                (noise >> 33) as f32 % 2.0 * std::f32::consts::FRAC_PI_2
+            },
+        });
+        if plates.len() >= limit {
+            break;
+        }
+    }
+    plates
+}
+
+fn chebyshev(a: (i32, i32), b: (i32, i32)) -> i32 {
+    (a.0 - b.0).abs().max((a.1 - b.1).abs())
+}
+
 /// Visual family for one path-seeded TRON district.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CityTheme {
@@ -1046,7 +1168,8 @@ pub fn classify_next_content(
 mod tests {
     use super::{
         Arena, ArenaKind, CellContent, CityTheme, CrashReason, EntryRequest, GatePlacement,
-        Heading, LightcycleSim, RunPhase, StepOutcome, Turn, Wall, classify_next_content,
+        Heading, LightcycleSim, RunPhase, StepOutcome, Turn, ViaPattern, Wall,
+        classify_next_content, road_plates,
     };
     use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
     use std::path::PathBuf;
@@ -1811,6 +1934,100 @@ mod tests {
                 "gate approach is not part of the road network at {approach:?}"
             );
         }
+    }
+
+    /// A lattice of roads big enough to lay a pattern out on.
+    fn road_lattice(span: i32) -> BTreeSet<(i32, i32)> {
+        let mut roads = BTreeSet::new();
+        for x in 0..span {
+            for z in 0..span {
+                if x % 4 == 0 || z % 4 == 0 {
+                    roads.insert((x, z));
+                }
+            }
+        }
+        roads
+    }
+
+    #[test]
+    fn a_district_lays_plates_only_on_its_roads() {
+        let roads = road_lattice(40);
+        for seed in 0..24_u64 {
+            for plate in road_plates(seed, &roads, 220) {
+                assert!(
+                    roads.contains(&plate.cell),
+                    "seed {seed} plated a cell that is not a road"
+                );
+                assert!(plate.accent < 2, "accent index out of range");
+                assert!((0.5..=1.6).contains(&plate.scale), "scale {}", plate.scale);
+            }
+        }
+    }
+
+    #[test]
+    fn a_district_draws_the_same_ground_every_time() {
+        let roads = road_lattice(40);
+        let first = road_plates(0x1234_5678, &roads, 220);
+        let again = road_plates(0x1234_5678, &roads, 220);
+        assert_eq!(first, again, "the same directory must lay out the same");
+        assert!(!first.is_empty(), "and it should lay out something");
+    }
+
+    #[test]
+    fn different_districts_draw_different_ground() {
+        let roads = road_lattice(40);
+        let layouts: Vec<_> = (0..12_u64)
+            .map(|seed| road_plates(seed, &roads, 220))
+            .collect();
+        let distinct = layouts
+            .iter()
+            .filter(|layout| **layout != layouts[0])
+            .count();
+        assert!(distinct >= 10, "layouts should vary between seeds");
+    }
+
+    #[test]
+    fn plates_are_sparse_rather_than_one_per_road_cell() {
+        let roads = road_lattice(40);
+        for seed in 0..40_u64 {
+            let plates = road_plates(seed, &roads, 220);
+            assert!(
+                plates.len() * 3 < roads.len(),
+                "seed {seed} plated {} of {} road cells",
+                plates.len(),
+                roads.len()
+            );
+        }
+    }
+
+    #[test]
+    fn every_pattern_is_reachable_and_capped() {
+        let roads = road_lattice(40);
+        let mut seen = Vec::new();
+        for seed in 0..200_u64 {
+            let pattern = ViaPattern::from_seed(seed);
+            if !seen.contains(&pattern) {
+                seen.push(pattern);
+            }
+            let plates = road_plates(seed, &roads, 40);
+            assert!(plates.len() <= 40, "the cap must hold");
+        }
+        assert_eq!(seen.len(), ViaPattern::ALL.len(), "all layouts get used");
+    }
+
+    #[test]
+    fn dense_patterns_are_clustered_not_uniform() {
+        // A clustered district should leave big parts of the grid bare.
+        let roads = road_lattice(40);
+        let clustered = (0..40_u64)
+            .map(|seed| road_plates(seed, &roads, 220))
+            .find(|plates| plates.len() > 12)
+            .expect("some seed should produce a pattern");
+        let columns: BTreeSet<i32> = clustered.iter().map(|plate| plate.cell.0).collect();
+        assert!(
+            columns.len() < 40,
+            "a pattern should not touch every column"
+        );
     }
 
     #[test]

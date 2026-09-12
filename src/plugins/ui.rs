@@ -3,6 +3,7 @@ use crate::config;
 use crate::disc::{DiscPhase, SourceGame};
 use crate::document::DocumentLoadState;
 use crate::filesystem::loader::{breadcrumb_label, get_path_components, path_component_name};
+use crate::lightcycle::logic;
 use crate::lightcycle::{LightcycleState, RunEnvironment, SourceSim};
 use crate::load::{DirectoryLoadState, DirectoryLoaded, DirectoryRequested};
 use crate::plugins::music::MusicState;
@@ -941,6 +942,14 @@ fn update_status_text(
     if *mode == InteractionMode::Lightcycle {
         if lightcycle.grace_room {
             status = format!("{status} | GRACE ROOM · NO HAZARDS");
+        }
+        // Name the ground layout, so the procedural variety is legible.
+        if lightcycle.run.is_some() {
+            let seed = logic::stable_path_seed(&navigator.0.current_path);
+            status = format!(
+                "{status} | GROUND: {}",
+                logic::ViaPattern::from_seed(seed).label().to_uppercase()
+            );
         }
         if lightcycle.quarantined {
             status = format!("{status} | QUARANTINE");
