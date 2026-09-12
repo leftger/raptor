@@ -199,17 +199,23 @@ pub const GC_SWEEP_SECONDS: f32 = 1.4;
 pub const GC_SWEEP_HEIGHT: f32 = 2.6;
 pub const GC_SWEEP_THICKNESS: f32 = 0.35;
 pub const GC_SWEEP_COLOR: Color = Color::srgba(0.55, 1.0, 0.85, 0.45);
-/// The call stack: one arena-wide glass plate per path level, floating over the
-/// arena. They hover and rock gently, so the stack reads as a live structure
-/// rather than six sheets of glass parked in the sky.
-pub const STACK_FRAME_BASE_Y: f32 = 7.0;
-pub const STACK_FRAME_SPACING: f32 = 2.0;
-/// Plate thickness, and how much of the arena each plate spans.
-pub const STACK_FRAME_THICKNESS: f32 = 0.1;
-pub const STACK_FRAME_INSET: f32 = 0.8;
+/// The call stack: one open frame per path level, floating over the arena's
+/// edge. Solid plates across the arena blocked too much of the road, so the
+/// middle of each level is left open and only the border is drawn. They hover,
+/// glide and rock, so the space above the city is never still.
+pub const STACK_FRAME_BASE_Y: f32 = 8.0;
+pub const STACK_FRAME_SPACING: f32 = 2.2;
+/// Width of the frame's border bars, and their thickness.
+pub const STACK_FRAME_BAR: f32 = 2.4;
+pub const STACK_FRAME_THICKNESS: f32 = 0.3;
+/// How far the frames overhang the arena walls.
+pub const STACK_FRAME_MARGIN: f32 = 1.5;
 /// Vertical hover: amplitude in world units, and the rate of the oscillation.
 pub const STACK_FRAME_HOVER: f32 = 0.38;
 pub const STACK_FRAME_HOVER_SPEED: f32 = 1.1;
+/// Horizontal glide: radius of the slow drift, and its rate.
+pub const STACK_FRAME_GLIDE: f32 = 0.8;
+pub const STACK_FRAME_GLIDE_SPEED: f32 = 0.35;
 /// Rocking: peak tilt in radians, and the rate.
 pub const STACK_FRAME_ROCK: f32 = 0.03;
 pub const STACK_FRAME_ROCK_SPEED: f32 = 0.7;

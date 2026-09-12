@@ -476,10 +476,11 @@ world keeps up a running machine metaphor:
   glass sheet.
 * **Hex-dump highway** — the roads carry a sampled byte stream as emissive data
   plates, seeded from the directory's path so a folder always lays out the same.
-* **Call stack** — one arena-wide glass plate per path level, floating over the
-  arena, so `/home/you/project` is visibly three frames deep. The plates hover
-  and rock with each level out of phase, so the space above the city is always
-  in motion.
+* **Call stack** — one open frame per path level, floating over the arena's
+  edge, so `/home/you/project` is visibly three frames deep. Only the chunky
+  border is drawn, so the road below stays visible, and each frame hovers,
+  glides and rocks out of phase with the next: the space above the city moves,
+  the middle of it does not.
 * **Disk seek** — every directory hop plays a mechanical head-seek cue.
 * **Cache hit** — revisiting a directory you have already opened grants a short
   ground-speed surge.
