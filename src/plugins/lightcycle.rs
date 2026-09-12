@@ -1299,6 +1299,10 @@ fn apply_mode_swap(
         // still up and was dropped, which left that one room without its stack,
         // its highway plates or its flood.
         let path = navigator.0.current_path.clone();
+        // The first ride is a grace period: the room is dressed like any other,
+        // but nothing in it is hunting you yet.
+        let hazards = state.rides_started;
+        state.rides_started = true;
         spawn_run_entities(&mut commands, &assets, &mut meshes, &run);
         decorate_directory_run(
             &mut commands,
@@ -1309,6 +1313,7 @@ fn apply_mode_swap(
             &mut race,
             &path,
             &run,
+            hazards,
         );
         // The room you started in is a room like any other: it belongs in the
         // commit log, and having been there counts as a cache hit later.
@@ -4521,6 +4526,7 @@ fn reset_on_directory_loaded(
             &mut race,
             &event.path,
             &run,
+            true,
         );
         history.commit(&event.path);
 
@@ -4558,7 +4564,9 @@ fn decorate_directory_run(
     race: &mut SchedulerRace,
     path: &Path,
     run: &ActiveRun,
+    hazards: bool,
 ) {
+    state.grace_room = !hazards;
     let span = config::GRID_SPACING;
     let center_x = (run.arena.min.0 + run.arena.max.0) as f32 * 0.5 * span;
     let center_z = (run.arena.min.1 + run.arena.max.1) as f32 * 0.5 * span;
@@ -4629,40 +4637,43 @@ fn decorate_directory_run(
         }
     }
 
-    // The flood starts at the arena's low-Z edge and rises toward high Z.
-    flood.active = true;
-    flood.timer = 0.0;
-    flood.delay = if quarantined {
-        config::FLOOD_DELAY_SECONDS * 0.6
-    } else {
-        config::FLOOD_DELAY_SECONDS
-    };
+    // The flood starts at the arena's low-Z edge and rises toward high Z. A
+    // grace room never arms it, and never spawns the wall at all.
     flood.min_z = run.arena.min.1 as f32;
     flood.max_z = run.arena.max.1 as f32;
     flood.center_x = center_x;
     flood.width = ((run.arena.max.0 - run.arena.min.0) as f32 + 2.0) * span;
     flood.plane = flood.min_z;
-    commands.spawn((
-        LightcycleSceneRoot,
-        FloodEntity,
-        Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(assets.flood_material.clone()),
-        Transform::from_xyz(
-            flood.center_x,
-            config::FLOOD_HEIGHT * 0.5,
-            flood.min_z * span,
-        )
-        .with_scale(Vec3::new(flood.width, config::FLOOD_HEIGHT, 0.4)),
-        Visibility::Hidden,
-        Pickable::IGNORE,
-        // A brighter band along the crest: a translucent sheet on its own reads
-        // as a scan line, the lit top edge makes it a wall.
-        children![(
+    flood.timer = 0.0;
+    flood.active = hazards;
+    flood.delay = if quarantined {
+        config::FLOOD_DELAY_SECONDS * 0.6
+    } else {
+        config::FLOOD_DELAY_SECONDS
+    };
+    if hazards {
+        commands.spawn((
+            LightcycleSceneRoot,
+            FloodEntity,
             Mesh3d(assets.unit_cube.clone()),
-            MeshMaterial3d(assets.flood_crest_material.clone()),
-            Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3::new(1.0, 0.06, 1.2)),
-        )],
-    ));
+            MeshMaterial3d(assets.flood_material.clone()),
+            Transform::from_xyz(
+                flood.center_x,
+                config::FLOOD_HEIGHT * 0.5,
+                flood.min_z * span,
+            )
+            .with_scale(Vec3::new(flood.width, config::FLOOD_HEIGHT, 0.4)),
+            Visibility::Hidden,
+            Pickable::IGNORE,
+            // A brighter band along the crest: a translucent sheet on its own reads
+            // as a scan line, the lit top edge makes it a wall.
+            children![(
+                Mesh3d(assets.unit_cube.clone()),
+                MeshMaterial3d(assets.flood_crest_material.clone()),
+                Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3::new(1.0, 0.06, 1.2)),
+            )],
+        ));
+    }
 
     // The collector's sweep rides the same arena bounds as the flood, so it
     // needs no state of its own beyond its countdown.
@@ -4687,10 +4698,12 @@ fn decorate_directory_run(
     ));
 
     // Scheduler race: threads start across the directory and run for the gate.
+    // A grace room runs no race at all, and spawns no rivals to run it.
     race.sim = None;
     race.notice.clear();
     race.timer = 0.0;
-    if run.arena.roads.len() >= config::SCHEDULER_MIN_ROADS
+    if hazards
+        && run.arena.roads.len() >= config::SCHEDULER_MIN_ROADS
         && let Some(portal) = run.arena.parent_portal.as_ref()
     {
         let starts = start_cells(&run.arena.roads, portal.to, config::SCHEDULER_RIVAL_COUNT);
@@ -4698,29 +4711,33 @@ fn decorate_directory_run(
             race.sim = Some(RaceSim::new(starts, portal.to));
         }
     }
-    for index in 0..config::SCHEDULER_RIVAL_COUNT {
-        commands.spawn((
-            LightcycleSceneRoot,
-            RivalEntity { index },
-            Transform::from_xyz(0.0, 0.0, 0.0),
-            Visibility::Hidden,
-            Pickable::IGNORE,
-            children![
-                (
-                    WorldAssetRoot(assets.cycle_scene.clone()),
-                    Transform::from_rotation(Quat::from_rotation_y(config::LIGHTCYCLE_MODEL_YAW))
+    if hazards {
+        for index in 0..config::SCHEDULER_RIVAL_COUNT {
+            commands.spawn((
+                LightcycleSceneRoot,
+                RivalEntity { index },
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Visibility::Hidden,
+                Pickable::IGNORE,
+                children![
+                    (
+                        WorldAssetRoot(assets.cycle_scene.clone()),
+                        Transform::from_rotation(Quat::from_rotation_y(
+                            config::LIGHTCYCLE_MODEL_YAW
+                        ))
                         .with_scale(Vec3::splat(config::LIGHTCYCLE_MODEL_SCALE * 0.72)),
-                ),
-                // A thread marker above the bike: the rival shares the player's
-                // model, so without this it reads as a ghost of your own cycle.
-                (
-                    Mesh3d(assets.unit_cube.clone()),
-                    MeshMaterial3d(assets.rival_material.clone()),
-                    Transform::from_xyz(0.0, config::LIGHTCYCLE_CYCLE_HEIGHT + 1.1, 0.0)
-                        .with_scale(Vec3::new(0.22, 0.9, 0.22)),
-                ),
-            ],
-        ));
+                    ),
+                    // A thread marker above the bike: the rival shares the player's
+                    // model, so without this it reads as a ghost of your own cycle.
+                    (
+                        Mesh3d(assets.unit_cube.clone()),
+                        MeshMaterial3d(assets.rival_material.clone()),
+                        Transform::from_xyz(0.0, config::LIGHTCYCLE_CYCLE_HEIGHT + 1.1, 0.0)
+                            .with_scale(Vec3::new(0.22, 0.9, 0.22)),
+                    ),
+                ],
+            ));
+        }
     }
 }
 
@@ -5586,6 +5603,7 @@ fn restore_directory_arena(
         &mut race,
         &navigator.0.current_path,
         &run,
+        true,
     );
     state.clock = 0.0;
     state.crash_fx = None;
@@ -8616,6 +8634,15 @@ mod tests {
         assert!(is_quarantined(Path::new("/srv/.git")));
         assert!(!is_quarantined(Path::new("/home/me/project/src")));
         assert!(!is_quarantined(Path::new("/home/me")));
+    }
+
+    #[test]
+    fn a_fresh_session_has_not_ridden_yet_so_the_opening_room_is_grace() {
+        let state = crate::lightcycle::LightcycleState::default();
+        assert!(
+            !state.rides_started,
+            "the opening room is hazard-free until the first ride starts"
+        );
     }
 
     #[test]

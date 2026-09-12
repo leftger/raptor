@@ -940,6 +940,9 @@ fn update_status_text(
     }
 
     if *mode == InteractionMode::Lightcycle {
+        if lightcycle.grace_room {
+            status = format!("{status} | GRACE ROOM · NO HAZARDS");
+        }
         if lightcycle.quarantined {
             status = format!("{status} | QUARANTINE");
         }

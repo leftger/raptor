@@ -597,6 +597,12 @@ pub struct LightcycleState {
     pub gc_sweep: f32,
     /// True while the current directory is a quarantined vault.
     pub quarantined: bool,
+    /// Set once the player has ridden at all. The opening room is a grace
+    /// period: nothing is hunting them while they learn the controls.
+    pub rides_started: bool,
+    /// True while the current room is that grace period, which the HUD says out
+    /// loud so the missing hazards do not read as a bug.
+    pub grace_room: bool,
 }
 
 /// Timeline for the crash animation.

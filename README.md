@@ -141,6 +141,11 @@ The gate is a real opening in the wall, framed by two posts and a lintel that
 pulse while light bars sweep up through the gap, so it is easy to spot from
 across the arena.
 
+The **first room of a session is a grace period**: it is dressed like every
+other directory, but no flood is armed and no scheduler race runs, and the
+status line says so. Everything you ride into after that is a normal room, and
+coming back to where you started later does not make it a grace room again.
+
 Every folder's gate is cut into a different wall at a different offset, so you
 have to go looking for it, but it is derived from the folder's path rather than
 drawn at random: the same folder always keeps the same door.
