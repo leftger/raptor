@@ -225,7 +225,7 @@ pub const STACK_FRAME_PHASE_STEP: f32 = 0.75;
 /// each frame travels from its ceiling height down to the same distance below
 /// the floor, rests there for a beat, and rises again.
 pub const STACK_PLUNGE_INTERVAL: f32 = 15.0;
-pub const STACK_PLUNGE_SECONDS: f32 = 7.0;
+pub const STACK_PLUNGE_SECONDS: f32 = 4.0;
 /// Progress each level lags the one above it, so the stack cascades down and
 /// refills from the top on the way back.
 pub const STACK_PLUNGE_STAGGER: f32 = 0.06;
