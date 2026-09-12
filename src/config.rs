@@ -235,10 +235,12 @@ pub const STACK_FRAME_MAX: usize = 6;
 
 /// Hex-dump highway: the data plates a district lays along its roads.
 ///
-/// The layout itself is procedural (see `ViaPattern`); this is just the ceiling
-/// on how many plates a big district may draw, kept low because one plate on
-/// every road cell buried the actual road.
-pub const HEX_PLATE_MAX: usize = 220;
+/// The layout is procedural (see `ViaPattern`), and so is the count: it tracks
+/// the size of the district, so a huge room is not left with the handful of
+/// plates that suited a small one. The ceiling keeps the draw calls bounded.
+pub const PLATE_DENSITY: f32 = 0.06;
+pub const PLATE_MIN: usize = 18;
+pub const PLATE_MAX: usize = 420;
 /// How much of a district's accent bleeds into the sky while riding it.
 pub const DISTRICT_SKY_MIX: f32 = 0.32;
 /// How much of the accent tints the key light over a district.

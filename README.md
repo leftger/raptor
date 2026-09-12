@@ -483,7 +483,9 @@ world keeps up a running machine metaphor:
   plates. Each district picks one of five layouts from its path seed — dotted,
   dashed lines, clustered plazas, square rings, or sparse pads — so the ground
   reads differently from one folder to the next instead of one pad on every
-  road cell.
+  road cell. Both the layout and the *number* of plates scale with the size of
+  the district, so a big room is not left with the handful that suited a small
+  one.
 * **Call stack** — one open frame per path level, floating over the arena's
   edge, so `/home/you/project` is visibly three frames deep. Only the chunky
   border is drawn, so the road below stays visible, and each frame hovers,

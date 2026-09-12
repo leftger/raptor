@@ -3,6 +3,7 @@
 //! This module deliberately contains no Bevy types so movement, collisions,
 //! spawn search, and parent-portal rules can be unit-tested on a plain thread.
 
+use crate::config;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
 
@@ -277,6 +278,27 @@ impl ViaPattern {
         Self::ALL[(mixed % Self::ALL.len() as u64) as usize]
     }
 
+    /// How many neighbourhoods the layout works around. The anchored layouts
+    /// have to tile the district rather than sit on one plaza, or a big room
+    /// ends up with the same handful of plates a small one got.
+    fn anchor_count(self, roads: usize) -> usize {
+        match self {
+            Self::Clusters | Self::Rings => (roads / 300).clamp(1, 24),
+            _ => 0,
+        }
+    }
+
+    /// Relative density, before the district's size is taken into account.
+    fn density_factor(self) -> f32 {
+        match self {
+            Self::Dotted => 1.2,
+            Self::Dashes => 1.0,
+            Self::Clusters => 1.4,
+            Self::Rings => 1.1,
+            Self::Sparse => 0.6,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Dotted => "dotted",
@@ -304,16 +326,15 @@ pub struct RoadPlate {
 ///
 /// The pattern comes from the same path seed as the street plan and the theme,
 /// so a directory always draws the same ground and two directories rarely draw
-/// the same one.
-pub fn road_plates(seed: u64, roads: &BTreeSet<(i32, i32)>, limit: usize) -> Vec<RoadPlate> {
+/// the same one. Both the layout *and* the number of plates scale with the
+/// district: a room ten times the size gets roughly ten times the ground.
+pub fn road_plates(seed: u64, roads: &BTreeSet<(i32, i32)>) -> Vec<RoadPlate> {
     let pattern = ViaPattern::from_seed(seed);
     let cells: Vec<(i32, i32)> = roads.iter().copied().collect();
-    if cells.is_empty() || limit == 0 {
+    if cells.is_empty() {
         return Vec::new();
     }
-    // The cluster and ring layouts need one or two plazas to work around.
-    let pick = |salt: u64| cells[(cell_hash(seed ^ salt, (0, 0)) as usize) % cells.len()];
-    let anchors = [pick(0x51ee_d001), pick(0x51ee_d002)];
+    let anchors = spread_anchors(seed, &cells, pattern.anchor_count(cells.len()));
     let dash_phase = (seed >> 16) % 6;
 
     let mut plates = Vec::new();
@@ -353,11 +374,37 @@ pub fn road_plates(seed: u64, roads: &BTreeSet<(i32, i32)>, limit: usize) -> Vec
                 (noise >> 33) as f32 % 2.0 * std::f32::consts::FRAC_PI_2
             },
         });
-        if plates.len() >= limit {
-            break;
-        }
     }
+
+    let target = ((cells.len() as f32 * config::PLATE_DENSITY * pattern.density_factor()) as usize)
+        .clamp(config::PLATE_MIN, config::PLATE_MAX);
+    thin(&mut plates, target);
     plates
+}
+
+/// Picks `count` cells spread across the district's roads.
+fn spread_anchors(seed: u64, cells: &[(i32, i32)], count: usize) -> Vec<(i32, i32)> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let step = (cells.len() / count).max(1);
+    let offset = cell_hash(seed ^ 0x00dd_1e55_u64, (0, 0)) as usize % step;
+    (0..count)
+        .map(|index| cells[(offset + index * step) % cells.len()])
+        .collect()
+}
+
+/// Keeps at most `target` plates, evenly spaced through the list. The list is in
+/// road order, so thinning spreads the survivors over the district instead of
+/// cropping one end of it.
+fn thin(plates: &mut Vec<RoadPlate>, target: usize) {
+    if plates.len() <= target {
+        return;
+    }
+    let stride = plates.len() as f32 / target as f32;
+    *plates = (0..target)
+        .map(|index| plates[(index as f32 * stride) as usize])
+        .collect();
 }
 
 fn chebyshev(a: (i32, i32), b: (i32, i32)) -> i32 {
@@ -1171,6 +1218,7 @@ mod tests {
         Heading, LightcycleSim, RunPhase, StepOutcome, Turn, ViaPattern, Wall,
         classify_next_content, road_plates,
     };
+    use crate::config;
     use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
     use std::path::PathBuf;
 
@@ -1950,10 +1998,44 @@ mod tests {
     }
 
     #[test]
+    fn the_ground_keeps_up_as_a_district_grows() {
+        // The bug this guards: an anchored layout placed the same handful of
+        // plates however big the room was, so a huge directory looked bare.
+        let small = road_lattice(20);
+        let large = road_lattice(120);
+        for seed in 0..60_u64 {
+            let few = road_plates(seed, &small).len();
+            let many = road_plates(seed, &large).len();
+            assert!(
+                many >= few,
+                "seed {seed} put {few} plates in a small room and {many} in a large one"
+            );
+            assert!(
+                many >= 100,
+                "seed {seed} left a {} road room with only {many} plates",
+                large.len()
+            );
+        }
+    }
+
+    #[test]
+    fn the_plate_count_is_bounded() {
+        let huge = road_lattice(200);
+        for seed in 0..20_u64 {
+            let plates = road_plates(seed, &huge);
+            assert!(
+                plates.len() <= config::PLATE_MAX,
+                "{} plates is over the ceiling",
+                plates.len()
+            );
+        }
+    }
+
+    #[test]
     fn a_district_lays_plates_only_on_its_roads() {
         let roads = road_lattice(40);
         for seed in 0..24_u64 {
-            for plate in road_plates(seed, &roads, 220) {
+            for plate in road_plates(seed, &roads) {
                 assert!(
                     roads.contains(&plate.cell),
                     "seed {seed} plated a cell that is not a road"
@@ -1967,8 +2049,8 @@ mod tests {
     #[test]
     fn a_district_draws_the_same_ground_every_time() {
         let roads = road_lattice(40);
-        let first = road_plates(0x1234_5678, &roads, 220);
-        let again = road_plates(0x1234_5678, &roads, 220);
+        let first = road_plates(0x1234_5678, &roads);
+        let again = road_plates(0x1234_5678, &roads);
         assert_eq!(first, again, "the same directory must lay out the same");
         assert!(!first.is_empty(), "and it should lay out something");
     }
@@ -1976,9 +2058,7 @@ mod tests {
     #[test]
     fn different_districts_draw_different_ground() {
         let roads = road_lattice(40);
-        let layouts: Vec<_> = (0..12_u64)
-            .map(|seed| road_plates(seed, &roads, 220))
-            .collect();
+        let layouts: Vec<_> = (0..12_u64).map(|seed| road_plates(seed, &roads)).collect();
         let distinct = layouts
             .iter()
             .filter(|layout| **layout != layouts[0])
@@ -1990,7 +2070,7 @@ mod tests {
     fn plates_are_sparse_rather_than_one_per_road_cell() {
         let roads = road_lattice(40);
         for seed in 0..40_u64 {
-            let plates = road_plates(seed, &roads, 220);
+            let plates = road_plates(seed, &roads);
             assert!(
                 plates.len() * 3 < roads.len(),
                 "seed {seed} plated {} of {} road cells",
@@ -2001,16 +2081,13 @@ mod tests {
     }
 
     #[test]
-    fn every_pattern_is_reachable_and_capped() {
-        let roads = road_lattice(40);
+    fn every_layout_gets_used() {
         let mut seen = Vec::new();
         for seed in 0..200_u64 {
             let pattern = ViaPattern::from_seed(seed);
             if !seen.contains(&pattern) {
                 seen.push(pattern);
             }
-            let plates = road_plates(seed, &roads, 40);
-            assert!(plates.len() <= 40, "the cap must hold");
         }
         assert_eq!(seen.len(), ViaPattern::ALL.len(), "all layouts get used");
     }
@@ -2020,7 +2097,7 @@ mod tests {
         // A clustered district should leave big parts of the grid bare.
         let roads = road_lattice(40);
         let clustered = (0..40_u64)
-            .map(|seed| road_plates(seed, &roads, 220))
+            .map(|seed| road_plates(seed, &roads))
             .find(|plates| plates.len() > 12)
             .expect("some seed should produce a pattern");
         let columns: BTreeSet<i32> = clustered.iter().map(|plate| plate.cell.0).collect();

@@ -4571,11 +4571,7 @@ fn decorate_directory_run(
     // Hex-dump highway: the district's own procedural plate layout, wearing the
     // district's accents.
     let theme = city_theme_index(run.arena.city_theme);
-    for plate in road_plates(
-        stable_path_seed(path),
-        &run.arena.roads,
-        config::HEX_PLATE_MAX,
-    ) {
+    for plate in road_plates(stable_path_seed(path), &run.arena.roads) {
         commands.spawn((
             LightcycleSceneRoot,
             Mesh3d(assets.unit_cube.clone()),
