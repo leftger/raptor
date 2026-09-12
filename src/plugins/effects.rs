@@ -1,5 +1,5 @@
 use crate::config;
-use crate::state::{InteractionMode, ScanEffectResource};
+use crate::state::{InteractionMode, RenderSettings, ScanEffectResource};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -38,7 +38,15 @@ fn setup_scan_effect(
     ));
 }
 
-fn setup_scanlines(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+fn setup_scanlines(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    settings: Res<RenderSettings>,
+) {
+    // The overlay is one full-screen blended quad, so it is optional.
+    if !settings.scanlines {
+        return;
+    }
     let alpha = (config::SCANLINE_ALPHA * 255.0) as u8;
     let texture = images.add(Image::new(
         Extent3d {

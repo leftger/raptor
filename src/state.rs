@@ -53,6 +53,41 @@ pub struct CacheState {
     pub visited: std::collections::HashSet<PathBuf>,
 }
 
+/// Raster settings that trade looks for frame time.
+///
+/// These are the levers that actually matter on a weak GPU: multisampling,
+/// HDR bloom, the full-screen scanline overlay, and the window size.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct RenderSettings {
+    /// Multisample count: 1, 2, 4, or 8.
+    pub msaa: u32,
+    /// HDR bloom while riding (lightcycle mode). Measured at about 15ms a
+    /// frame on integrated graphics, because it forces the HDR pipeline.
+    pub bloom: bool,
+    /// Full-screen scanline overlay.
+    pub scanlines: bool,
+    /// Vignette post-process on the camera.
+    pub vignette: bool,
+}
+
+impl Default for RenderSettings {
+    fn default() -> Self {
+        Self {
+            msaa: config::MSAA_SAMPLES,
+            bloom: true,
+            scanlines: true,
+            vignette: true,
+        }
+    }
+}
+
+impl RenderSettings {
+    /// Multisampling as a Bevy sample count.
+    pub fn msaa_samples(&self) -> u32 {
+        self.msaa.max(1)
+    }
+}
+
 /// The fake machine telemetry shown in the HUD: a syscall trace cursor and
 /// register/clock readouts.
 #[derive(Resource, Default)]

@@ -36,8 +36,8 @@ use load::DirectoryLoadState;
 use plugins::RaptorPlugins;
 use plugins::music::MusicState;
 use state::{
-    NavigatorResource, OrbitCameraResource, ScanEffectResource, SelectionState, UiNotice,
-    UiSettings,
+    NavigatorResource, OrbitCameraResource, RenderSettings, ScanEffectResource, SelectionState,
+    UiNotice, UiSettings,
 };
 
 fn main() {
@@ -69,6 +69,12 @@ fn main() {
         .insert_resource(OrbitCameraResource::default())
         .insert_resource(SelectionState::default())
         .insert_resource(ScanEffectResource::default())
+        .insert_resource(RenderSettings {
+            msaa: options.render.msaa,
+            bloom: options.render.bloom,
+            scanlines: options.render.scanlines,
+            vignette: options.render.vignette,
+        })
         .insert_resource(MusicState::with_settings(
             options.music,
             options.music_volume,
@@ -78,7 +84,10 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: WINDOW_TITLE.into(),
-                        resolution: (WINDOW_WIDTH, WINDOW_HEIGHT).into(),
+                        resolution: options
+                            .window
+                            .unwrap_or((WINDOW_WIDTH, WINDOW_HEIGHT))
+                            .into(),
                         ..default()
                     }),
                     ..default()
@@ -89,5 +98,11 @@ fn main() {
                 }),
         )
         .add_plugins(RaptorPlugins)
+        .add_plugins(plugins::bench::BenchmarkPlugin {
+            config: plugins::bench::BenchConfig {
+                seconds: options.bench_seconds,
+                ride: options.bench_ride,
+            },
+        })
         .run();
 }

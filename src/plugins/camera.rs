@@ -1,6 +1,6 @@
 use crate::config;
 use crate::plugins::transition::transition_inactive;
-use crate::state::{InteractionMode, OrbitCameraResource};
+use crate::state::{InteractionMode, OrbitCameraResource, RenderSettings};
 use bevy::camera::Hdr;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::post_process::bloom::Bloom;
@@ -30,23 +30,26 @@ fn in_explorer_mode(mode: Res<InteractionMode>) -> bool {
     *mode == InteractionMode::Explorer
 }
 
-fn setup_camera(mut commands: Commands) {
-    commands.spawn((
+fn setup_camera(mut commands: Commands, settings: Res<RenderSettings>) {
+    let mut camera = commands.spawn((
         Camera3d::default(),
+        Msaa::from_samples(settings.msaa_samples()),
         Transform::from_xyz(
             config::DEFAULT_CAMERA_DISTANCE,
             config::DEFAULT_CAMERA_DISTANCE,
             config::DEFAULT_CAMERA_DISTANCE,
         )
         .looking_at(Vec3::ZERO, Vec3::Y),
-        Vignette {
+    ));
+    if settings.vignette {
+        camera.insert(Vignette {
             intensity: (config::VIGNETTE_ALPHA * 2.5).min(1.0),
             radius: 0.65,
             smoothness: 3.0,
             color: Color::BLACK,
             ..default()
-        },
-    ));
+        });
+    }
 
     commands.spawn((
         DirectionalLight {
@@ -59,11 +62,12 @@ fn setup_camera(mut commands: Commands) {
 
 fn sync_lightcycle_bloom(
     mode: Res<InteractionMode>,
+    settings: Res<RenderSettings>,
     camera: Single<(Entity, Has<Bloom>, Has<Hdr>), With<Camera3d>>,
     mut commands: Commands,
 ) {
     let (entity, has_bloom, has_hdr) = *camera;
-    let enabled = *mode == InteractionMode::Lightcycle;
+    let enabled = settings.bloom && *mode == InteractionMode::Lightcycle;
     if enabled && (!has_bloom || !has_hdr) {
         commands.entity(entity).insert((
             Hdr,

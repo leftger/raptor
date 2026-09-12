@@ -922,13 +922,17 @@ fn sync_directory_scene_visibility(
     mode: Res<InteractionMode>,
     mut directory_scene: Query<&mut Visibility, With<DirectorySceneRoot>>,
 ) {
-    let visible = *mode == InteractionMode::Explorer;
+    let wanted = if *mode == InteractionMode::Explorer {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    // Writing unconditionally marks every entity in the scene changed each
+    // frame, which makes Bevy redo visibility propagation for all of them.
     for mut visibility in &mut directory_scene {
-        *visibility = if visible {
-            Visibility::Visible
-        } else {
-            Visibility::Hidden
-        };
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
     }
 }
 

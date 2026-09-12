@@ -21,6 +21,13 @@ pub const MAX_DIRECTORY_ENTRIES: usize = 30_000;
 pub const DIR_CHILD_COUNT_CAP: usize = 500;
 pub const MESH_CHUNK_SIZE: usize = 512;
 pub const LABEL_BUDGET: usize = 512;
+/// How many nearest blocks are projected before the labels are chosen.
+///
+/// The label pass is the one system that touches every entry in a directory, so
+/// it projects a bounded pool of the closest blocks rather than all of them.
+/// With a pool several times the budget it still picks the labels a full pass
+/// would, for a fraction of the work.
+pub const LABEL_CANDIDATE_POOL: usize = LABEL_BUDGET * 6;
 
 pub const BLOCK_WIDTH: f32 = 2.0;
 pub const BLOCK_DEPTH: f32 = 2.0;
@@ -31,6 +38,11 @@ pub const DIR_HEIGHT_BASE: f32 = 1.0;
 pub const FILE_HEIGHT_LOG_SCALE: f32 = 0.3;
 
 pub const BACKGROUND_COLOR: Color = Color::srgb(0.02, 0.02, 0.02);
+
+/// Default multisampling. Bevy defaults to 4x, which measured at roughly 20ms
+/// a frame on integrated graphics; off is the default here and `--msaa 2|4|8`
+/// brings it back.
+pub const MSAA_SAMPLES: u32 = 1;
 pub const GRID_COLOR: Color = Color::srgba(0.0, 1.0, 0.25, 0.15);
 pub const DIR_COLOR: Color = Color::srgba(0.0, 1.0, 0.25, 0.8);
 pub const FILE_COLOR: Color = Color::srgba(0.0, 0.83, 1.0, 0.8);

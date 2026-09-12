@@ -574,6 +574,49 @@ cargo run --release -- --music-volume 0.5
 cargo run --release -- --help
 ```
 
+## Performance
+
+The frame is GPU-bound, so the settings that matter are raster settings. All of
+them are runtime flags, and `--bench` measures them on your own machine.
+
+```bash
+# Print frame-time statistics for 12 seconds, then exit
+cargo run --release -- --bench
+
+# A settled view, for comparing two settings fairly
+cargo run --release -- --bench --bench-static
+
+# The preset for weak integrated graphics
+cargo run --release -- --fast
+
+# Individual knobs
+cargo run --release -- --msaa 1 --no-bloom --window 960x540
+```
+
+Measured on an Intel Iris 6100 at 1280x720, riding a 3,000-entry directory:
+
+| preset | frame time | frame rate |
+| --- | --- | --- |
+| Bevy defaults (4x MSAA + bloom) | 59.0 ms | 17 fps |
+| **current defaults** (no MSAA + bloom) | **36.1 ms** | **28 fps** |
+| `--fast` (no MSAA, no bloom) | 23.1 ms | 43 fps |
+
+What each knob is worth, measured the same way:
+
+* **Multisampling** — 4x (Bevy's default) costs about 20 ms a frame; 2x measured
+  no cheaper than 4x, so the choice is really on or off. Now off by default.
+* **Bloom** — about 15 ms, because it forces the whole HDR pipeline. Trimming
+  the blur chain did not help, so the choice is on or off; on by default for the
+  glow, off in `--fast`.
+* **Scanlines** — about 1 ms, so they stay.
+* **Window size** — fill-rate bound: 960x540 is worth about 13 ms over 1280x720.
+
+Alongside those, the per-frame work that scaled with directory size was cut: the
+label pass used to project every entry in the directory (up to 30,000) and sort
+them all to place 512 labels, and it now culls and pools the nearest blocks
+first. Visibility and HUD writes are change-guarded, so idle frames stop marking
+the whole scene dirty.
+
 ## Dependencies
 
 RAPTOR is built using **Bevy 0.19**, a modern Rust game engine that works on Linux, macOS and Windows.

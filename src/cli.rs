@@ -10,6 +10,49 @@ pub struct Options {
     /// Procedural music starts on by default.
     pub music: bool,
     pub music_volume: f32,
+    /// Frame-time benchmark: seconds to run before exiting, zero for off.
+    pub bench_seconds: f32,
+    /// Whether the benchmark drives the game as it measures.
+    pub bench_ride: bool,
+    /// Raster settings that trade looks for frame time.
+    pub render: RenderOptions,
+    /// Start the window at this size instead of the default.
+    pub window: Option<WindowSize>,
+}
+
+/// The render knobs, as parsed from the command line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderOptions {
+    pub msaa: u32,
+    pub bloom: bool,
+    pub scanlines: bool,
+    pub vignette: bool,
+}
+
+/// Window size override, in physical pixels.
+pub type WindowSize = (u32, u32);
+
+impl RenderOptions {
+    /// Everything that measured expensive, turned down.
+    pub fn fast() -> Self {
+        Self {
+            msaa: 1,
+            bloom: false,
+            scanlines: true,
+            vignette: true,
+        }
+    }
+}
+
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            msaa: config::MSAA_SAMPLES,
+            bloom: true,
+            scanlines: true,
+            vignette: true,
+        }
+    }
 }
 
 impl Default for Options {
@@ -21,6 +64,10 @@ impl Default for Options {
             show_fps: true,
             music: true,
             music_volume: config::MUSIC_DEFAULT_VOLUME,
+            bench_seconds: 0.0,
+            bench_ride: true,
+            render: RenderOptions::default(),
+            window: None,
         }
     }
 }
@@ -57,6 +104,64 @@ impl Options {
                 "--hidden" => options.show_hidden = true,
                 "--no-labels" => options.show_labels = false,
                 "--no-fps" => options.show_fps = false,
+                // Benchmarks turn music off so the numbers are about the frame,
+                // not about the synth thread sharing the CPU.
+                "--bench" => {
+                    options.bench_seconds = BENCH_DEFAULT_SECONDS;
+                    options.music = false;
+                }
+                "--bench-seconds" => {
+                    let Some(value) = args.next() else {
+                        return Err(TryParseError::Invalid(
+                            "--bench-seconds needs a number of seconds".to_string(),
+                        ));
+                    };
+                    let seconds: f32 = value.parse().map_err(|_| {
+                        TryParseError::Invalid(format!(
+                            "--bench-seconds expects a number, got '{value}'"
+                        ))
+                    })?;
+                    if !(seconds.is_finite() && seconds > 0.0) {
+                        return Err(TryParseError::Invalid(
+                            "--bench-seconds must be greater than zero".to_string(),
+                        ));
+                    }
+                    options.bench_seconds = seconds;
+                    options.music = false;
+                }
+                "--bench-static" => options.bench_ride = false,
+                "--msaa" => {
+                    let Some(value) = args.next() else {
+                        return Err(TryParseError::Invalid(
+                            "--msaa needs a sample count: 1, 2, 4 or 8".to_string(),
+                        ));
+                    };
+                    let samples: u32 = value.parse().map_err(|_| {
+                        TryParseError::Invalid(format!("--msaa expects a number, got '{value}'"))
+                    })?;
+                    if !matches!(samples, 1 | 2 | 4 | 8) {
+                        return Err(TryParseError::Invalid(format!(
+                            "--msaa supports 1, 2, 4 or 8 samples, got '{value}'"
+                        )));
+                    }
+                    options.render.msaa = samples;
+                }
+                "--no-bloom" => options.render.bloom = false,
+                "--fast" => {
+                    // The preset for weak integrated graphics, measured on an
+                    // Intel Iris 6100: about 3x the frame rate of the defaults.
+                    options.render = RenderOptions::fast();
+                }
+                "--no-scanlines" => options.render.scanlines = false,
+                "--no-vignette" => options.render.vignette = false,
+                "--window" => {
+                    let Some(value) = args.next() else {
+                        return Err(TryParseError::Invalid(
+                            "--window needs a size like 960x540".to_string(),
+                        ));
+                    };
+                    options.window = Some(parse_window_size(&value)?);
+                }
                 "--no-music" => options.music = false,
                 "--music-volume" => {
                     let Some(value) = args.next() else {
@@ -95,10 +200,39 @@ impl Options {
              --no-fps           Hide the FPS counter in the status bar\n  \
              --no-music         Start with procedural music disabled (toggle with N)\n  \
              --music-volume V   Music volume 0.0-1.0 (default {})\n  \
+             --bench            Ride for {}s, print frame-time stats, then exit\n  \
+             --bench-seconds N  Benchmark for N seconds instead\n  \
+             --bench-static     Benchmark a settled ride without steering\n  \
+             --msaa N           Multisampling: 1, 2, 4 or 8 (default {})\n  \
+             --fast             Preset for weak GPUs: no MSAA, no bloom\n  \
+             --no-scanlines     Disable the scanline overlay\n  \
+             --no-vignette      Disable the vignette post-process\n  \
+             --window WxH       Start with a window of this size, e.g. 960x540\n  \
              -h, --help         Print this help message\n",
-            config::MUSIC_DEFAULT_VOLUME
+            config::MUSIC_DEFAULT_VOLUME,
+            BENCH_DEFAULT_SECONDS as u32,
+            config::MSAA_SAMPLES,
         );
     }
+}
+
+/// How long `--bench` rides when no duration is given.
+const BENCH_DEFAULT_SECONDS: f32 = 12.0;
+
+/// Parses a `WIDTHxHEIGHT` window size, e.g. `960x540`.
+fn parse_window_size(value: &str) -> Result<WindowSize, TryParseError> {
+    let Some((width, height)) = value.split_once('x') else {
+        return Err(TryParseError::Invalid(format!(
+            "window size '{value}' should look like 960x540"
+        )));
+    };
+    let parse = |part: &str, axis: &str| {
+        part.parse::<u32>()
+            .ok()
+            .filter(|size| *size >= 320)
+            .ok_or_else(|| TryParseError::Invalid(format!("window {axis} '{part}' is too small")))
+    };
+    Ok((parse(width, "width")?, parse(height, "height")?))
 }
 
 fn parse_volume(value: &str) -> Result<f32, TryParseError> {
@@ -178,5 +312,58 @@ mod tests {
         assert!(parse(&["--music-volume"]).is_err());
         assert!(parse(&["--music-volume", "loud"]).is_err());
         assert!(parse(&["--music-volume", "1.5"]).is_err());
+    }
+
+    #[test]
+    fn msaa_accepts_known_sample_counts_only() {
+        assert_eq!(parse(&["--msaa", "1"]).unwrap().render.msaa, 1);
+        assert_eq!(parse(&["--msaa", "8"]).unwrap().render.msaa, 8);
+        assert!(parse(&["--msaa", "3"]).is_err());
+        assert!(parse(&["--msaa", "lots"]).is_err());
+        assert!(parse(&["--msaa"]).is_err());
+    }
+
+    #[test]
+    fn the_fast_preset_turns_down_the_expensive_settings() {
+        let render = parse(&["--fast"]).unwrap().render;
+        assert_eq!(render.msaa, 1, "no multisampling");
+        assert!(!render.bloom, "no HDR bloom");
+        assert_eq!(render, super::RenderOptions::fast());
+    }
+
+    #[test]
+    fn render_toggles_are_independent() {
+        let options = parse(&["--no-bloom"]).unwrap();
+        assert!(!options.render.bloom);
+        assert_eq!(options.render.msaa, crate::config::MSAA_SAMPLES);
+
+        let options = parse(&["--no-scanlines", "--no-vignette"]).unwrap();
+        assert!(!options.render.scanlines);
+        assert!(!options.render.vignette);
+        assert!(options.render.bloom);
+    }
+
+    #[test]
+    fn window_size_parses_a_width_by_height_pair() {
+        assert_eq!(
+            parse(&["--window", "960x540"]).unwrap().window,
+            Some((960, 540))
+        );
+        assert!(parse(&["--window", "960"]).is_err());
+        assert!(parse(&["--window", "100x540"]).is_err());
+        assert!(parse(&["--window"]).is_err());
+    }
+
+    #[test]
+    fn the_benchmark_flag_selects_a_duration_and_drops_music() {
+        let options = parse(&["--bench"]).unwrap();
+        assert!(options.bench_seconds > 0.0);
+        assert!(!options.music, "the synth thread would skew the numbers");
+
+        let options = parse(&["--bench-seconds", "5"]).unwrap();
+        assert!((options.bench_seconds - 5.0).abs() < f32::EPSILON);
+        assert!(parse(&["--bench-seconds", "0"]).is_err());
+
+        assert!(!parse(&["--bench-static"]).unwrap().bench_ride);
     }
 }

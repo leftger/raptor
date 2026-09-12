@@ -182,6 +182,7 @@ fn update_machine_stats(
     mode: Res<InteractionMode>,
     lightcycle: Res<LightcycleState>,
     navigator: Res<NavigatorResource>,
+    mut last_step: Local<usize>,
     mut machine: ResMut<MachineState>,
     mut text: Query<&mut Text, With<MachineStatsText>>,
 ) {
@@ -197,6 +198,17 @@ fn update_machine_stats(
     }
 
     let steps = (time.elapsed_secs() / 0.35) as usize;
+    // The ticker advances about three times a second: rebuilding the line and
+    // counting the directory every frame would be pure waste.
+    if steps == *last_step
+        && !navigator.is_changed()
+        && !lightcycle.is_changed()
+        && !mode.is_changed()
+    {
+        return;
+    }
+    *last_step = steps;
+
     let (dirs, files) = navigator.0.count_by_type();
     let load = files as f32 + dirs as f32 * 0.5;
     let boost = if lightcycle.cache_boost > 0.0 {
