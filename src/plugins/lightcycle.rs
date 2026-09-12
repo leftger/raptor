@@ -4690,8 +4690,9 @@ fn read_lightcycle_input(
                 throw,
             );
         } else if let Some(sim) = run.source_frogger_mut() {
-            // One hop per keypress in any of the four directions.
-            sim.hop(i32::from(right) - i32::from(left), hop_z);
+            // One hop per keypress in any of the four directions. Hop-Z is
+            // +1 for W, but the sim counts +Z as the start row, so flip it.
+            sim.hop(i32::from(right) - i32::from(left), -hop_z);
         } else if let Some(sim) = run.source_qbert_mut() {
             // Diagonal hops: A/D/W/S each map to a pyramid direction. The -Z
             // camera mirrors X, so swap the east/west edges.

@@ -116,7 +116,7 @@ impl QbertSim {
             (0, -1) => self
                 .row
                 .checked_sub(1)
-                .and_then(|row| (self.index > 0).then_some((row, self.index - 1))),
+                .and_then(|row| (self.index > 0).then(|| (row, self.index - 1))),
             _ => None,
         };
         let Some((row, index)) = next else {
@@ -232,6 +232,15 @@ mod tests {
         let (row, index) = (game.row, game.index);
         game.hop(1, 0); // off the bottom edge, ignored
         assert_eq!((game.row, game.index), (row, index));
+    }
+
+    #[test]
+    fn hopping_up_right_from_the_left_edge_is_safe() {
+        let mut game = sim();
+        game.row = 1;
+        game.index = 0;
+        game.hop(0, -1); // no cube up-right of the left edge: must not panic
+        assert_eq!((game.row, game.index), (1, 0));
     }
 
     #[test]
