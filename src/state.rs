@@ -88,6 +88,50 @@ impl RenderSettings {
     }
 }
 
+/// Drives the occasional plunge of the directory call stack through the arena.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct StackMotion {
+    /// Seconds until the next plunge begins.
+    pub timer: f32,
+    /// Progress through a plunge in `0.0..1.0`, or `None` while idle.
+    pub plunge: Option<f32>,
+}
+
+impl Default for StackMotion {
+    fn default() -> Self {
+        Self {
+            timer: config::STACK_PLUNGE_INTERVAL,
+            plunge: None,
+        }
+    }
+}
+
+impl StackMotion {
+    /// Ticks the clock by `dt` and reports progress through a running plunge.
+    pub fn advance(&mut self, dt: f32) -> Option<f32> {
+        match self.plunge {
+            Some(progress) => {
+                let next = progress + dt / config::STACK_PLUNGE_SECONDS;
+                if next >= 1.0 {
+                    self.plunge = None;
+                    self.timer = config::STACK_PLUNGE_INTERVAL;
+                    None
+                } else {
+                    self.plunge = Some(next);
+                    Some(next)
+                }
+            }
+            None => {
+                self.timer -= dt;
+                if self.timer <= 0.0 {
+                    self.plunge = Some(0.0);
+                }
+                self.plunge
+            }
+        }
+    }
+}
+
 /// The fake machine telemetry shown in the HUD: a syscall trace cursor and
 /// register/clock readouts.
 #[derive(Resource, Default)]

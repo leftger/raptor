@@ -33,7 +33,7 @@ use crate::scheduler::{RaceSim, start_cells};
 use crate::snake::SnakeSim;
 use crate::state::{
     CacheState, DirectorySceneRoot, FloodState, HistoryState, InteractionMode, LightcycleSceneRoot,
-    NavigatorResource, OrbitCameraResource, PauseState, SchedulerRace, TrailSceneRoot,
+    NavigatorResource, OrbitCameraResource, PauseState, SchedulerRace, StackMotion, TrailSceneRoot,
 };
 use crate::stealth::{StealthPhase, StealthSim};
 use crate::surfer::{SurferPhase, SurferSim};
@@ -56,6 +56,7 @@ impl Plugin for LightcyclePlugin {
             .init_resource::<FloodState>()
             .init_resource::<SchedulerRace>()
             .init_resource::<HistoryState>()
+            .init_resource::<StackMotion>()
             .add_message::<DocumentRequested>()
             .add_message::<DocumentLoaded>()
             .add_message::<DocumentLoadFailed>()
@@ -4348,15 +4349,58 @@ fn animate_city_beacons(time: Res<Time>, mut beacons: Query<(&CityBeacon, &mut T
 
 /// Bobs the call-stack frames, so a directory's stack reads as live hardware
 /// rather than a static prop.
-fn animate_stack_frames(time: Res<Time>, mut frames: Query<(&StackFrameEntity, &mut Transform)>) {
+fn animate_stack_frames(
+    time: Res<Time>,
+    pause: Res<PauseState>,
+    mut motion: ResMut<StackMotion>,
+    mut frames: Query<(&StackFrameEntity, &mut Transform)>,
+) {
+    if pause.paused {
+        return;
+    }
+    // The plunge clock only runs while there is a stack to move.
+    let plunge = if frames.is_empty() {
+        None
+    } else {
+        motion.advance(time.delta_secs())
+    };
     let elapsed = time.elapsed_secs();
     for (frame, mut transform) in &mut frames {
         let level = frame.level;
+        // A frame's rest height mirrored below the floor is the same distance
+        // down as it is up, so the dive is twice the height it rests at.
+        let dive = plunge.map_or(0.0, |progress| stack_plunge(level, progress));
+        let sink = -2.0 * frame.base.y * dive;
         let (glide_x, glide_z) = stack_frame_glide(level, elapsed);
         let (rock_x, rock_z) = stack_frame_rock(level, elapsed);
         transform.translation =
-            frame.base + Vec3::new(glide_x, stack_frame_hover(level, elapsed), glide_z);
+            frame.base + Vec3::new(glide_x, sink + stack_frame_hover(level, elapsed), glide_z);
         transform.rotation = Quat::from_euler(EulerRot::XZY, rock_x, 0.0, rock_z);
+    }
+}
+
+/// How deep into its plunge a frame is: `0.0` at its resting height through
+/// `1.0` at the same distance mirrored below the floor, for `progress` through
+/// the whole event.
+///
+/// Levels lag the one above them, so the stack cascades: the top frame leads the
+/// dive and is first back, and the deepest frame arrives last.
+pub fn stack_plunge(level: usize, progress: f32) -> f32 {
+    let lag = level as f32 * config::STACK_PLUNGE_STAGGER;
+    // The stagger is spread across the event, so the last level still finishes
+    // exactly as the event does.
+    let span = 1.0 - config::STACK_PLUNGE_STAGGER * (config::STACK_FRAME_MAX - 1) as f32;
+    let local = ((progress - lag) / span.max(0.1)).clamp(0.0, 1.0);
+    let hold = config::STACK_PLUNGE_HOLD;
+    let leg = (1.0 - hold) * 0.5;
+    // `smoothstep` eases each leg, so the stack accelerates away from its rest
+    // height and settles back into it instead of snapping.
+    if local <= leg {
+        smoothstep(local / leg)
+    } else if local >= leg + hold {
+        smoothstep((1.0 - local) / leg)
+    } else {
+        1.0
     }
 }
 
@@ -7584,13 +7628,14 @@ mod tests {
         gc_sweep_plane, glyph_char_offset, glyph_pixel_offset, glyph_pixels, heading_facing,
         hug_camera_shot, is_quarantined, nearest_heading, path_hash, pose_forward, pose_rotation,
         pose_world_position, rail_segments, road_marking_mesh, stack_frame_glide,
-        stack_frame_hover, stack_frame_mesh, stack_frame_rock, trail_centerline, trail_heights,
-        trim_polyline_end, wrap_angle,
+        stack_frame_hover, stack_frame_mesh, stack_frame_rock, stack_plunge, trail_centerline,
+        trail_heights, trim_polyline_end, wrap_angle,
     };
     use crate::config;
     use crate::lightcycle::logic::{
         CityStructure, CityStructureKind, CityTheme, Heading, LightcycleSim, Turn,
     };
+    use crate::state::StackMotion;
     use crate::stealth::StealthSim;
     use bevy::camera::primitives::MeshAabb;
     use bevy::prelude::{Cuboid, Mesh, Vec2, Vec3};
@@ -8555,6 +8600,92 @@ mod tests {
                 > gc_sweep_plane(duration * 0.75, duration, -4.0, 8.0),
             "as the countdown falls, the sweep moves on"
         );
+    }
+
+    #[test]
+    fn a_plunge_starts_and_ends_at_the_resting_height() {
+        assert_eq!(stack_plunge(0, 0.0), 0.0, "the dive starts at the ceiling");
+        assert_eq!(stack_plunge(0, 1.0), 0.0, "and returns to it");
+    }
+
+    #[test]
+    fn a_plunge_rests_at_the_bottom_in_the_middle_and_never_overshoots() {
+        // Level 0's window starts at the top of the event, so its timeline is
+        // the event scaled by the stagger span.
+        let span = 1.0 - config::STACK_PLUNGE_STAGGER * (config::STACK_FRAME_MAX - 1) as f32;
+        let hold = config::STACK_PLUNGE_HOLD;
+        let leg = (1.0 - hold) * 0.5;
+        let down_end = leg * span;
+        let up_start = (leg + hold) * span;
+
+        assert!(
+            (stack_plunge(0, (down_end + up_start) * 0.5) - 1.0).abs() < 1e-6,
+            "the middle of the hold is the mirror of the resting height"
+        );
+
+        // The descent only ever goes down, and ends at the full drop.
+        let mut previous = 0.0;
+        for step in 0..=200 {
+            let progress = down_end * step as f32 / 200.0;
+            let dive = stack_plunge(0, progress);
+            assert!(
+                (0.0..=1.0).contains(&dive),
+                "dive {dive} left its travel at {progress}"
+            );
+            assert!(
+                dive >= previous - 1e-4,
+                "the descent came back up early at {progress}"
+            );
+            previous = dive;
+        }
+        assert!((previous - 1.0).abs() < 1e-6, "the bottom is the full drop");
+
+        // And the return only comes up, landing home.
+        let mut previous = 1.0;
+        for step in 0..=200 {
+            let progress = up_start + (span - up_start) * step as f32 / 200.0;
+            let dive = stack_plunge(0, progress);
+            assert!(dive <= previous + 1e-4, "the return dipped at {progress}");
+            previous = dive;
+        }
+        assert!(previous.abs() < 1e-6, "and it lands back at rest");
+    }
+
+    #[test]
+    fn deeper_frames_lag_the_dive_and_finish_with_it() {
+        let early = 0.2;
+        assert!(
+            stack_plunge(3, early) < stack_plunge(0, early),
+            "a deeper frame starts its dive later"
+        );
+        for level in 0..config::STACK_FRAME_MAX {
+            assert_eq!(
+                stack_plunge(level, 1.0),
+                0.0,
+                "every frame is home by the end of the event"
+            );
+            assert_eq!(stack_plunge(level, 0.0), 0.0, "and none move before it");
+        }
+    }
+
+    #[test]
+    fn the_plunge_clock_runs_between_events() {
+        let mut motion = StackMotion::default();
+        assert_eq!(motion.plunge, None, "it starts idle");
+        // Nothing happens until the interval is up.
+        assert_eq!(motion.advance(config::STACK_PLUNGE_INTERVAL * 0.5), None);
+        // Then the event runs for its own duration.
+        assert_eq!(
+            motion.advance(config::STACK_PLUNGE_INTERVAL * 0.5),
+            Some(0.0)
+        );
+        let progress = motion
+            .advance(config::STACK_PLUNGE_SECONDS * 0.5)
+            .expect("still plunging");
+        assert!((progress - 0.5).abs() < 0.01, "progress was {progress}");
+        // And it ends, resetting the interval.
+        assert_eq!(motion.advance(config::STACK_PLUNGE_SECONDS), None);
+        assert_eq!(motion.timer, config::STACK_PLUNGE_INTERVAL);
     }
 
     #[test]

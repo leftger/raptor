@@ -221,6 +221,16 @@ pub const STACK_FRAME_ROCK: f32 = 0.03;
 pub const STACK_FRAME_ROCK_SPEED: f32 = 0.7;
 /// Phase added per level, so the stack ripples instead of moving as one slab.
 pub const STACK_FRAME_PHASE_STEP: f32 = 0.75;
+/// Every so often the whole stack plunges through the arena and comes back:
+/// each frame travels from its ceiling height down to the same distance below
+/// the floor, rests there for a beat, and rises again.
+pub const STACK_PLUNGE_INTERVAL: f32 = 34.0;
+pub const STACK_PLUNGE_SECONDS: f32 = 7.0;
+/// Progress each level lags the one above it, so the stack cascades down and
+/// refills from the top on the way back.
+pub const STACK_PLUNGE_STAGGER: f32 = 0.06;
+/// Fraction of the plunge the stack spends at the bottom.
+pub const STACK_PLUNGE_HOLD: f32 = 0.3;
 pub const STACK_FRAME_MAX: usize = 6;
 
 /// Hex-dump highway: emissive data plates laid along the directory's roads.

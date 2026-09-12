@@ -479,8 +479,9 @@ world keeps up a running machine metaphor:
 * **Call stack** — one open frame per path level, floating over the arena's
   edge, so `/home/you/project` is visibly three frames deep. Only the chunky
   border is drawn, so the road below stays visible, and each frame hovers,
-  glides and rocks out of phase with the next: the space above the city moves,
-  the middle of it does not.
+  glides and rocks out of phase with the next. Every so often the whole stack
+  plunges: each frame sinks to the same height mirrored below the floor, rests
+  there for a beat, and rises back level by level.
 * **Disk seek** — every directory hop plays a mechanical head-seek cue.
 * **Cache hit** — revisiting a directory you have already opened grants a short
   ground-speed surge.
