@@ -240,7 +240,7 @@ pub const STACK_FRAME_MAX: usize = 6;
 /// plates that suited a small one. The ceiling keeps the draw calls bounded.
 pub const PLATE_DENSITY: f32 = 0.06;
 pub const PLATE_MIN: usize = 18;
-pub const PLATE_MAX: usize = 420;
+pub const PLATE_MAX: usize = 650;
 /// How much of a district's accent bleeds into the sky while riding it.
 pub const DISTRICT_SKY_MIX: f32 = 0.32;
 /// How much of the accent tints the key light over a district.

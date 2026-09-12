@@ -282,8 +282,13 @@ impl ViaPattern {
     /// have to tile the district rather than sit on one plaza, or a big room
     /// ends up with the same handful of plates a small one got.
     fn anchor_count(self, roads: usize) -> usize {
+        // Anchors are derived from the plate target, not from a fixed divisor,
+        // so a district this big produces enough candidates to actually reach
+        // it. Over-provisioned on purpose: the thinning pass trims the surplus,
+        // and the yield per anchor depends on how dense the roads are.
         match self {
-            Self::Clusters | Self::Rings => (roads / 300).clamp(1, 24),
+            Self::Clusters => (plate_target(roads, self) / 5).clamp(1, 160),
+            Self::Rings => (plate_target(roads, self) / 10).clamp(1, 160),
             _ => 0,
         }
     }
@@ -322,6 +327,14 @@ pub struct RoadPlate {
     pub yaw: f32,
 }
 
+/// How many plates a district of `roads` road cells should carry under
+/// `pattern`: a fraction of the ground, with a floor so a small folder is not
+/// bare and a ceiling so the draw calls stay bounded.
+fn plate_target(roads: usize, pattern: ViaPattern) -> usize {
+    ((roads as f32 * config::PLATE_DENSITY * pattern.density_factor()) as usize)
+        .clamp(config::PLATE_MIN, config::PLATE_MAX)
+}
+
 /// Lays a district's data plates out on its roads.
 ///
 /// The pattern comes from the same path seed as the street plan and the theme,
@@ -335,6 +348,9 @@ pub fn road_plates(seed: u64, roads: &BTreeSet<(i32, i32)>) -> Vec<RoadPlate> {
         return Vec::new();
     }
     let anchors = spread_anchors(seed, &cells, pattern.anchor_count(cells.len()));
+    // Box the anchors' neighbourhoods once: testing every road cell against
+    // every anchor would be quadratic in a district this size.
+    let marked = anchor_neighbourhoods(pattern, &anchors);
     let dash_phase = (seed >> 16) % 6;
 
     let mut plates = Vec::new();
@@ -348,12 +364,8 @@ pub fn road_plates(seed: u64, roads: &BTreeSet<(i32, i32)>) -> Vec<RoadPlate> {
                 (cell.0 + cell.1).rem_euclid(6) == dash_phase as i32
                     && (cell.0 - cell.1).rem_euclid(2) == 0
             }
-            ViaPattern::Clusters => {
-                anchors.iter().any(|anchor| chebyshev(*anchor, cell) <= 3) && noise % 100 < 45
-            }
-            ViaPattern::Rings => anchors
-                .iter()
-                .any(|anchor| matches!(chebyshev(*anchor, cell), 2 | 4)),
+            ViaPattern::Clusters => marked.contains(&cell) && noise % 100 < 45,
+            ViaPattern::Rings => marked.contains(&cell),
             ViaPattern::Sparse => noise % 100 < 5,
         };
         if !kept {
@@ -376,10 +388,29 @@ pub fn road_plates(seed: u64, roads: &BTreeSet<(i32, i32)>) -> Vec<RoadPlate> {
         });
     }
 
-    let target = ((cells.len() as f32 * config::PLATE_DENSITY * pattern.density_factor()) as usize)
-        .clamp(config::PLATE_MIN, config::PLATE_MAX);
-    thin(&mut plates, target);
+    thin(&mut plates, plate_target(cells.len(), pattern));
     plates
+}
+
+/// The cells an anchored layout works on: everything within three of a cluster
+/// anchor, or the square rings at two and four around a ring anchor.
+fn anchor_neighbourhoods(pattern: ViaPattern, anchors: &[(i32, i32)]) -> HashSet<(i32, i32)> {
+    let mut marked = HashSet::new();
+    let radii: &[i32] = match pattern {
+        ViaPattern::Clusters => &[1, 2, 3],
+        ViaPattern::Rings => &[2, 4],
+        _ => return marked,
+    };
+    for &(anchor_x, anchor_z) in anchors {
+        for dx in -4_i32..=4 {
+            for dz in -4_i32..=4 {
+                if radii.contains(&chebyshev((0, 0), (dx, dz))) {
+                    marked.insert((anchor_x + dx, anchor_z + dz));
+                }
+            }
+        }
+    }
+    marked
 }
 
 /// Picks `count` cells spread across the district's roads.
